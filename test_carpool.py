@@ -643,7 +643,7 @@ class ShareStyleTest(unittest.TestCase):
     def test_rendered_page_is_self_contained_dark_and_print_light(self):
         cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")])
         html = share.render_share(service.compute(cfg, FakeAmap()), 0)
-        self.assertNotIn("/design.css", html)
+        self.assertNotIn('href="/design.css"', html)  # 沙箱里只放行 cdnjs 和高德瓦片
         self.assertNotIn("@@", html)  # 占位都换掉了
         self.assertIn("prefers-color-scheme: dark", html)
         self.assertIn(f"--bg: {share.DARK['--bg']};", html)
