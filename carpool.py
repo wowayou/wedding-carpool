@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """拼车出行规划：多人从不同城市去同一个地方，用高德真实行车时间算哪个高铁站最顺路、谁搭谁的车。
 
     export AMAP_KEY=你的高德Web服务Key     # 或把 Key 存进同目录的 .amap_key
@@ -61,13 +62,14 @@ class QuotaError(AmapError):
 
 # 配额类错误：日调用量超限（含账号维度、海外）、额度用完、服务到期
 # 网页版还有两种：单个行程每天的上限、站长 Key 全站每天的上限
-QUOTA_INFOS = ("DAILY_QUERY_OVER_LIMIT", "QUOTA_PLAN_RUN_OUT", "SERVICE_EXPIRED", "TRIP_DAILY_LIMIT", "OWNER_DAILY_LIMIT")
+QUOTA_INFOS = ("DAILY_QUERY_OVER_LIMIT", "QUOTA_PLAN_RUN_OUT", "SERVICE_EXPIRED", "TRIP_DAILY_LIMIT", "OWNER_DAILY_LIMIT",
+               "INVITE_DISABLED", "OWNER_RESERVED")  # 后两种：邀请码停用、公共额度留给已在算的行程
 
 
 def check_quota(info: str, detail: str = "") -> None:
     if any(q in info for q in QUOTA_INFOS):
         raise QuotaError(detail or (f"高德配额已用完（{info}），已停止计算，没有继续调用。"
-                                    "额度一般次日恢复；要买额度会产生费用，请自己在高德控制台决定"))
+                                    "额度一般次日恢复，月配额要等下个月；要买额度会产生费用，请自己在高德控制台决定"))
 
 
 @dataclass
@@ -301,6 +303,12 @@ class Person:
     rail_min: dict[str, float] = field(default_factory=dict)  # 到各站用时（分钟），手填或按车次算
     trains: dict[str, str] = field(default_factory=dict)  # 到各站坐的车，如 "G1234 08:00→11:30"
     note: str = ""
+    party: int = 1  # 同行人数：一组人要么一起上同一辆车，要么一起打车
+    # 返程插件用：从各站坐的车（首个时刻是发车时间）、用时；车主返程是否开车送人、最多绕路
+    back_trains: dict[str, str] = field(default_factory=dict)
+    back_rail_min: dict[str, float] = field(default_factory=dict)
+    back_drives: bool = True
+    back_max_detour: float | None = None
     rail_est: dict[str, tuple[float, str]] = field(default_factory=dict)  # 高德估算的（分钟, 车次摘要）
 
     @property
@@ -322,6 +330,8 @@ class Trip:
     travel_time: str = "08:00"
     exit_buffer: float = 15  # 列车到站后出站、走到接人点的分钟数
     resolved: list[dict] = field(default_factory=list)  # 这次按文字定位到的坐标，写回配置后下次就不用再查
+    back: "Leg | None" = None  # 返程插件开启时的返程设置
+    back_plans: list = field(default_factory=list)
 
 
 def prefetch(amap, build) -> None:
@@ -376,13 +386,19 @@ def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
             rail_min={k: float(m) for k, m in (p.get("rail_min") or {}).items()},
             trains={k: str(t) for k, t in (p.get("trains") or {}).items() if str(t).strip()},
             note=str(p.get("note") or ""),
+            party=max(1, int(p.get("party") or 1)),
+            back_trains={k: str(t) for k, t in (p.get("return_trains") or {}).items() if str(t).strip()},
+            back_rail_min={k: float(m) for k, m in (p.get("return_rail_min") or {}).items()},
+            back_drives=bool(p.get("return_drives", True)),
+            back_max_detour=float(p["return_max_detour_min"]) if p.get("return_max_detour_min") is not None else None,
         ))
     access = float(opt.get("station_access_min", 45))
     for person in people:  # 填了车次没填分钟：按「首个发车 → 最后到站」加上去车站和候车的时间算
-        for st, text in person.trains.items():
-            times = train_times(text)
-            if st not in person.rail_min and len(times) >= 2:
-                person.rail_min[st] = (times[-1] - times[0]) % 1440 + access
+        for trains, minutes in ((person.trains, person.rail_min), (person.back_trains, person.back_rail_min)):
+            for st, text in trains.items():
+                times = train_times(text)
+                if st not in minutes and len(times) >= 2:
+                    minutes[st] = (times[-1] - times[0]) % 1440 + access
     return venue, people
 
 
@@ -407,7 +423,7 @@ def load_trip(cfg: dict, amap) -> Trip:
     names = {s.name for s in stations}
     warnings = []
     for p in people:
-        for s in sorted({*(p.stations or []), *p.rail_min, *p.trains}):
+        for s in sorted({*(p.stations or []), *p.rail_min, *p.trains, *p.back_trains, *p.back_rail_min}):
             if s not in names:
                 warnings.append(f"{p.name} 写的站「{s}」不在候选站里，已忽略（名字要和候选站完全一致）")
     date = str(opt.get("travel_date") or dt.date.today() + dt.timedelta(days=1))
@@ -416,7 +432,18 @@ def load_trip(cfg: dict, amap) -> Trip:
                 float(opt.get("station_cost_min", 60)), discovered, warnings,
                 estimate_rail=bool(opt.get("estimate_rail", True)),
                 travel_date=f"{y}-{m}-{d}", travel_time=str(opt.get("travel_time", "08:00")),
-                exit_buffer=float(opt.get("exit_buffer_min", 15)), resolved=resolved)
+                exit_buffer=float(opt.get("exit_buffer_min", 15)), resolved=resolved, back=back_leg(cfg))
+
+
+def back_leg(cfg: dict) -> "Leg | None":
+    """返程插件的设置：[return] enabled、depart_time（车主从目的地出发）、security_min（发车前多久到站）。"""
+    r = cfg.get("return") or {}
+    if not r.get("enabled"):
+        return None
+    times = train_times(str(r.get("depart_time") or ""))
+    if not times:
+        raise SystemExit("开了返程，但还没填散场后几点出发")
+    return Leg("back", "返程", reverse=True, depart=times[0], margin=float(r.get("security_min", 40)))
 
 
 def train_times(text: str) -> list[int]:
@@ -472,10 +499,11 @@ def points_of(trip: Trip) -> dict[str, Place]:
     return pts
 
 
-def build_matrix(amap, pts: dict[str, Place], skip: set[str]) -> dict[tuple[str, str], float]:
-    """行车分钟数 T[(起点, 终点)]。起点含车主出发地，终点含目的地，接人点两者都是。"""
-    origins = [k for k in pts if k != "venue" and k not in skip]
-    dests = [k for k in pts if not k.startswith("car:") and k not in skip]
+def build_matrix(amap, pts: dict[str, Place], skip: set[str], both_ways: bool = False) -> dict[tuple[str, str], float]:
+    """行车分钟数 T[(起点, 终点)]。去程：起点含车主出发地，终点含目的地，接人点两者都是。
+    both_ways（返程插件）：再加上从目的地出发、到车主家的方向。"""
+    origins = [k for k in pts if (both_ways or k != "venue") and k not in skip]
+    dests = [k for k in pts if (both_ways or not k.startswith("car:")) and k not in skip]
     print(f"正在向高德查询行车时间（约 {len(dests)} 次请求）…", file=sys.stderr)
     T: dict[tuple[str, str], float] = {}
     plan = [(d, [o for o in origins if o != d]) for d in dests]
@@ -501,26 +529,61 @@ class Route:
 
 
 @dataclass
+class Leg:
+    """一段行程。去程：车主家 → 接人点 → 目的地；返程（插件）：目的地 → 送人点 → 车主家。
+    方向决定路线顺序、绕路的基准和时间约束：去程看「到站后多久能上车」，返程看「发车前多久要到站」。"""
+    key: str
+    title: str
+    reverse: bool = False
+    depart: float | None = None  # 返程：车主从目的地出发的时刻（当天分钟数）
+    margin: float = 40           # 返程：发车前多少分钟要到站
+
+    def ends(self, driver: str) -> tuple[str, str]:
+        car = f"car:{driver}"
+        return ("venue", car) if self.reverse else (car, "venue")
+
+    def sequence(self, driver: str, stops: tuple) -> list[str]:
+        start, end = self.ends(driver)
+        return [start, *stops, end]
+
+    def station_to_venue(self, T, stop: str) -> float:
+        """打车组：去程从站到目的地，返程从目的地到站。"""
+        return T.get(("venue", stop) if self.reverse else (stop, "venue"), INF)
+
+
+OUT = Leg("out", "去程")
+
+
+@dataclass
 class Plan:
     routes: list[Route]
-    rides: dict[str, tuple[str, str]]  # 乘客 -> (车主, 上车点 id)
-    taxi: dict[str, str]                # 没搭上车的乘客 -> 建议去打车的站点 id
-    stranded: list[str]                 # 一个能去的站都没有的乘客
+    rides: dict[str, tuple[str, str]]  # 乘客 -> (车主, 上/下车点 id)
+    taxi: dict[str, str]                # 没搭上车的乘客 -> 建议打车的站点 id
+    stranded: list[str]                 # 一个能去的站都没有（或返程赶不上车）的乘客
     detour: float
     cost: float
+    carried: int = 0                    # 搭上车的人数（按同行人数算）
 
     @property
     def score(self) -> tuple:
         # 先让尽量多的人搭上车，再看总成本，最后少停车
-        return (-len(self.rides), round(self.cost, 1), sum(len(r.stops) for r in self.routes))
+        return (-self.carried, round(self.cost, 1), sum(len(r.stops) for r in self.routes))
 
 
-def rider_options(p: Person, station_names: list[str], station_cost: float) -> dict[str, float]:
-    """乘客能在哪些点上车，以及到该点的额外成本（分钟）。
+def rider_options(p: Person, station_names: list[str], station_cost: float, leg: Leg = OUT) -> dict[str, float]:
+    """乘客能在哪些点上（下）车，以及到该点的额外成本（分钟）。
 
     去车站上车意味着要先坐一趟高铁：优先用手填的 rail_min，其次用高德估算的 rail_est，
-    都没有就按 station_cost 估。这样顺路的「到家附近接」会排在「坐高铁去站」前面。
+    都没有就按 station_cost 估。这样顺路的「到家附近接」会排在「坐高铁去站」前面。返程同理，用返程的车次。
     """
+    if leg.reverse:
+        known = p.back_rail_min
+        opts = ({f"st:{s}": m for s, m in known.items() if s in station_names} if known
+                else {f"st:{s}": station_cost for s in (station_names if p.stations is None else
+                                                        [x for x in p.stations if x in station_names])})
+        if p.pickup_at_home:
+            opts[f"home:{p.name}"] = 0.0
+        return opts
     if p.rail_min:
         opts = {f"st:{s}": m for s, m in p.rail_min.items() if s in station_names}
     else:
@@ -538,26 +601,48 @@ def leg_minutes(T, legs: list[str]) -> float:
     return sum(T.get(pair, INF) for pair in zip(legs, legs[1:]))
 
 
-def car_routes(driver: Person, pickups: list[str], T, max_stops: int) -> list[Route]:
-    start = f"car:{driver.name}"
-    direct = T.get((start, "venue"), INF)
+def car_routes(driver: Person, pickups: list[str], T, max_stops: int, leg: Leg = OUT) -> list[Route]:
+    start, end = leg.ends(driver.name)
+    direct = T.get((start, end), INF)
     if direct == INF:
-        raise SystemExit(f"高德没算出 {driver.name} 到目的地的驾车路线，检查出发地是否写对")
+        raise SystemExit(f"高德没算出 {driver.name} 的{leg.title}驾车路线，检查出发地是否写对")
     best: dict[frozenset, Route] = {}
-    if driver.seats:
+    limit = driver.max_detour if not leg.reverse or driver.back_max_detour is None else driver.back_max_detour
+    if driver.seats and (not leg.reverse or driver.back_drives):
         for k in range(1, max_stops + 1):
             for seq in itertools.permutations(pickups, k):
-                total = leg_minutes(T, [start, *seq, "venue"])
+                total = leg_minutes(T, [start, *seq, end])
                 detour = total - direct
                 key = frozenset(seq)
-                if detour <= driver.max_detour and (key not in best or detour < best[key].detour):
+                if detour <= limit and (key not in best or detour < best[key].detour):
                     best[key] = Route(driver.name, seq, total, max(detour, 0.0))
     return [Route(driver.name, (), direct, 0.0), *sorted(best.values(), key=lambda r: r.detour)]
 
 
+def back_deadline(p: Person, stop: str, leg: Leg) -> float | None:
+    """返程：乘客在这个站最晚几点要到（发车时刻减去提前量）；不知道车次就没有限制。"""
+    times = train_times(p.back_trains.get(stop[3:], "")) if stop.startswith("st:") else []
+    return times[0] - leg.margin if times else None
+
+
+def stop_times(route: Route, T, leg: Leg) -> dict[str, float]:
+    """返程：车主按点出发，依次到各送人点的时刻。"""
+    t, out = leg.depart or 0.0, {}
+    seq = leg.sequence(route.driver, route.stops)
+    for a, b in zip(seq, seq[1:]):
+        t += T.get((a, b), INF)
+        out[b] = t
+    return out
+
+
 def assign(routes: tuple[Route, ...], seats: dict[str, int], riders: list[Person],
-           opts: dict[str, dict[str, float]]) -> tuple[dict[str, tuple[str, str]], float]:
-    """把乘客分到车上：先最大化上车人数，再最小化成本（最小费用最大流）。"""
+           opts: dict[str, dict[str, float]], allowed=None) -> tuple[dict[str, tuple[str, str]], float]:
+    """把乘客分到车上：先最大化上车人数，再最小化成本。
+    allowed(route, stop, rider) 用来排除不可行的上下车点（返程赶不上车次）。
+    每组都是一个人时用最小费用最大流；有多人同行时整组不能拆开，改为穷举。"""
+    usable = lambda r, s, p: s in opts[p.name] and (allowed is None or allowed(r, s, p))  # noqa: E731
+    if any(p.party > 1 for p in riders):
+        return _assign_groups(routes, seats, riders, opts, usable)
     n_r = len(riders)
     sink = n_r + len(routes) + 1
     graph: list[list[list]] = [[] for _ in range(sink + 1)]  # [to, cap, cost, rev, stop]
@@ -569,7 +654,7 @@ def assign(routes: tuple[Route, ...], seats: dict[str, int], riders: list[Person
     for i, p in enumerate(riders, 1):
         add(0, i, 1, 0.0)
         for j, r in enumerate(routes, n_r + 1):
-            common = [(opts[p.name][s], s) for s in r.stops if s in opts[p.name]]
+            common = [(opts[p.name][s], s) for s in r.stops if usable(r, s, p)]
             if common:
                 cost, stop = min(common)
                 add(i, j, 1, cost, stop)
@@ -610,9 +695,45 @@ def assign(routes: tuple[Route, ...], seats: dict[str, int], riders: list[Person
     return rides, total
 
 
+def _assign_groups(routes, seats, riders, opts, usable) -> tuple[dict[str, tuple[str, str]], float]:
+    """有多人同行时：每组整体上一辆车，穷举所有分法，先多拉人，再少成本。"""
+    order = sorted(riders, key=lambda p: -p.party)
+    choices = [[(j, s, opts[p.name][s]) for j, r in enumerate(routes) for s in r.stops if usable(r, s, p)] for p in order]
+    rest = [sum(p.party for p in order[i:]) for i in range(len(order) + 1)]
+    cap = [seats[r.driver] for r in routes]
+    best = {"key": (-1, 0.0), "rides": {}, "cost": 0.0}
+    chosen: dict[str, tuple[str, str]] = {}
+
+    def dfs(i: int, carried: int, cost: float) -> None:
+        if (carried + rest[i], -cost) <= best["key"]:
+            return  # 剩下的全上车也比不过已有的最好分法
+        if i == len(order):
+            best.update(key=(carried, -cost), rides=dict(chosen), cost=cost)
+            return
+        p = order[i]
+        for j, stop, c in sorted(choices[i], key=lambda x: x[2]):
+            if cap[j] >= p.party:
+                cap[j] -= p.party
+                chosen[p.name] = (routes[j].driver, stop)
+                dfs(i + 1, carried + p.party, cost + c)
+                del chosen[p.name]
+                cap[j] += p.party
+        dfs(i + 1, carried, cost)
+
+    dfs(0, 0, 0.0)
+    return best["rides"], best["cost"]
+
+
 def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Person],
-             opts: dict[str, dict[str, float]], T) -> Plan | None:
-    rides, ride_cost = assign(combo, {d.name: d.seats or 0 for d in drivers}, riders, opts)
+             opts: dict[str, dict[str, float]], T, leg: Leg = OUT) -> Plan | None:
+    allowed = None
+    if leg.reverse:  # 返程：送到站的时刻要赶得上车次
+        times = {r.driver: stop_times(r, T, leg) for r in combo}
+
+        def allowed(route: Route, stop: str, p: Person) -> bool:
+            deadline = back_deadline(p, stop, leg)
+            return deadline is None or times[route.driver][stop] <= deadline
+    rides, ride_cost = assign(combo, {d.name: d.seats or 0 for d in drivers}, riders, opts, allowed)
     used = set(rides.values())
     if any((r.driver, s) not in used for r in combo for s in r.stops):
         return None  # 白停一站的方案一定不如少停这一站的方案
@@ -620,7 +741,14 @@ def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Perso
     for p in riders:
         if p.name in rides:
             continue
-        cands = [(c + T.get((s, "venue"), INF), s) for s, c in opts[p.name].items() if s.startswith("st:")]
+        cands = []
+        for s, c in opts[p.name].items():
+            if not s.startswith("st:"):
+                continue
+            ride = leg.station_to_venue(T, s)
+            deadline = back_deadline(p, s, leg) if leg.reverse else None
+            if deadline is None or (leg.depart or 0) + ride <= deadline:
+                cands.append((c + ride, s))
         best = min(cands, default=(INF, ""))
         if best[0] == INF:
             stranded.append(p.name)
@@ -628,20 +756,21 @@ def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Perso
             taxi[p.name] = best[1]
             taxi_cost += best[0]
     detour = sum(r.detour for r in combo)
-    return Plan(list(combo), rides, taxi, stranded, detour, detour + ride_cost + taxi_cost)
+    carried = sum(p.party for p in riders if p.name in rides)
+    return Plan(list(combo), rides, taxi, stranded, detour, detour + ride_cost + taxi_cost, carried)
 
 
-def solve(trip: Trip, T, top: int = 3) -> list[Plan]:
-    report("比较各种接人组合")
+def solve(trip: Trip, T, top: int = 3, leg: Leg = OUT) -> list[Plan]:
+    report(f"比较各种{'送人' if leg.reverse else '接人'}组合")
     drivers = [p for p in trip.people if p.drives]
     riders = [p for p in trip.people if not p.drives]
     names = [s.name for s in trip.stations]
-    opts = {p.name: rider_options(p, names, trip.station_cost) for p in riders}
+    opts = {p.name: rider_options(p, names, trip.station_cost, leg) for p in riders}
     pickups = sorted({s for o in opts.values() for s in o})
     keep = max(1, int(COMBO_LIMIT ** (1 / max(len(drivers), 1))) - 1)
-    per_car = [car_routes(d, pickups, T, trip.max_stops)[:keep + 1] for d in drivers]
+    per_car = [car_routes(d, pickups, T, trip.max_stops, leg)[:keep + 1] for d in drivers]
     plans = [pl for combo in itertools.product(*per_car)
-             if (pl := evaluate(combo, drivers, riders, opts, T))]
+             if (pl := evaluate(combo, drivers, riders, opts, T, leg))]
     return sorted(plans, key=lambda pl: pl.score)[:top]
 
 
@@ -660,8 +789,9 @@ def marker_url(p: Place) -> str:
     return f"https://uri.amap.com/marker?{q}"
 
 
-def nav_url(a: Place, b: Place, via: Place | None = None) -> str:
-    params = {"from": f"{a.loc},{a.name}", "to": f"{b.loc},{b.name}"}
+def nav_url(a: Place | None, b: Place, via: Place | None = None) -> str:
+    """高德导航链接。a 为空时不写起点：手机上打开会用当前位置（方案页用它，不暴露出发地）。"""
+    params = {**({"from": f"{a.loc},{a.name}"} if a else {}), "to": f"{b.loc},{b.name}"}
     if via:
         params["via"] = f"{via.loc},{via.name}"  # 高德 URI 只支持一个途经点
     params.update(mode="car", src="wedding-carpool", coordinate="gaode", callnative=1)
@@ -735,6 +865,22 @@ def taxi_schedule(plan: Plan, trip: Trip, T) -> dict[str, dict]:
     return out
 
 
+def who(names, trip: Trip) -> str:
+    """名字列表，多人同行的标上人数：小陈（3 人）。"""
+    party = {p.name: p.party for p in trip.people}
+    return "、".join(f"{n}（{party[n]} 人）" if party.get(n, 1) > 1 else n for n in names)
+
+
+def taxi_fare(minutes: float, people: int) -> str:
+    """打车费按车程粗估：平均时速约 60 公里，每公里 2–3 元；超过 4 人要两辆车或包商务车。"""
+    if minutes == INF:
+        return ""
+    km = minutes  # 约 1 公里/分钟
+    cars = (people + 3) // 4
+    low, high = round(km * 2 * cars, -1), round(km * 3 * cars, -1)
+    return f"，打车粗估约 {low:.0f}–{high:.0f} 元{f'（{cars} 辆车）' if cars > 1 else ''}，以实际为准"
+
+
 def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
     seats = {p.name: p.seats for p in trip.people if p.drives}
     ready = pickup_ready(plan, trip)
@@ -747,9 +893,9 @@ def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
         sched = route_schedule(r, ready, T)
         legs = []
         for s in r.stops:
-            who = "、".join(n for n, (d, st) in plan.rides.items() if d == r.driver and st == s)
+            names = who([n for n, (d, st) in plan.rides.items() if d == r.driver and st == s], trip)
             at = f" {clock(sched['times'][s])}" if sched else ""
-            legs.append(f"{stop_label(s, pts)}{at}（接 {who}）")
+            legs.append(f"{stop_label(s, pts)}{at}（接 {names}）")
         if sched:
             timing = (f"建议 **{clock(sched['depart'])} 出发** → {' → '.join(legs)} → "
                       f"约 {clock(sched['times']['venue'])} 到目的地；")
@@ -758,13 +904,51 @@ def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
             timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(first)} 到第一个接人点；"
         lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{timing}"
                      f"全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。{route_links(r, pts)}")
+    party = {p.name: p.party for p in trip.people}
     for s, group in taxi_schedule(plan, trip, T).items():
+        ride = T.get((s, "venue"), INF)
         timing = (f"约 {clock(group['ready'])} 在站汇合，{clock(group['arrive'])} 左右到目的地"
-                  if group["ready"] is not None else f"车程约 {fmt_min(T.get((s, 'venue'), INF))}")
-        lines.append(f"- **打车/包车组**：{'、'.join(group['names'])} 坐高铁到 **{pts[s].name}**，"
-                     f"一起打车到目的地，{timing}。[导航]({nav_url(pts[s], pts['venue'])})")
+                  if group["ready"] is not None else f"车程约 {fmt_min(ride)}")
+        fare = taxi_fare(ride, sum(party[n] for n in group["names"]))
+        lines.append(f"- **打车/包车组**：{who(group['names'], trip)} 坐高铁到 **{pts[s].name}**，"
+                     f"一起打车到目的地，{timing}{fare}。[导航]({nav_url(pts[s], pts['venue'])})")
     for name in plan.stranded:
         lines.append(f"- **{name}**：没有可用的候选站，需要单独安排。")
+    return lines
+
+
+def describe_back(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
+    """返程（插件）：车主几点从目的地出发、几点送到哪、几点到家；打车组几点出发赶哪趟车。"""
+    leg = trip.back
+    seats = {p.name: p.seats for p in trip.people if p.drives}
+    people = {p.name: p for p in trip.people}
+    lines = []
+    for r in plan.routes:
+        home = f"car:{r.driver}"
+        if not r.stops:
+            lines.append(f"- **{r.driver}**：{clock(leg.depart)} 从目的地直接回家，约 {fmt_min(r.minutes)}，不送人。")
+            continue
+        times = stop_times(r, T, leg)
+        legs = []
+        for s in r.stops:
+            names = [n for n, (d, st) in plan.rides.items() if d == r.driver and st == s]
+            trains = [people[n].back_trains.get(s[3:]) for n in names if s.startswith("st:")]
+            catch = f"，赶 {'、'.join(t for t in trains if t)}" if any(trains) else ""
+            legs.append(f"{stop_label(s, pts)} {clock(times[s])}（送 {who(names, trip)}{catch}）")
+        lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{clock(leg.depart)} 从目的地出发 → {' → '.join(legs)} → "
+                     f"约 {clock(times[home])} 到家；全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。")
+    groups: dict[str, list[str]] = {}
+    for name, s in plan.taxi.items():
+        groups.setdefault(s, []).append(name)
+    for s, names in groups.items():
+        ride = T.get(("venue", s), INF)
+        trains = [people[n].back_trains.get(pts[s].name) for n in names]
+        catch = f"，赶 {'、'.join(t for t in trains if t)}" if any(trains) else ""
+        fare = taxi_fare(ride, sum(people[n].party for n in names))
+        lines.append(f"- **打车组**：{who(names, trip)} {clock(leg.depart)} 从目的地一起打车去 **{pts[s].name}**，"
+                     f"约 {clock(leg.depart + ride)} 到{catch}{fare}。")
+    for name in plan.stranded:
+        lines.append(f"- **{name}**：按 {clock(leg.depart)} 散场，赶不上任何一个候选站的车次，需要单独安排（提前离场或改签）。")
     return lines
 
 
@@ -821,14 +1005,22 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
         best = plans[0]
         used = {s for r in best.routes for s in r.stops if s.startswith("st:")} | set(best.taxi.values())
         riders = [p for p in trip.people if not p.drives]
+        total = sum(p.party for p in riders)
         L += ["## 结论", "",
-              f"- 不开车的 {len(riders)} 人里，**{len(best.rides)} 人能搭上顺风车**，"
+              f"- 不开车的 {total} 人里，**{best.carried} 人能搭上顺风车**，"
               f"车主合计多绕 {fmt_min(best.detour)}。",
               f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or '不需要坐到站'}**。",
               "", "## 推荐方案", "", *describe(best, pts, T, trip), ""]
         for i, pl in enumerate(plans[1:], 2):
-            L += [f"## 备选方案 {i}（{len(pl.rides)} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
+            L += [f"## 备选方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
                   *describe(pl, pts, T, trip), ""]
+    if trip.back:
+        L += [f"## 返程（{clock(trip.back.depart)} 散场后出发，发车前 {trip.back.margin:.0f} 分钟到站）", ""]
+        if not trip.back_plans:
+            L += ["没有找到可行的返程方案。", ""]
+        for i, pl in enumerate(trip.back_plans, 1):
+            L += [f"### 返程方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
+                  *describe_back(pl, pts, T, trip), ""]
     L += ["## 候选站对比", "",
           "每个车主「只在这个站停一次」时比直达多绕多久；✅ 表示在他能接受的绕路范围内。", "",
           *station_table(trip, pts, T), "", *rail_section(trip)]
@@ -851,9 +1043,12 @@ def plan_trip(cfg: dict, amap) -> tuple[Trip, dict[str, Place], dict, list[Plan]
     trip = load_trip(cfg, amap)
     pts = points_of(trip)
     skip = {f"home:{p.name}" for p in trip.people if not p.drives and not p.pickup_at_home}
-    T = build_matrix(amap, pts, skip)
+    T = build_matrix(amap, pts, skip, both_ways=trip.back is not None)
     estimate_rail(amap, trip)
-    return trip, pts, T, solve(trip, T)
+    plans = solve(trip, T)
+    if trip.back:  # 返程插件
+        trip.back_plans = solve(trip, T, leg=trip.back)
+    return trip, pts, T, plans
 
 
 def run(cfg: dict, amap) -> str:

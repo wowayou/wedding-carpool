@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """拼车出行规划的本地网页界面：在浏览器里填人、地点和车站，点一下算方案，结果画在高德地图上。
 
     python3 ui.py                 # 编辑 trip.toml，打开 http://127.0.0.1:8765
@@ -45,12 +46,13 @@ class App:
         self.last = compute(cfg, self.amap)
         return plan_payload(self.last)
 
-    def share(self, index: int) -> dict:
+    def share(self, plan: int = 0, back_plan: int = 0) -> dict:
+        index = plan
         if not self.last:
             raise SystemExit("先点「计算方案」，再生成方案页")
         if not 0 <= index < len(self.last["plans"]):
             raise SystemExit(f"没有方案 {index + 1}")
-        self.share_path.write_text(share.render_share(self.last, index), encoding="utf-8")
+        self.share_path.write_text(share.render_share(self.last, index, back_plan), encoding="utf-8")
         return {"file": self.share_path.name, "url": "/share"}
 
     def load(self) -> dict:
@@ -125,7 +127,7 @@ def make_handler(app: App):
             elif self.path == "/api/suggest":
                 self._guard(lambda: suggest_stations(self._body()["config"], app.amap, VALID_STATIONS))
             elif self.path == "/api/share":
-                self._guard(lambda: app.share(int(self._body().get("plan", 0))))
+                self._guard(lambda: app.share(**{k: int(v) for k, v in self._body().items() if k in ("plan", "back_plan")}))
             else:
                 self._json({"error": "not found"}, 404)
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """界面用的计算服务：本地 ui.py 和网页版（浏览器里的 Pyodide）共用。"""
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ def compute(cfg: dict, amap) -> dict:
         for r in plan.routes:
             for key in ((r.driver, r.stops), (r.driver, ())):
                 places.setdefault(key, [pts[i] for i in (f"car:{key[0]}", *key[1], "venue")])
+    for plan in trip.back_plans:  # 返程插件：目的地 → 送人点 → 车主家
+        for r in plan.routes:
+            for stops in (r.stops, ()):
+                places.setdefault(("back", r.driver, stops), [pts[i] for i in trip.back.sequence(r.driver, stops)])
     carpool.report("获取路线轨迹", 0, len(places))
     carpool.prefetch(amap, lambda: [amap.driving_query(ps) for ps in places.values()])
     paths = {}
@@ -36,8 +41,22 @@ def compute(cfg: dict, amap) -> dict:
     return {"trip": trip, "pts": pts, "T": T, "plans": plans, "paths": paths}
 
 
+def _back_payload(trip, T, paths) -> dict | None:
+    if not trip.back:
+        return None
+    out = []
+    for plan in trip.back_plans:
+        routes = [{"driver": r.driver, "stops": list(r.stops), "minutes": round(r.minutes), "detour": round(r.detour),
+                   "path": paths.get(("back", r.driver, r.stops)),
+                   "direct_path": paths.get(("back", r.driver, ())) if r.stops else None,
+                   "depart": carpool.clock(trip.back.depart)} for r in plan.routes]
+        out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi, "stranded": plan.stranded,
+                    "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
+    return {"depart": carpool.clock(trip.back.depart), "plans": out}
+
+
 def plan_payload(state: dict) -> dict:
-    """给界面的 JSON：报告、坐标、各方案的路线（含直达对比）和时刻。"""
+    """给界面的 JSON：报告、坐标、各方案的路线（含直达对比）和时刻；开了返程再带上返程方案。"""
     trip, pts, T, plans, paths = (state[k] for k in ("trip", "pts", "T", "plans", "paths"))
     out = []
     for plan in plans:
@@ -50,13 +69,14 @@ def plan_payload(state: dict) -> dict:
                            "direct_path": paths[(r.driver, ())] if r.stops else None,
                            "depart": carpool.clock(sched["depart"]) if sched else None})
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi,
-                    "stranded": plan.stranded, "detour": round(plan.detour), "routes": routes})
+                    "stranded": plan.stranded, "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
     return {
         "report": carpool.render(trip, pts, T, plans),
         "warnings": trip.warnings,
         "resolved": trip.resolved,  # 这次按文字定位到的坐标，界面写回配置，下次不再请求
         "points": {k: {"name": p.name, "lat": p.lat, "lng": p.lng} for k, p in pts.items()},
         "plans": out,
+        "back": _back_payload(trip, T, paths),
     }
 
 

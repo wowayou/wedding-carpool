@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -42,7 +43,7 @@
 <div class="wrap">
   <header>
     <h1>拼车出行规划</h1>
-    <p class="lead">一群人从不同城市去同一个地方（婚礼、聚会、团建……），有人开车、有人坐高铁。这里帮你算出：谁开车顺路接谁、在哪个站接、几点出发；不开车的人坐到哪个站最合适；最后生成一页出行方案发给大家。</p>
+    <p class="lead">一群人从不同城市去同一个地方（婚礼、聚会、团建……），有人开车、有人坐高铁。这里帮你算出：谁开车顺路接谁、在哪个站接、几点出发；不开车的人坐到哪个站最合适；最后生成一页出行方案发给大家。先定个大方向、心里有个底，具体细节大家在群里再商量。</p>
   </header>
 
   <div class="steps">
@@ -61,10 +62,10 @@
     <h2>新建行程</h2>
     <label><span>行程名称</span><input type="text" id="name" maxlength="60" placeholder="比如 小王婚礼 10 月 19 日" required></label>
     <div class="modes">
-      <label id="codeMode"><input type="radio" name="mode" value="code" checked> 我有创建口令</label>
+      <label id="codeMode"><input type="radio" name="mode" value="code" checked> 我有邀请码</label>
       <label><input type="radio" name="mode" value="key"> 用我自己的高德 Key</label>
     </div>
-    <label id="codeField"><span>创建口令（站长给你的）</span><input type="password" id="code" autocomplete="off"></label>
+    <label id="codeField"><span>邀请码（站长发的）</span><input type="text" id="code" autocomplete="off" spellcheck="false"></label>
     <div id="keyField" hidden>
       <label><span>高德 Web 服务 Key</span><input type="text" id="amapKey" autocomplete="off" placeholder="32 位字母和数字"></label>
       <p class="hint">在 <a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只保存在服务器上，不会再显示在网页里；调用次数算在你自己的免费额度里，用完会停下提示。</p>
@@ -75,7 +76,7 @@
   </form>
 
   <footer>
-    数据保存在 Cloudflare：行程只有拿到编辑链接的人能看到和修改；方案页链接拿到就能看，里面不含不开车的人的家庭位置。
+    数据保存在 Cloudflare：行程只有拿到编辑链接的人能看到和修改；方案页链接拿到就能看，可以加访问口令，不含精确的出发地和家庭位置；行程按期限自动删除。详见<a href="/privacy">费用与隐私</a>。
     开源：<a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">github.com/wowayou/wedding-carpool</a>，可以自己部署一份。<br>
     这个工具是公益性质的，免费、无广告。觉得有用的话可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。
   </footer>
@@ -128,6 +129,9 @@ $('#create').addEventListener('submit', async (e) => {
 });
 
 renderTrips();
+// 邀请链接 /?invite=xxxx：自动填好邀请码
+const invite = new URLSearchParams(location.search).get('invite');
+if (invite) { $('#code').value = invite; $('#name').focus(); }
 fetch('/api/env').then((r) => r.json()).then((env) => {
   if (env.ownerKey) return;
   // 站点没配站长 Key：只能自带 Key

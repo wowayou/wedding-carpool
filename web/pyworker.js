@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 网页版的计算线程：在 Web Worker 里加载 Pyodide，运行和本地版相同的 Python 代码（见 browser.py）。
 // 放在 Worker 里是因为高德请求用同步 XHR，不能卡住页面。
 // 用模块 Worker + import：经代理的环境里 importScripts 跨域加载会失败，import 走 CORS 没问题。

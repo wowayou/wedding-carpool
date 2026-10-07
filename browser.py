@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """网页版的胶水代码：在浏览器的 Pyodide 里运行，由 web/pyworker.js 调用。
 
 高德请求改发到同域的 Worker 代理（/api/t/<行程>/amap/...），Key 由 Worker 加上，不进浏览器；
@@ -122,7 +123,7 @@ def handle(method: str, args_json: str) -> str:
             index = int(args.get("plan", 0))
             if not 0 <= index < len(_last["plans"]):
                 raise SystemExit(f"没有方案 {index + 1}")
-            result = {"html": share.render_share(_last, index)}
+            result = {"html": share.render_share(_last, index, int(args.get("back_plan", 0)))}
         else:
             raise SystemExit(f"未知操作：{method}")
     except SystemExit as e:

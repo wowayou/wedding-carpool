@@ -16,6 +16,13 @@ station_cost_min = 60     # 既没填 rail_min、也没估算出公共交通方�
 discover_radius_km = 120  # 没写候选站时，自动搜索场地周围多大范围内的火车站
 discover_limit = 10       # 自动搜索最多保留几个站
 
+# 返程（可选）：散场后车主从场地出发，顺路送人去车站或回家
+# [return]
+# enabled = true
+# depart_time = "20:30"   # 车主几点从场地出发
+# security_min = 40       # 高铁发车前多久到站
+# date = "2026-10-18"     # 返程日期，只用来拼 12306 查询链接；不写就用 travel_date
+
 # 候选高铁站：不写就自动搜索；第一次跑完看报告里的「候选站对比」，再把合适的站写进来
 # [[stations]]
 # name = "黄山北站"
@@ -35,10 +42,13 @@ name = "老张"
 from = "江苏省南京市鼓楼区"
 car_seats = 2
 max_detour_min = 20       # 单独覆盖默认绕路上限
+# return_drives = false     # 返程不顺路送人（默认送）
+# return_max_detour_min = 15  # 返程最多绕多久，不写就和去程一样
 
 [[people]]
 name = "我"
 from = "上海市浦东新区"
+# party = 2               # 同行人数（含自己）：这组人一起上同一辆车，或者一起打车
 # pickup_at_home = false  # 默认允许车主到家附近接；住得远、不可能顺路时可以关掉，少查几次
 
 [[people]]
@@ -49,3 +59,4 @@ from = "湖北省武汉市洪山区"
 # rail_min = { "黟县东站" = 270 }                         # 只知道大概要多久时填分钟数（含去车站和候车）
 # stations = ["黄山北站"]                                  # 只考虑这些站
 # 填了 trains 或 rail_min，就只考虑填了的站
+# return_trains = { "黄山北站" = "G1235 黄山北21:40→武汉01:30" }  # 开了返程时：回程车次，按发车前 security_min 分钟到站倒推

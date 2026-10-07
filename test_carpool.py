@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """离线测试：用假的高德客户端验证选站和拼车逻辑。
 行车分钟 = 直线公里数（60km/h）；公共交通分钟 = 公里数 / 3 + 30（火车约 180km/h 加市内接驳）。
 
@@ -353,6 +354,18 @@ class TrainScheduleTest(unittest.TestCase):
         for text in ("G1 小陈家07:00→西站10:00", "上 <b>老王</b> 的车", "10:15", "带了喜糖", "uri.amap.com/navigation"):
             self.assertIn(text, html)
         self.assertNotIn('"lng": 114.0', html)  # 不开车的人家的位置不进方案页
+        self.assertNotIn("[30.0, 116.0]", html)  # 车主出发地不放精确位置：路线从约 2 公里外开始
+        self.assertNotRegex(html, r'"lng": 116\.0[,}]')
+        self.assertNotIn("116.000000,30.000000", html)  # 导航链接也不写出发地：起点留空，手机上用当前位置
+        self.assertIn("老王 出发", html)
+
+    def test_share_page_hides_home_pickup(self):
+        cfg = config([person("老王", WANG, car_seats=3), person("小李", "116.5,30.0"), person("小陈", "114.0,34.0")])
+        state = service.compute(cfg, FakeAmap())
+        html = share.render_share(state, 0)
+        self.assertIn("到家附近接，具体地点在群里约", html)
+        self.assertNotIn("116.500000,30.000000", html)  # 地图链接、导航链接都不指向小李家
+        self.assertNotIn("[30.0, 116.5]", html)  # 小李家附近的路线不画
 
 
 class BrowserBridgeTest(unittest.TestCase):
@@ -453,6 +466,95 @@ class ResolveAndSuggestTest(unittest.TestCase):
         with self.assertRaises(carpool.QuotaError) as ctx:
             carpool.check_quota("TRIP_DAILY_LIMIT", "这个行程今天的高德调用已到上限")
         self.assertIn("行程今天", str(ctx.exception))
+
+
+class ReturnTripTest(unittest.TestCase):
+    """返程插件：目的地 → 送人点 → 车主家，送到站要赶得上车次。"""
+
+    def cfg(self, train="G2 西站20:30→小陈家23:30", depart="18:00", drives=True):
+        c = config([person("老王", WANG, car_seats=3, return_drives=drives),
+                    person("小陈", "114.0,34.0", return_trains={"西站": train})])
+        c["return"] = {"enabled": True, "depart_time": depart}
+        return c
+
+    def run_trip(self, cfg):
+        return carpool.plan_trip(cfg, FakeAmap())
+
+    def test_drop_off_on_the_way_home(self):
+        trip, pts, T, _ = self.run_trip(self.cfg())
+        best = trip.back_plans[0]
+        self.assertEqual(best.rides, {"小陈": ("老王", "st:西站")})
+        self.assertLess(best.detour, 2)  # 西站就在老王回家的路上
+        times = carpool.stop_times(best.routes[0], T, trip.back)
+        self.assertAlmostEqual(times["st:西站"], 18 * 60 + T[("venue", "st:西站")])
+        self.assertAlmostEqual(times["car:老王"], 18 * 60 + T[("venue", "st:西站")] + T[("st:西站", "car:老王")])
+
+    def test_cannot_catch_train(self):
+        # 19:30 发车要 18:50 前到；18:00 出发开 96 分钟，19:36 才到：送不了，打车也赶不上
+        trip, pts, T, plans = self.run_trip(self.cfg(train="G2 西站19:30→小陈家22:30"))
+        back = trip.back_plans[0]
+        self.assertEqual((back.rides, back.taxi, back.stranded), ({}, {}, ["小陈"]))
+        self.assertIn("赶不上任何一个候选站的车次", carpool.render(trip, pts, T, plans))
+
+    def test_driver_not_driving_back(self):
+        trip, *_ = self.run_trip(self.cfg(drives=False))
+        back = trip.back_plans[0]
+        self.assertEqual(back.rides, {})
+        self.assertEqual(back.taxi, {"小陈": "st:西站"})
+        self.assertEqual(back.routes[0].stops, ())
+
+    def test_outbound_unchanged_by_return(self):
+        with_back = self.run_trip(self.cfg())[3]
+        cfg = self.cfg()
+        del cfg["return"]
+        without = self.run_trip(cfg)[3]
+        self.assertEqual([(p.rides, round(p.detour, 3)) for p in with_back], [(p.rides, round(p.detour, 3)) for p in without])
+
+    def test_report_has_return_section(self):
+        trip, pts, T, plans = self.run_trip(self.cfg())
+        report = carpool.render(trip, pts, T, plans)
+        self.assertIn("## 返程（18:00 散场后出发，发车前 40 分钟到站）", report)
+        self.assertIn("送 小陈，赶 G2 西站20:30→小陈家23:30", report)
+
+    def test_share_page_and_payload_have_return(self):
+        state = service.compute(self.cfg(), FakeAmap())
+        payload = service.plan_payload(state)
+        self.assertEqual(payload["back"]["depart"], "18:00")
+        self.assertEqual(payload["back"]["plans"][0]["rides"], {"小陈": ["老王", "st:西站"]})
+        self.assertIsNotNone(payload["back"]["plans"][0]["routes"][0]["path"])
+        html = share.render_share(state, 0, 0)
+        self.assertIn("返程 · 18:00 散场后出发", html)
+        self.assertIn("坐 <b>G2 西站20:30→小陈家23:30</b>", html)
+        self.assertNotIn("116.000000,30.000000", html)  # 返程导航也不指向车主家
+
+    def test_missing_depart_time_is_an_error(self):
+        cfg = self.cfg()
+        cfg["return"]["depart_time"] = ""
+        with self.assertRaises(SystemExit):
+            self.run_trip(cfg)
+
+
+class PartyTest(unittest.TestCase):
+    """同行人数：一组人要么一起上同一辆车，要么一起打车。"""
+
+    def best(self, seats, *riders):
+        cfg = config([person("老王", WANG, car_seats=seats), *riders])
+        trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
+        return plans[0], carpool.render(trip, pts, T, plans)
+
+    def test_group_is_not_split(self):
+        plan, report = self.best(2, person("小陈一家", "114.0,34.0", party=3))
+        self.assertEqual((plan.rides, plan.carried), ({}, 0))
+        self.assertEqual(plan.taxi, {"小陈一家": "st:近站"})
+        self.assertIn("小陈一家（3 人）", report)
+        self.assertIn("打车粗估", report)
+        plan, _ = self.best(3, person("小陈一家", "114.0,34.0", party=3))
+        self.assertEqual((plan.rides, plan.carried), ({"小陈一家": ("老王", "st:西站")}, 3))
+
+    def test_seats_counted_by_people(self):
+        plan, report = self.best(3, person("甲家", "114.0,34.0", party=2), person("乙家", "113.0,35.0", party=2))
+        self.assertEqual((len(plan.rides), plan.carried), (1, 2))
+        self.assertIn("不开车的 4 人里，**2 人能搭上顺风车**", report)
 
 
 class TomlTest(unittest.TestCase):

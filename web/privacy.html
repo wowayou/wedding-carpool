@@ -1,0 +1,89 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>费用与隐私 · 拼车出行规划</title>
+<meta name="description" content="拼车出行规划存了哪些数据、存在哪、谁能看、保留多久，以及可能产生费用的地方。">
+<style>
+  :root { --bg: #faf7f2; --ink: #24201c; --muted: #7a7168; --line: #ebe4da; --accent: #b4442c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.8 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 18px 56px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 28px 0 8px; }
+  p, li { color: #3f3832; }
+  .lead { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; background: #fff; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f1ea; font-weight: 600; }
+  a { color: var(--accent); }
+  .box { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p><a href="/">← 拼车出行规划</a></p>
+  <h1>费用与隐私</h1>
+  <p class="lead">这一页说明这个服务存了什么、存在哪、谁能看、保留多久，以及哪里可能花钱。代码开源（AGPL-3.0），下面每一条都可以在 <a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">GitHub 仓库</a>里核对。</p>
+
+  <div class="box"><b>一句话</b>：没有账号、没有广告、不做统计埋点。行程数据只有拿到编辑链接的人能看到和修改；方案页拿到链接就能看，可以加访问口令，而且不含精确的出发地和家庭位置。行程会按期限自动删除，也可以随时手动删除。</div>
+
+  <h2>存了什么</h2>
+  <table>
+    <tr><th>内容</th><th>说明</th></tr>
+    <tr><td>行程配置</td><td>行程名称、目的地，成员的名字、出发地（文字和坐标）、是否开车和空座，车次、备注、各项选项</td></tr>
+    <tr><td>历史版本</td><td>最近 100 个版本的配置，以及修改人自己填的名字和修改时间</td></tr>
+    <tr><td>方案页</td><td>最近一次发布的方案页内容和访问口令（如果设了）</td></tr>
+    <tr><td>用量</td><td>行程当天调用高德的次数，用于每日上限</td></tr>
+    <tr><td>自带的高德 Key</td><td>只有选择用自己的 Key 时才保存，只放在服务端代你调用高德，不会再显示在网页里</td></tr>
+    <tr><td>高德查询结果的缓存</td><td>为了不重复调用高德，查询结果（地点、车站、行车时间和路线）在 Cloudflare 节点上短期缓存：行车时间和路线 20 分钟，公交 1 小时，地点 7 天。缓存里没有 Key，也不记是哪个行程查的</td></tr>
+    <tr><td>新建频率</td><td>为了限制同一来源每天新建行程的次数，保存 IP 的哈希值和当天的计数，只按天保留，不保存 IP 原文</td></tr>
+    <tr><td>邀请码</td><td>站长发出的邀请码，记录每个邀请码建了几个行程、用了多少额度</td></tr>
+  </table>
+  <p><b>存在你自己浏览器里的</b>：你填的名字、你打开过的行程列表（含编辑链接），只在这台设备上；清除浏览器数据就没了。</p>
+  <p><b>没有存的</b>：账号、手机号、实时位置；没有统计埋点和广告。</p>
+
+  <h2>存在哪、谁能看</h2>
+  <ul>
+    <li>数据存在 <a href="https://www.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a>：每个行程一个独立的存储实例（Durable Object），方案页存在 Cloudflare KV（会复制到各地的节点）。</li>
+    <li><b>编辑链接</b>（<code>/t/行程#k=密钥</code>）等于编辑权限，密钥约 120 位随机、无法猜测；密钥在 <code>#</code> 之后，不会出现在服务器日志里。链接外传了，可以在编辑页「更多」里<b>重置</b>，旧链接立即失效。</li>
+    <li><b>方案页</b>（<code>/p/…</code>）拿到链接就能看，不会被搜索引擎收录。可以设访问口令，可以换链接或停止分享。方案页上车主路线从出发地约 2 公里外开始画，「到家附近接」的地点不标位置。</li>
+    <li>站长可以通过 Cloudflare 后台从技术上访问存储，除非排查故障不会去看。</li>
+  </ul>
+
+  <h2>交给了哪些第三方</h2>
+  <ul>
+    <li><b>高德地图</b>：目的地、出发地、车站的文字和坐标会发给高德，用来定位、查行车时间和路线；地图底图也来自高德。高德按它自己的隐私政策处理。</li>
+    <li><b>jsDelivr、cdnjs</b>：网页从这两个公共 CDN 加载计算环境和地图组件，它们会看到你的 IP。</li>
+    <li><b>12306</b>：「查车次」只是跳转到 12306 的查询页，本站不向 12306 发送任何数据。</li>
+  </ul>
+
+  <h2>保留多久、怎么删除</h2>
+  <ul>
+    <li>行程在「出行日期过后 60 天」和「连续 180 天没人编辑」两个时间里取较晚的那个，<b>到期自动删除</b>，包括配置、历史版本和方案页。到期前 7 天编辑页会提示，可以先导出备份。</li>
+    <li>编辑页「更多」里可以<b>随时删除行程</b>，删除后所有链接立即失效，不能恢复。</li>
+    <li>Cloudflare 内部的备份和日志按 Cloudflare 的政策保留。</li>
+  </ul>
+
+  <h2>方案只供参考</h2>
+  <p>行车时间和路线来自高德，按查询时的路况估算；地图数据、路况和现实也可能不完全一致。算出来的方案只供参考，不能作为开车和出行的唯一依据：当天以实际路况为准，开车遵守交通规则。车次、余票以 12306 为准。</p>
+
+  <h2>费用</h2>
+  <p>这个工具是公益性质的，<b>免费、无广告、没有付费功能</b>。运营成本和额度：</p>
+  <table>
+    <tr><th>资源</th><th>现在的用法</th><th>超出时会怎样</th></tr>
+    <tr><td>Cloudflare Workers、Durable Objects、KV</td><td>免费套餐（每天 10 万次请求等）</td><td>当天报错，不会产生费用</td></tr>
+    <tr><td>高德 Web 服务（站点公共额度）</td><td>站长的 Key，按行程和全站分别设每日上限</td><td>停下提示，不会继续调用，也不会自动购买；可以改用自己的 Key 接着用，或者第二天再来</td></tr>
+    <tr><td>高德 Web 服务（你自己的 Key）</td><td>算在你自己的免费额度里</td><td>高德返回额度用完时停下提示；本站不会替你购买任何额度</td></tr>
+    <tr><td>域名</td><td>站长自费</td><td>—</td></tr>
+  </table>
+  <p>觉得有用的话，可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。</p>
+
+  <h2>自己部署</h2>
+  <p>不想把数据放在这里，可以按 <a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">README</a> 用自己的 Cloudflare 账号和高德 Key 部署一份。</p>
+  <p class="lead">最后更新：2026-10-07。有疑问请在 GitHub 提 issue。</p>
+</div>
+</body>
+</html>

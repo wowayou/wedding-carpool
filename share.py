@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """方案页：把选定的拼车方案排成每个人的时间线，生成可以直接发给同行的人的独立 HTML。
 
 页面不依赖本地服务：文字内容是服务端写好的，没网也能看；地图（Leaflet + 高德瓦片）有网时才显示。
@@ -13,6 +14,8 @@ from html import escape
 import carpool
 
 WEEKDAYS = "一二三四五六日"
+BLUR_START_KM = 2.0  # 方案页上，车主路线从出发地多远开始画
+BLUR_HOME_KM = 1.5   # 「到家附近接」的点前后多远不画
 COLORS = ["#c2410c", "#1d4ed8", "#7c3aed", "#0f766e", "#be185d", "#4d7c0f"]
 
 
@@ -22,6 +25,38 @@ def _date_label(travel_date: str) -> str:
     except ValueError:
         return travel_date
     return f"{d.month}月{d.day}日（周{WEEKDAYS[d.weekday()]}）"
+
+
+def _blur(path: list[list[float]], homes: list[carpool.Place]) -> list[list[list[float]]]:
+    """方案页的路线去掉开头一段和各个家附近的点（保护出发地和家的位置），返回若干段折线。"""
+    places = [carpool.Place("", lng, lat) for lat, lng in path]
+    walked, start = 0.0, len(places)
+    for i in range(1, len(places)):
+        walked += carpool.km_between(places[i - 1], places[i])
+        if walked >= BLUR_START_KM:
+            start = i
+            break
+    segments, current = [], []
+    for point, place in zip(path[start:], places[start:]):
+        if any(carpool.km_between(place, h) < BLUR_HOME_KM for h in homes):
+            if len(current) > 1:
+                segments.append(current)
+            current = []
+        else:
+            current.append(point)
+    if len(current) > 1:
+        segments.append(current)
+    return segments
+
+
+def _share_nav(route: carpool.Route, pts: dict) -> list[tuple[str, str]]:
+    """方案页的导航链接：不写起点（手机上用当前位置），途经点只放车站，不放成员的家。"""
+    stops = [pts[s] for s in route.stops if s.startswith("st:")]
+    venue = pts["venue"]
+    if len(stops) <= 1:
+        return [("一键导航", carpool.nav_url(None, venue, stops[0] if stops else None))]
+    legs = [(None, stops[0]), *zip(stops, stops[1:]), (stops[-1], venue)]
+    return [(f"导航到{b.name}", carpool.nav_url(a, b)) for a, b in legs]
 
 
 def _step(time: str, text: str, link: tuple[str, str] | None = None) -> str:
@@ -35,7 +70,62 @@ def _card(kind: str, title: str, tag: str, steps: list[str], extra: str = "") ->
             f'<ol class="line">{"".join(steps)}</ol>{extra}</article>')
 
 
-def render_share(state: dict, index: int, generated: dt.datetime | None = None) -> str:
+def _return_section(state: dict, index: int) -> str:
+    """返程插件在方案页上的一段：每个人几点从目的地出发、送到哪、赶哪趟车。不写起点、不指向任何人的家。"""
+    trip, pts, T = state["trip"], state["pts"], state["T"]
+    if not trip.back or not trip.back_plans:
+        return ""
+    leg = trip.back
+    plan = trip.back_plans[min(index, len(trip.back_plans) - 1)]
+    people = {p.name: p for p in trip.people}
+    clock = carpool.clock
+    depart = clock(leg.depart)
+    station_link = lambda s: ("车站地图", carpool.marker_url(pts[s])) if s.startswith("st:") else None  # noqa: E731
+    cards = []
+    for r in plan.routes:
+        if not r.stops:
+            cards.append(_card("driver", r.driver, "返程", [_step(depart, "从目的地直接回家，这次不用送人")]))
+            continue
+        times = carpool.stop_times(r, T, leg)
+        steps = [_step(depart, "从目的地出发")]
+        for s in r.stops:
+            names = carpool.who([n for n, (d, st) in plan.rides.items() if d == r.driver and st == s], trip)
+            place = escape(carpool.stop_label(s, pts)) + ("，具体地点在群里约" if not s.startswith("st:") else "")
+            steps.append(_step(clock(times[s]), f"到 <b>{place}</b>，送 {escape(names)}", station_link(s)))
+        steps.append(_step(clock(times[f"car:{r.driver}"]), "到家"))
+        stations = [pts[s] for s in r.stops if s.startswith("st:")]
+        navs = " ".join(f'<a class="btn" href="{escape(carpool.nav_url(a, b))}" target="_blank" rel="noopener">导航到{escape(b.name)}</a>'
+                        for a, b in zip([None, *stations], stations))
+        cards.append(_card("driver", r.driver, "返程", steps,
+                           f'<p class="meta">比直接回家多绕 {carpool.fmt_min(r.detour)}</p><div class="navs">{navs}</div>'))
+    for name, (driver, stop) in plan.rides.items():
+        p = people[name]
+        times = carpool.stop_times(next(r for r in plan.routes if r.driver == driver), T, leg)
+        if stop.startswith("st:"):
+            train = p.back_trains.get(pts[stop].name, "")
+            first = carpool.train_times(train)
+            steps = [_step(depart, f"上 <b>{escape(driver)}</b> 的车"),
+                     _step(clock(times[stop]), f"到 <b>{escape(pts[stop].name)}</b>", station_link(stop)),
+                     _step(clock(first[0]) if first else "", f"坐 <b>{escape(train)}</b>" if train else "坐车回家")]
+        else:
+            steps = [_step(depart, f"上 <b>{escape(driver)}</b> 的车"), _step(clock(times[stop]), "顺路送到家附近")]
+        cards.append(_card("rider", name, f"搭 {driver} 的车", steps))
+    for name, stop in plan.taxi.items():
+        p = people[name]
+        train = p.back_trains.get(pts[stop].name, "")
+        first = carpool.train_times(train)
+        others = [n for n, s in plan.taxi.items() if s == stop and n != name]
+        ride = T.get(("venue", stop), carpool.INF)
+        steps = [_step(depart, f"{('和 ' + escape('、'.join(others)) + ' ') if others else ''}从目的地打车去 <b>{escape(pts[stop].name)}</b>（约 {carpool.fmt_min(ride)}）",
+                       station_link(stop)),
+                 _step(clock(first[0]) if first else "", f"坐 <b>{escape(train)}</b>" if train else "坐车回家")]
+        cards.append(_card("taxi", name, "打车", steps))
+    for name in plan.stranded:
+        cards.append(_card("taxi", name, "待安排", [_step(depart, "按这个散场时间赶不上候选站的车次，需要单独商量（提前离场或改签）")]))
+    return f'<h2>返程 · {depart} 散场后出发</h2>{"".join(cards)}'
+
+
+def render_share(state: dict, index: int, back_index: int = 0, generated: dt.datetime | None = None) -> str:
     trip, pts, T = state["trip"], state["pts"], state["T"]
     plan: carpool.Plan = state["plans"][index]
     people = {p.name: p for p in trip.people}
@@ -45,8 +135,9 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
     venue = pts["venue"]
     venue_link = ("目的地位置", carpool.marker_url(venue))
 
-    def stop_link(stop: str) -> tuple[str, str]:
-        return ("接人点地图", carpool.marker_url(pts[stop]))
+    def stop_link(stop: str) -> tuple[str, str] | None:
+        # 车站给地图链接；成员家附近不给精确位置，具体地点在群里约
+        return ("接人点地图", carpool.marker_url(pts[stop])) if stop.startswith("st:") else None
 
     def note(name: str) -> str:
         return f'<p class="note">{escape(people[name].note)}</p>' if people[name].note else ""
@@ -64,7 +155,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
         summary = (f"全程约 {carpool.fmt_min(r.minutes)}，比直达多绕 {carpool.fmt_min(r.detour)}"
                    if r.stops else f"直达，约 {carpool.fmt_min(r.minutes)}，这次不用接人")
         navs = " ".join(f'<a class="btn" href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>'
-                        for label, url in carpool.route_nav(r, pts))
+                        for label, url in _share_nav(r, pts))
         tag = f"空 {people[r.driver].seats} 座" if people[r.driver].seats else ""
         drivers.append(_card("driver", r.driver, tag, steps,
                              f'<p class="meta">{summary}</p><div class="navs">{navs}</div>{note(r.driver)}'))
@@ -83,7 +174,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
                      _step(clock(times[-1]) if times else "", f"到 <b>{escape(station)}</b>，出站去停车场或网约车上车点"),
                      _step(board, f"上 <b>{escape(driver)}</b> 的车", stop_link(stop))]
         else:
-            steps = [_step(board, f"<b>{escape(driver)}</b> 到家附近接")]
+            steps = [_step(board, f"<b>{escape(driver)}</b> 到家附近接，具体地点在群里约")]
         steps.append(_step(arrive, "到目的地", venue_link))
         riders.append(_card("rider", name, f"搭 {driver} 的车", steps, note(name)))
     for stop, group in taxis.items():
@@ -102,28 +193,37 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
     for name in plan.stranded:
         riders.append(_card("taxi", name, "待安排", [_step("", "没有可用的候选站，需要单独商量")], note(name)))
 
-    # 地图数据：车主出发地、用到的接人点、目的地
-    used = {s for r in plan.routes for s in r.stops} | set(plan.taxi.values())
-    keep = ["venue", *(f"car:{r.driver}" for r in plan.routes), *sorted(used)]
-    def line(driver: str, stops: tuple) -> list:
-        return (state["paths"].get((driver, stops))
-                or [[pts[k].lat, pts[k].lng] for k in (f"car:{driver}", *stops, "venue")])
+    # 地图数据：目的地、用到的车站，以及模糊处理后的车主路线。车主出发地和成员的家都不放精确位置
+    used = {s for r in plan.routes for s in r.stops if s.startswith("st:")} | set(plan.taxi.values())
+    homes = [pts[s] for r in plan.routes for s in r.stops if s.startswith("home:")]
 
-    detours: dict[str, list[str]] = {}  # 接人点 → ["车1 多绕 27分钟"]
-    for r in plan.routes:
+    def line(driver: str, stops: tuple) -> list:
+        path = (state["paths"].get((driver, stops))
+                or [[pts[k].lat, pts[k].lng] for k in (f"car:{driver}", *stops, "venue")])
+        return _blur(path, homes)
+
+    detours: dict[str, list[str]] = {}  # 点 → ["车1 多绕 27分钟"]
+    points, routes = [], []
+    for i, r in enumerate(plan.routes):
+        segments = line(r.driver, r.stops)
+        routes.append({"color": COLORS[i % len(COLORS)], "label": r.driver, "path": segments,
+                       "direct": line(r.driver, ()) if r.stops else None})
+        start = f"start:{r.driver}"
+        if segments:
+            lat, lng = segments[0][0]
+            points.append({"key": start, "name": f"{r.driver} 出发", "lat": lat, "lng": lng, "kind": "car"})
         if r.stops:
-            detours.setdefault(r.stops[0], []).append(f"{r.driver} 多绕 {carpool.fmt_min(r.detour)}")
-    map_data = {
-        "points": [{"name": pts[k].name, "lat": pts[k].lat, "lng": pts[k].lng, "notes": detours.get(k, []),
-                    "kind": "venue" if k == "venue" else k.split(":")[0]} for k in keep],
-        "routes": [{"color": COLORS[i % len(COLORS)], "label": r.driver, "path": line(r.driver, r.stops),
-                    "direct": line(r.driver, ()) if r.stops else None}
-                   for i, r in enumerate(plan.routes)],
-        "taxis": [[[pts[s].lat, pts[s].lng], [venue.lat, venue.lng]] for s in taxis],
-    }
-    rides = len(plan.rides)
-    summary = (f"{rides} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
-               + (f"，{len(plan.taxi)} 人打车" if plan.taxi else ""))
+            at = r.stops[0] if r.stops[0].startswith("st:") else start
+            detours.setdefault(at, []).append(f"{r.driver} 多绕 {carpool.fmt_min(r.detour)}")
+    points += [{"key": k, "name": pts[k].name, "lat": pts[k].lat, "lng": pts[k].lng,
+                "kind": "venue" if k == "venue" else "st"} for k in ["venue", *sorted(used)]]
+    for pt in points:
+        pt["notes"] = detours.get(pt.pop("key"), [])
+    map_data = {"points": points, "routes": routes,
+                "taxis": [[[pts[s].lat, pts[s].lng], [venue.lat, venue.lng]] for s in taxis]}
+    taxi_people = sum(people[n].party for n in plan.taxi)
+    summary = (f"{plan.carried} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
+               + (f"，{taxi_people} 人打车" if plan.taxi else "") + ("，含返程" if trip.back and trip.back_plans else ""))
     stamp = (generated or dt.datetime.now()).strftime("%m-%d %H:%M")
     return TEMPLATE.format(
         title=escape(f"{venue.name} 出行方案"),
@@ -134,6 +234,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
         description=escape(f"{_date_label(trip.travel_date)} 出发 · {summary}"),
         drivers="".join(drivers),
         riders="".join(riders) or '<p class="meta">这个方案里没有需要接的人。</p>',
+        back=_return_section(state, back_index),
         buffer=round(trip.exit_buffer),
         stamp=escape(stamp),
         data=json.dumps(map_data, ensure_ascii=False).replace("</", "<\\/"),
@@ -159,6 +260,7 @@ TEMPLATE = """<!doctype html>
   .eyebrow {{ color: var(--accent); font-size: 13px; letter-spacing: .06em; }}
   h1 {{ margin: 4px 0 6px; font-size: 24px; line-height: 1.3; }}
   .sum {{ margin: 0 0 12px; color: var(--muted); }}
+  .draft {{ margin: -4px 0 12px; font-size: 13px; color: var(--muted); }}
   .legend {{ color: var(--muted); font-size: 12px; margin: 6px 2px 0; }}
   #map {{ height: 46vh; min-height: 260px; border-radius: 14px; border: 1px solid var(--line); background: #eee; }}
   h2 {{ font-size: 14px; color: var(--muted); margin: 26px 0 10px; letter-spacing: .04em; }}
@@ -189,6 +291,7 @@ TEMPLATE = """<!doctype html>
     <div class="eyebrow">{eyebrow}</div>
     <h1>去 {venue}</h1>
     <p class="sum">{summary}</p>
+    <p class="draft">这是先定大方向的初步方案：心里有个底，具体在哪接、几点到，大家在群里再商量。</p>
     <a class="btn ghost" href="{venue_url}" target="_blank" rel="noopener">在高德里看目的地</a>
   </header>
   <div id="map"></div>
@@ -197,13 +300,14 @@ TEMPLATE = """<!doctype html>
   {drivers}
   <h2>坐车的</h2>
   {riders}
+  {back}
   <h2>注意</h2>
   <ul class="tips">
-    <li>时刻按车次到站后 {buffer} 分钟出站推算，车主时间来自高德路况估算，当天以群里实时位置为准。</li>
+    <li>时刻按车次到站后 {buffer} 分钟出站推算，车主时间来自高德路况估算。路线和时间都只供参考，当天以实际路况和群里的实时位置为准，开车遵守交通规则。</li>
     <li>高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。</li>
     <li>车次、余票以 12306 为准，提前买票。</li>
   </ul>
-  <footer>生成于 {stamp} · 链接会打开高德地图<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行</footer>
+  <footer>生成于 {stamp} · 链接会打开高德地图<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a></footer>
 </div>
 <script id="data" type="application/json">{data}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -217,14 +321,16 @@ TEMPLATE = """<!doctype html>
     {{ subdomains: '1234', maxZoom: 18, attribution: '© 高德地图' }}).addTo(map);
   var bounds = [];
   data.routes.forEach(function (r) {{
-    if (r.direct) {{
-      L.polyline(r.direct, {{ color: '#6b7280', weight: 4, opacity: 0.65, dashArray: '6 8' }}).bindTooltip(r.label + ' 不接人的直达路线', {{ sticky: true }}).addTo(map);
-      bounds = bounds.concat(r.direct);
-    }}
+    (r.direct || []).forEach(function (seg) {{
+      L.polyline(seg, {{ color: '#6b7280', weight: 4, opacity: 0.65, dashArray: '6 8' }}).bindTooltip(r.label + ' 不接人的直达路线', {{ sticky: true }}).addTo(map);
+      bounds = bounds.concat(seg);
+    }});
   }});
   data.routes.forEach(function (r) {{
-    L.polyline(r.path, {{ color: r.color, weight: 5, opacity: 0.85 }}).bindTooltip(r.label, {{ sticky: true }}).addTo(map);
-    bounds = bounds.concat(r.path);
+    r.path.forEach(function (seg) {{
+      L.polyline(seg, {{ color: r.color, weight: 5, opacity: 0.85 }}).bindTooltip(r.label, {{ sticky: true }}).addTo(map);
+      bounds = bounds.concat(seg);
+    }});
   }});
   data.taxis.forEach(function (t) {{ L.polyline(t, {{ color: '#6b7280', weight: 3, dashArray: '4 6' }}).addTo(map); }});
   // 标签互相遮挡时按优先级（目的地 > 车站 > 出发地）只留前面的，点或移到点上再显示

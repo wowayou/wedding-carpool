@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """从 12306 的站名表生成 web/stations12306.json，供网页拼 12306 查询链接、推荐车站时过滤非客运站。
 
     curl -o /tmp/station_name.js https://kyfw.12306.cn/otn/resources/js/framework/station_name.js

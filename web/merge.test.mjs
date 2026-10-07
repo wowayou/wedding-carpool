@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 页面里三方合并函数的测试：从 ui.html 里取出 merge3 单独跑。运行：npm test
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';

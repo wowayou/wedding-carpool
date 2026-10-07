@@ -1,0 +1,143 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>管理 · 拼车出行规划</title>
+<style>
+  :root { --bg: #f5f4f0; --ink: #1f2328; --muted: #6b7280; --line: #e4e1da; --accent: #c2410c; --soft: #fff1e8; --danger: #b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 100%; }
+  label { display: block; font-size: 12px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
+  .btn { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: #fff; cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0 4px; font: inherit; }
+  .link.danger { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .bar { height: 8px; background: #f3f1ec; border-radius: 4px; overflow: hidden; margin: 6px 0; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .muted { color: var(--muted); }
+  .off td { color: var(--muted); }
+  .err { color: var(--danger); min-height: 1.4em; }
+  [hidden] { display: none !important; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } .table-wrap { overflow-x: auto; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>拼车出行规划 · 管理</h1>
+  <form class="card" id="login" hidden>
+    <h2>站长口令</h2>
+    <input type="password" id="code" autocomplete="current-password" required>
+    <div class="err" id="loginErr"></div>
+    <button class="btn primary">进入</button>
+  </form>
+
+  <div id="panel" hidden>
+    <div class="card">
+      <h2>今天（北京时间）</h2>
+      <div id="stats"></div>
+    </div>
+
+    <form class="card" id="create">
+      <h2>发一个邀请码</h2>
+      <div class="grid">
+        <div><label>备注（发给谁、什么活动）</label><input id="note" maxlength="60" placeholder="比如 小王婚礼"></div>
+        <div><label>最多建几个行程</label><input id="maxTrips" type="number" min="1" value="3"></div>
+        <div><label>有效期（天，0 为不限）</label><input id="days" type="number" min="0" value="30"></div>
+        <div><label>每个行程每天高德上限</label><input id="tripDailyLimit" type="number" min="1" placeholder="默认"></div>
+        <button class="btn primary">生成</button>
+      </div>
+      <p class="muted">拿到邀请码的人在首页新建行程时填它，或者直接打开邀请链接。用它建的行程用站点的公共额度；停用后，这些行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。</p>
+    </form>
+
+    <div class="card">
+      <h2>邀请码</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>邀请码</th><th>备注</th><th>已建 / 上限</th><th>今天用量</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="invites"></tbody>
+      </table></div>
+    </div>
+  </div>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const day = (t) => (t ? new Date(t).toLocaleDateString('zh-CN') : '不限');
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status });
+  return data;
+}
+
+async function load() {
+  let data;
+  try {
+    data = await api('/api/admin/stats');
+  } catch (e) {
+    if (e.status === 401) { $('#login').hidden = false; $('#panel').hidden = true; $('#code').focus(); return; }
+    throw e;
+  }
+  $('#login').hidden = true;
+  $('#panel').hidden = false;
+  const pct = Math.min(100, Math.round((100 * data.ownerUsedToday) / data.ownerLimit));
+  $('#stats').innerHTML = `公共高德额度：已用 <b>${data.ownerUsedToday}</b> / ${data.ownerLimit} 次（${pct}%）
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <span class="muted">用过 80% 后，当天还没用过公共额度的行程会暂停分配，留给已经在算的行程。今天新建行程 ${data.createdToday} 个。</span>`;
+  $('#invites').innerHTML = data.invites.map((inv) => {
+    const expired = inv.expiresAt && Date.now() > inv.expiresAt;
+    const link = `${location.origin}/?invite=${inv.code}`;
+    return `<tr class="${inv.active && !expired ? '' : 'off'}">
+      <td><code>${esc(inv.code)}</code></td><td>${esc(inv.note)}</td>
+      <td>${inv.trips.length} / ${inv.maxTrips}</td><td>${inv.usedToday}${inv.tripDailyLimit ? ` <span class="muted">（每行程 ${inv.tripDailyLimit}）</span>` : ''}</td>
+      <td>${day(inv.expiresAt)}${expired ? '（已过期）' : ''}</td><td>${inv.active ? '有效' : '已停用'}</td>
+      <td><button class="link" data-copy="${esc(link)}">复制邀请链接</button>
+        <button class="link ${inv.active ? 'danger' : ''}" data-toggle="${esc(inv.code)}" data-active="${inv.active ? '' : '1'}">${inv.active ? '停用' : '启用'}</button></td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">还没有邀请码</td></tr>';
+}
+
+$('#login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try { await api('/api/admin/login', { code: $('#code').value }); await load(); }
+  catch (err) { $('#loginErr').textContent = err.message; }
+});
+
+$('#create').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const { invite } = await api('/api/admin/invites', {
+    note: $('#note').value, maxTrips: Number($('#maxTrips').value), days: Number($('#days').value),
+    tripDailyLimit: $('#tripDailyLimit').value ? Number($('#tripDailyLimit').value) : null,
+  });
+  await navigator.clipboard?.writeText(`${location.origin}/?invite=${invite.code}`).catch(() => {});
+  $('#note').value = '';
+  await load();
+  alert(`已生成邀请码 ${invite.code}，邀请链接已复制`);
+});
+
+$('#invites').addEventListener('click', async (e) => {
+  const t = e.target;
+  if (t.dataset.copy) { await navigator.clipboard?.writeText(t.dataset.copy).catch(() => {}); t.textContent = '已复制'; }
+  if (t.dataset.toggle) {
+    const enable = Boolean(t.dataset.active);
+    if (!enable && !confirm('停用这个邀请码？用它建的行程之后要改用自己的高德 Key 才能继续计算。')) return;
+    await api(`/api/admin/invites/${t.dataset.toggle}`, { active: enable });
+    await load();
+  }
+});
+
+load().catch((e) => { document.querySelector('.wrap').insertAdjacentHTML('beforeend', `<p class="err">${esc(e.message)}</p>`); });
+</script>
+</body>
+</html>
