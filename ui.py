@@ -28,6 +28,13 @@ from service import compute, plan_payload, suggest_stations
 HERE = Path(__file__).parent
 STATIONS_12306 = HERE / "web" / "stations12306.json"
 VALID_STATIONS = set(json.loads(STATIONS_12306.read_text(encoding="utf-8"))["stations"]) if STATIONS_12306.exists() else None
+# 页面用到的静态文件：设计系统样式、图标集、站点图标（网页版由 Cloudflare 的静态资源提供，本地版由这里提供）
+STATIC_FILES = {
+    "/design.css": (HERE / "web" / "design.css", "text/css; charset=utf-8"),
+    "/icons.svg": (HERE / "web" / "partials" / "icons.svg", "image/svg+xml"),
+    "/favicon.svg": (HERE / "web" / "favicon.svg", "image/svg+xml"),
+    "/apple-touch-icon.png": (HERE / "web" / "apple-touch-icon.png", "image/png"),
+}
 SAVE_HEADER = "# 由 ui.py 保存。手写注释不会保留，第一次保存前的原文件在同名 .bak 里\n"
 
 
@@ -101,6 +108,9 @@ def make_handler(app: App):
             url = urllib.parse.urlsplit(self.path)
             if url.path in ("/", "/index.html"):
                 self._send(200, (HERE / "ui.html").read_bytes(), "text/html; charset=utf-8")
+            elif url.path in STATIC_FILES and STATIC_FILES[url.path][0].exists():
+                path, ctype = STATIC_FILES[url.path]
+                self._send(200, path.read_bytes(), ctype)
             elif url.path == "/stations12306.json" and STATIONS_12306.exists():
                 self._send(200, STATIONS_12306.read_bytes(), "application/json; charset=utf-8")
             elif url.path == "/share":

@@ -360,11 +360,24 @@ def resolve(amap, label: str, query: str, item: dict, station: bool = False,
     return place
 
 
+def check_unique_names(people: list[dict]) -> None:
+    """计算内核按名字区分人：重名会让两个人互相覆盖。去掉首尾空白后比较，报出具体是第几位和第几位。"""
+    seen: dict[str, int] = {}
+    for i, p in enumerate(people):
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        if name in seen:
+            raise SystemExit(f"成员名字重复：第 {seen[name] + 1} 位和第 {i + 1} 位都叫「{name}」。计算时按名字区分人，请改成不同的名字（比如加上姓或「大」「小」）")
+        seen[name] = i
+
+
 def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
     """解析目的地和每个人的出发地；按文字定位到的结果记进 record。"""
     opt = cfg.get("options", {})
     default_detour = float(opt.get("max_detour_min", 30))
     v = cfg.get("venue") or {}
+    check_unique_names(cfg.get("people") or [])  # 先查重名，别白白调用高德
     report("定位目的地、成员和车站")
     prefetch(amap, lambda: [
         *([amap.geocode_query(v.get("address") or v.get("name", ""), v.get("city"))] if not v.get("location") else []),

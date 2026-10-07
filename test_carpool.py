@@ -8,6 +8,7 @@
 import datetime as dt
 import io
 import json
+import re
 import tempfile
 import threading
 import time
@@ -592,6 +593,73 @@ class TomlTest(unittest.TestCase):
         self.assertEqual(got, cfg)
 
 
+class DuplicateNameTest(unittest.TestCase):
+    """计算内核按名字区分人：重名要在调用高德之前就拦住，并说清楚是第几位和第几位。"""
+
+    def test_duplicate_names_rejected_before_any_amap_call(self):
+        amap = FakeAmap()
+        cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0"), person("老王", "113.0,35.0")])
+        with self.assertRaises(SystemExit) as ctx:
+            carpool.plan_trip(cfg, amap)
+        self.assertIn("第 1 位和第 3 位都叫「老王」", str(ctx.exception))
+        self.assertEqual(amap.calls, 0)
+
+    def test_names_compared_after_trimming(self):
+        cfg = config([person("老王", WANG, car_seats=3), person(" 老王 ", "114.0,34.0")])
+        with self.assertRaises(SystemExit):
+            carpool.load_trip(cfg, FakeAmap())
+
+    def test_distinct_names_and_blank_names_pass_the_check(self):
+        carpool.check_unique_names([{"name": "甲"}, {"name": "乙"}, {"name": ""}, {"name": ""}])  # 空名字由别处报错，这里不管
+
+
+class ShareStyleTest(unittest.TestCase):
+    """方案页内嵌的设计变量要和 web/design.css 一致；页面自包含（沙箱里不能引用 /design.css）。"""
+
+    CSS = (Path(__file__).parent / "web" / "design.css").read_text(encoding="utf-8")
+
+    @staticmethod
+    def parse(block: str) -> dict:
+        return dict(re.findall(r"(--[\w-]+):\s*([^;]+);", block))
+
+    def css_light(self) -> dict:
+        return self.parse(re.search(r":root \{(.*?)\n\}", self.CSS, re.S).group(1))
+
+    def css_dark(self) -> dict:
+        media = re.search(r"@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme=light\]\) \{(.*?)\n  \}", self.CSS, re.S)
+        manual = re.search(r":root\[data-theme=dark\] \{(.*?)\n\}", self.CSS, re.S)
+        self.assertEqual(self.parse(media.group(1)), self.parse(manual.group(1)))  # design.css 里两段深色必须一致
+        return self.parse(media.group(1))
+
+    def test_variables_match_design_css(self):
+        for name, mine, theirs in (("浅色", share.LIGHT, self.css_light()), ("深色", share.DARK, self.css_dark())):
+            for var, value in mine.items():
+                self.assertEqual(theirs.get(var), value, f"{name}变量 {var} 和 web/design.css 不一致")
+        for var in ("--bg", "--surface", "--surface-2", "--line", "--ink", "--ink-2", "--ink-3", "--accent", "--accent-hover",
+                    "--on-accent", "--drive", "--ride", "--taxi", "--dest", "--station"):  # 核心颜色必须都在
+            self.assertIn(var, share.LIGHT)
+            self.assertIn(var, share.DARK)
+
+    def test_rendered_page_is_self_contained_dark_and_print_light(self):
+        cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")])
+        html = share.render_share(service.compute(cfg, FakeAmap()), 0)
+        self.assertNotIn("/design.css", html)
+        self.assertNotIn("@@", html)  # 占位都换掉了
+        self.assertIn("prefers-color-scheme: dark", html)
+        self.assertIn(f"--bg: {share.DARK['--bg']};", html)
+        self.assertIn("var(--map-filter)", html)  # 深色下降低瓦片亮度，只作用在瓦片层
+        print_css = html[html.index("@media print"):html.index("</style>")]
+        self.assertIn(f"--bg: {share.LIGHT['--bg']};", print_css)  # 打印时强制回到浅色
+        for text in ("border-left-style: double", "border-left-style: dotted"):  # 黑白打印靠线型区分开车、坐车、打车
+            self.assertIn(text, print_css)
+
+    def test_user_text_is_escaped_and_not_substituted_twice(self):
+        cfg = config([person("老王", WANG, car_seats=3), person("@@title@@<i>", "114.0,34.0")])
+        html = share.render_share(service.compute(cfg, FakeAmap()), 0)
+        self.assertIn("@@title@@&lt;i&gt;", html)
+        self.assertNotIn("<i>", html)
+
+
 class UiServerTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -616,6 +684,12 @@ class UiServerTest(unittest.TestCase):
         except urllib.error.HTTPError as e:
             with e:
                 return e.code, json.load(e)
+
+    def test_design_system_files_are_served(self):
+        for path, marker in (("/design.css", b"--accent"), ("/icons.svg", b"<symbol"), ("/favicon.svg", b"<svg")):
+            with urllib.request.urlopen(self.base + path) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn(marker, resp.read())
 
     def test_page_and_config(self):
         with urllib.request.urlopen(self.base + "/") as resp:
