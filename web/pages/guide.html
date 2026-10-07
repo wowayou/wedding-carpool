@@ -1,0 +1,73 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN">
+<head>
+<!-- head -->
+</head>
+<body>
+<!-- include:header -->
+<main id="main" class="c-main">
+<div class="c-container">
+  <!-- crumbs -->
+  <article class="c-prose">
+    <p class="c-eyebrow">使用指南</p>
+    <h1>从新建行程到发布方案页</h1>
+    <p class="c-lead">八步：填好目的地和每个人的情况，让程序算出谁顺路接谁、在哪个站接，满意后生成一页发给大家。</p>
+
+    <div class="c-callout">
+      <p><b>先说定位。</b>这个工具帮你先定个大方向、心里有个底。算出来的是初步方案：具体在哪接、几点到，同行的人在群里再商量；行车时间来自高德地图，按查询时的路况估算，只供参考。</p>
+    </div>
+
+    <h2>开始之前，先准备这些</h2>
+    <ul>
+      <li>目的地：酒店、饭店或景点的名字或地址。</li>
+      <li>每位成员的出发地，谁开车、车上空几个座、最多愿意绕多久。</li>
+      <li>不开车的人打算哪天出发。车次可以边选站边查，不用提前买好票。</li>
+      <li>新建行程用的：站长发的邀请码，或者你自己的高德 Web 服务 Key（在高德开放平台控制台申请，个人需要实名）。</li>
+    </ul>
+
+    <h2>八个步骤</h2>
+    <!-- howto:guide -->
+
+    <!-- notext -->
+    <figure class="c-figure">
+      <a href="/demo"><picture>
+        <source type="image/webp" srcset="/demo-shot.webp">
+        <img src="/demo-shot.png" width="1140" height="1350" loading="lazy" alt="示例方案页：每位车主和乘客各有一张时间线，地图上标出路线和车站">
+      </picture></a>
+      <figcaption><span>第八步发布出来的方案页长这样（示例，行程是虚构的）</span><a href="/demo">打开示例方案页 →</a></figcaption>
+    </figure>
+    <!-- /notext -->
+
+    <h2>几个常用操作</h2>
+    <ul>
+      <li><b>多人一起编辑</b>：把编辑链接发给一起规划的人。改动停顿约 0.8 秒后自动保存，顶部能看到谁在线。两个人改了不同的地方会自动合并；改了同一格时，保留后保存的一方，并给他弹出提示，可以一键改用对方的。</li>
+      <li><b>编辑链接外传了</b>：在编辑页「更多」里重置，旧链接和已经打开的页面立即失效。也可以在这里设一个可选的编辑口令，新设备打开要先输入。</li>
+      <li><b>改错了想撤回</b>：「更多」里有历史版本，每个行程保留最近 100 条，可以看和现在的差别，一键恢复。</li>
+      <li><b>备份和删除</b>：配置可以导出、导入成 JSON 文件；行程可以随时手动删除。不手动删的话，行程在出行日期过后 60 天和连续 180 天没人编辑中较晚的那天自动删除，到期前 7 天编辑页会提示。</li>
+      <li><b>只想让大家看结果</b>：发方案页的链接，别发编辑链接。方案页只能看，不能改。</li>
+    </ul>
+
+    <h2>遇到问题</h2>
+    <ul>
+      <li><b>提示额度用完了</b>：站点的公共额度每天有上限，用完了可以改用自己的高德 Key，或者明天再来。首页会显示今天公共额度已经用了多少。</li>
+      <li><b>提示方案可能已经过期</b>：说明配置在上次计算后改过了，重新点一下「计算方案」。</li>
+      <li><b>搜不到地点</b>：换个写法，比如加上城市名，或者搜附近有名的地标，搜到后选一个，坐标最准。</li>
+      <li><b>车次对不上</b>：车次、余票以 12306 为准。程序不查 12306，车次要自己填，格式如 G1234 08:00→11:30。</li>
+    </ul>
+
+    <h2>接下来</h2>
+    <ul>
+      <li>不确定该勾哪几个站：看<a href="/guide/station">怎么选接人的高铁站</a>。</li>
+      <li>想看看你的场合怎么用：<a href="/for/wedding">婚礼</a>、<a href="/for/reunion">同学或家庭聚会</a>、<a href="/for/team">团建和公司活动</a>。</li>
+      <li>存了什么、花不花钱：<a href="/privacy">费用与隐私</a>。</li>
+    </ul>
+    <!-- notext -->
+    <p><a class="c-btn c-btn--primary c-btn--lg" href="/#create">新建行程{{icon:arrow-right}}</a></p>
+    <!-- /notext -->
+  </article>
+</div>
+</main>
+<!-- include:footer -->
+</body>
+</html>

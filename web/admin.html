@@ -2,77 +2,54 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>管理 · 拼车出行规划</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<!-- head -->
 <style>
-  :root { --bg: #f5f4f0; --ink: #1f2328; --muted: #6b7280; --line: #e4e1da; --accent: #c2410c; --soft: #fff1e8; --danger: #b91c1c; --ok: #15803d; }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 20px; margin: 0 0 16px; }
-  h2 { font-size: 15px; margin: 0 0 10px; }
-  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  .card.urgent { border-color: #f1c4a8; background: #fffaf6; }
-  input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 100%; }
-  label { display: block; font-size: 12px; color: var(--muted); }
-  .grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
-  .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+  /* 管理页自己的小样式；颜色和间距取 design.css 的变量 */
+  body { font-size: var(--fs-14); }
+  .c-card { margin-bottom: var(--sp-4); }
+  .c-card h2 { font-size: var(--fs-16); margin-bottom: var(--sp-3); }
+  .urgent { border-color: var(--warn); background: var(--warn-soft); }
+  .grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: var(--sp-3); align-items: end; }
+  .grid .c-field, .row .c-field { margin-bottom: 0; }
+  .row { display: flex; gap: var(--sp-3); align-items: end; flex-wrap: wrap; }
   .row > .grow { flex: 1 1 220px; }
-  .btn { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: #fff; cursor: pointer; white-space: nowrap; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .btn.danger { border-color: var(--danger); color: var(--danger); }
-  .link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0 4px; font: inherit; }
-  .link.danger { color: var(--danger); }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
-  .bar { height: 8px; background: #f3f1ec; border-radius: 4px; overflow: hidden; margin: 6px 0; }
-  .bar i { display: block; height: 100%; background: var(--accent); }
-  .muted { color: var(--muted); }
-  .off td { color: var(--muted); }
-  .err { color: var(--danger); min-height: 1.4em; }
-  .switches { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
-  .switch { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; }
-  .switch.on { border-color: var(--danger); background: #fef2f2; }
-  .tag { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; background: #e8f5ec; color: var(--ok); }
-  .tag.stop { background: #fee2e2; color: var(--danger); }
-  .quota { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  details { margin-top: 10px; }
+  .switches { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+  .switch.c-card { margin: 0; padding: var(--sp-3) var(--sp-4); }
+  .switch.is-on { border-color: var(--danger); background: var(--danger-soft); }
+  .quota { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+  .c-progress { margin: 6px 0; height: 8px; }
+  details { margin-top: var(--sp-3); }
   summary { cursor: pointer; font-weight: 600; }
-  ol.manual { margin: 8px 0 0; padding-left: 20px; }
-  code { background: #f3f1ec; padding: 1px 5px; border-radius: 4px; word-break: break-all; }
-  .made { margin-top: 10px; padding: 10px 12px; background: var(--soft); border-radius: 8px; word-break: break-all; }
-  .table-wrap { overflow-x: auto; }
-  [hidden] { display: none !important; }
+  ol.manual { margin: var(--sp-2) 0 0; padding-left: 20px; }
+  .made { margin-top: var(--sp-3); word-break: break-all; }
+  .c-table .c-btn--link + .c-btn--link { margin-left: var(--sp-2); }
+  .c-card .c-table-wrap { border: 0; border-radius: 0; margin: 0; background: none; }
   @media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } .switches, .quota { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>拼车出行规划 · 管理</h1>
-  <form class="card" id="login" hidden>
+<!-- include:header-lite title="拼车出行规划 · 管理" actions='<a class="c-btn c-btn--ghost c-btn--sm" href="/">回首页</a>' -->
+<main id="main" class="c-main">
+<div class="c-container" style="padding-top: var(--sp-5)">
+  <form class="c-card" id="login" hidden>
     <h2>站长口令</h2>
-    <input type="password" id="code" autocomplete="current-password" required>
-    <div class="err" id="loginErr"></div>
-    <button class="btn primary">进入</button>
+    <label class="c-field"><span class="c-field__label">口令</span><input class="c-input" type="password" id="code" autocomplete="current-password" required></label>
+    <div class="c-field__error" id="loginErr" role="alert"></div>
+    <button class="c-btn c-btn--primary">进入</button>
   </form>
 
   <div id="panel" hidden>
-    <div class="card urgent">
+    <div class="c-card urgent">
       <h2>应急处理</h2>
       <div class="switches">
-        <div class="switch" id="swPublic"></div>
-        <div class="switch" id="swCreate"></div>
+        <div class="switch c-card" id="swPublic"></div>
+        <div class="switch c-card" id="swCreate"></div>
       </div>
       <div class="row">
-        <button class="btn danger" id="disableInvites">停用所有邀请码</button>
-        <button class="btn danger" id="logoutAll">退出所有管理会话</button>
+        <button class="c-btn c-btn--danger" id="disableInvites">停用所有邀请码</button>
+        <button class="c-btn c-btn--danger" id="logoutAll">退出所有管理会话</button>
       </div>
-      <p class="muted">暂停公共额度：所有用站点公共额度的行程立刻停止计算并提示改用自己的 Key，自带 Key 的行程不受影响。暂停新建：首页新建行程（邀请码和自带 Key 两种）都会被拒绝，这里的「新建行程」不受影响。</p>
+      <p class="c-muted" style="margin-top: var(--sp-3)">暂停公共额度：所有用站点公共额度的行程立刻停止计算并提示改用自己的 Key，自带 Key 的行程不受影响。暂停新建：首页新建行程（邀请码和自带 Key 两种）都会被拒绝，这里的「新建行程」不受影响。</p>
       <details>
         <summary>应急手册：站长口令可能泄露了</summary>
         <ol class="manual">
@@ -81,71 +58,72 @@
           <li>排查：看下面的邀请码和最近用过公共额度的行程，可疑的邀请码停用、可疑的行程停用公共额度；也可以看「最近操作」里有没有不是你做的。</li>
           <li>确认没问题后，把暂停的开关恢复。</li>
         </ol>
-        <p class="muted">登录失败有次数限制（同一网络 15 分钟 5 次、全站每小时 30 次），登录后 24 小时自动退出。</p>
+        <p class="c-muted">登录失败有次数限制（同一网络 15 分钟 5 次、全站每小时 30 次），登录后 24 小时自动退出。</p>
       </details>
     </div>
 
-    <div class="card">
+    <div class="c-card">
       <h2>公共额度用量（北京时间）</h2>
       <div id="stats"></div>
       <details>
         <summary>近 30 天每天用量</summary>
-        <div class="table-wrap"><table>
+        <div class="c-table-wrap"><table class="c-table">
           <thead><tr><th>日期</th><th>路线和测距</th><th>地点搜索</th></tr></thead>
-          <tbody id="days"></tbody>
+          <tbody id="dayRows"></tbody>
         </table></div>
       </details>
     </div>
 
-    <form class="card" id="newTrip">
+    <form class="c-card" id="newTrip">
       <h2>用公共额度新建行程</h2>
       <div class="row">
-        <div class="grow"><label>行程名称（可以不填）</label><input id="tripName" maxlength="60" placeholder="比如 测试行程"></div>
-        <button class="btn primary">新建</button>
+        <label class="c-field grow"><span class="c-field__label">行程名称（可以不填）</span><input class="c-input" id="tripName" maxlength="60" placeholder="比如 测试行程"></label>
+        <button class="c-btn c-btn--primary">新建</button>
       </div>
-      <div class="err" id="newTripErr"></div>
-      <div class="made" id="made" hidden></div>
-      <p class="muted">得到的编辑链接等于编辑权限，只发给要用的人。仍受全站每天新建总数限制。</p>
+      <div class="c-field__error" id="newTripErr" role="alert"></div>
+      <div class="made c-callout" id="made" hidden></div>
+      <p class="c-muted" style="margin-top: var(--sp-3)">得到的编辑链接等于编辑权限，只发给要用的人。仍受全站每天新建总数限制。</p>
     </form>
 
-    <div class="card">
+    <div class="c-card">
       <h2>最近用过公共额度的行程</h2>
-      <p class="muted">最多 200 个，只显示编号、新建时间、邀请码和用量，看不到行程名称和内容。停用后，这个行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。</p>
-      <div class="table-wrap"><table>
+      <p class="c-muted">最多 200 个，只显示编号、新建时间、邀请码和用量，看不到行程名称和内容。停用后，这个行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。</p>
+      <div class="c-table-wrap"><table class="c-table">
         <thead><tr><th>行程编号</th><th>新建时间</th><th>邀请码</th><th>最后使用日</th><th>今天用量</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="trips"></tbody>
       </table></div>
     </div>
 
-    <form class="card" id="create">
+    <form class="c-card" id="create">
       <h2>发一个邀请码</h2>
       <div class="grid">
-        <div><label>备注（发给谁、什么活动）</label><input id="note" maxlength="60" placeholder="比如 小王婚礼"></div>
-        <div><label>最多建几个行程</label><input id="maxTrips" type="number" min="1" value="3"></div>
-        <div><label>有效期（天，0 为不限）</label><input id="days" type="number" min="0" value="30"></div>
-        <div><label>每个行程每天高德上限</label><input id="tripDailyLimit" type="number" min="1" placeholder="默认"></div>
-        <button class="btn primary">生成</button>
+        <label class="c-field"><span class="c-field__label">备注（发给谁、什么活动）</span><input class="c-input" id="note" maxlength="60" placeholder="比如 小王婚礼"></label>
+        <label class="c-field"><span class="c-field__label">最多建几个行程</span><input class="c-input" id="maxTrips" type="number" min="1" value="3"></label>
+        <label class="c-field"><span class="c-field__label">有效期（天，0 为不限）</span><input class="c-input" id="days" type="number" min="0" value="30"></label>
+        <label class="c-field"><span class="c-field__label">每个行程每天高德上限</span><input class="c-input" id="tripDailyLimit" type="number" min="1" placeholder="默认"></label>
+        <button class="c-btn c-btn--primary">生成</button>
       </div>
-      <p class="muted">拿到邀请码的人在首页新建行程时填它，或者直接打开邀请链接。用它建的行程用站点的公共额度；停用后，这些行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。</p>
+      <p class="c-muted" style="margin-top: var(--sp-3)">拿到邀请码的人在首页新建行程时填它，或者直接打开邀请链接。用它建的行程用站点的公共额度；停用后，这些行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。</p>
     </form>
 
-    <div class="card">
+    <div class="c-card">
       <h2>邀请码</h2>
-      <div class="table-wrap"><table>
+      <div class="c-table-wrap"><table class="c-table">
         <thead><tr><th>邀请码</th><th>备注</th><th>已建 / 上限</th><th>今天用量</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="invites"></tbody>
       </table></div>
     </div>
 
-    <div class="card">
+    <div class="c-card">
       <h2>最近操作</h2>
-      <div class="table-wrap"><table>
+      <div class="c-table-wrap"><table class="c-table">
         <thead><tr><th>时间</th><th>操作</th><th>对象</th></tr></thead>
         <tbody id="ops"></tbody>
       </table></div>
     </div>
   </div>
 </div>
+</main>
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -172,13 +150,14 @@ async function act(fn) {
 const meter = (label, used, budget) => {
   if (!budget) return `<div>${label}：<b>${used}</b> 次</div>`;
   const pct = pctOf(used, budget);
-  return `<div>${label}：<b>${used}</b> / ${budget}（${pct}%）<div class="bar"><i style="width:${pct}%"></i></div></div>`;
+  const level = pct >= 100 ? ' c-progress--danger' : pct >= 80 ? ' c-progress--warn' : '';
+  return `<div>${label}：<b>${used}</b> / ${budget}（${pct}%）<div class="c-progress${level}" style="--value:${pct}%"><i></i></div></div>`;
 };
 
 function renderSwitch(el, title, on, onText, offText, name) {
-  el.className = `switch ${on ? 'on' : ''}`;
-  el.innerHTML = `<div><b>${title}</b> <span class="tag ${on ? 'stop' : ''}">${on ? onText : offText}</span></div>
-    <button class="btn ${on ? '' : 'danger'}" data-flag="${name}" data-to="${on ? '' : '1'}" style="margin-top:6px">${on ? '恢复' : '暂停'}</button>`;
+  el.className = `switch c-card ${on ? 'is-on' : ''}`;
+  el.innerHTML = `<div><b>${title}</b> <span class="c-tag ${on ? 'c-tag--danger' : 'c-tag--ok'}">${on ? onText : offText}</span></div>
+    <button class="c-btn c-btn--sm ${on ? '' : 'c-btn--danger'}" data-flag="${name}" data-to="${on ? '' : '1'}" style="margin-top:6px">${on ? '恢复' : '暂停'}</button>`;
 }
 
 async function load() {
@@ -199,25 +178,25 @@ async function load() {
       <div><b>路线和测距</b>${meter('今天', quota.today.lbs)}${meter('本月', quota.month.lbs, quota.budgets.lbs)}</div>
       <div><b>地点搜索</b>${meter('今天', quota.today.search)}${meter('本月', quota.month.search, quota.budgets.search)}</div>
     </div>
-    <span class="muted">每日合计用过 80% 后，当天还没用过公共额度的行程会暂停分配，留给已经在算的行程。每月预算比高德的免费额度留了余量，可以在 wrangler.jsonc 的 vars 里改（OWNER_MONTHLY_LBS_BUDGET、OWNER_MONTHLY_SEARCH_BUDGET）。高德没有查询剩余额度的接口，这里的数字是站点自己的计数，不含自带 Key 的行程。今天新建行程 ${data.createdToday} 个。</span>`;
-  $('#days').innerHTML = quota.days.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.lbs}</td><td>${d.search}</td></tr>`).join('');
-  $('#trips').innerHTML = data.trips.map((t) => `<tr class="${t.blocked ? 'off' : ''}">
+    <span class="c-muted">每日合计用过 80% 后，当天还没用过公共额度的行程会暂停分配，留给已经在算的行程。每月预算比高德的免费额度留了余量，可以在 wrangler.jsonc 的 vars 里改（OWNER_MONTHLY_LBS_BUDGET、OWNER_MONTHLY_SEARCH_BUDGET）。高德没有查询剩余额度的接口，这里的数字是站点自己的计数，不含自带 Key 的行程。今天新建行程 ${data.createdToday} 个。</span>`;
+  $('#dayRows').innerHTML = quota.days.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.lbs}</td><td>${d.search}</td></tr>`).join('');
+  $('#trips').innerHTML = data.trips.map((t) => `<tr class="${t.blocked ? 'is-off' : ''}">
     <td><code>${esc(t.id)}</code></td><td>${esc(time(t.createdAt))}</td><td>${t.invite ? `<code>${esc(t.invite)}</code>` : '—'}</td>
-    <td>${esc(t.lastDay)}</td><td>${t.usedToday}</td><td>${t.blocked ? '<span class="tag stop">已停用</span>' : '正常'}</td>
-    <td><button class="link ${t.blocked ? '' : 'danger'}" data-block="${esc(t.id)}" data-to="${t.blocked ? '' : '1'}">${t.blocked ? '恢复' : '停用公共额度'}</button></td></tr>`).join('')
-    || '<tr><td colspan="7" class="muted">最近还没有行程用过公共额度</td></tr>';
+    <td>${esc(t.lastDay)}</td><td>${t.usedToday}</td><td>${t.blocked ? '<span class="c-tag c-tag--danger">已停用</span>' : '正常'}</td>
+    <td><button class="c-btn c-btn--link ${t.blocked ? '' : 'is-danger'}" data-block="${esc(t.id)}" data-to="${t.blocked ? '' : '1'}">${t.blocked ? '恢复' : '停用公共额度'}</button></td></tr>`).join('')
+    || '<tr><td colspan="7" class="c-muted">最近还没有行程用过公共额度</td></tr>';
   $('#invites').innerHTML = data.invites.map((inv) => {
     const expired = inv.expiresAt && Date.now() > inv.expiresAt;
     const link = `${location.origin}/?invite=${inv.code}`;
-    return `<tr class="${inv.active && !expired ? '' : 'off'}">
+    return `<tr class="${inv.active && !expired ? '' : 'is-off'}">
       <td><code>${esc(inv.code)}</code></td><td>${esc(inv.note)}</td>
-      <td>${inv.trips.length} / ${inv.maxTrips}</td><td>${inv.usedToday}${inv.tripDailyLimit ? ` <span class="muted">（每行程 ${inv.tripDailyLimit}）</span>` : ''}</td>
+      <td>${inv.trips.length} / ${inv.maxTrips}</td><td>${inv.usedToday}${inv.tripDailyLimit ? ` <span class="c-muted">（每行程 ${inv.tripDailyLimit}）</span>` : ''}</td>
       <td>${day(inv.expiresAt)}${expired ? '（已过期）' : ''}</td><td>${inv.active ? '有效' : '已停用'}</td>
-      <td><button class="link" data-copy="${esc(link)}">复制邀请链接</button>
-        <button class="link ${inv.active ? 'danger' : ''}" data-toggle="${esc(inv.code)}" data-active="${inv.active ? '' : '1'}">${inv.active ? '停用' : '启用'}</button></td></tr>`;
-  }).join('') || '<tr><td colspan="7" class="muted">还没有邀请码</td></tr>';
+      <td><button class="c-btn c-btn--link" data-copy="${esc(link)}">复制邀请链接</button>
+        <button class="c-btn c-btn--link ${inv.active ? 'is-danger' : ''}" data-toggle="${esc(inv.code)}" data-active="${inv.active ? '' : '1'}">${inv.active ? '停用' : '启用'}</button></td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="c-muted">还没有邀请码</td></tr>';
   $('#ops').innerHTML = data.ops.map((o) => `<tr><td>${esc(time(o.at))}</td><td>${esc(o.op)}</td><td>${esc(o.target)}</td></tr>`).join('')
-    || '<tr><td colspan="3" class="muted">还没有记录</td></tr>';
+    || '<tr><td colspan="3" class="c-muted">还没有记录</td></tr>';
 }
 
 $('#login').addEventListener('submit', async (e) => {
@@ -248,7 +227,7 @@ $('#newTrip').addEventListener('submit', async (e) => {
     const link = location.origin + trip.url;
     $('#made').hidden = false;
     $('#made').innerHTML = `已新建，编辑链接：<br><code>${esc(link)}</code><br>
-      <button type="button" class="link" data-copy="${esc(link)}">复制</button><a class="link" href="${esc(link)}" target="_blank" rel="noopener">打开</a>`;
+      <button type="button" class="c-btn c-btn--link" data-copy="${esc(link)}">复制</button> <a class="c-btn c-btn--link" href="${esc(link)}" target="_blank" rel="noopener">打开</a>`;
     $('#tripName').value = '';
     await navigator.clipboard?.writeText(link).catch(() => {});
     await load();
@@ -291,7 +270,7 @@ $('#logoutAll').addEventListener('click', () => {
   act(async () => { await api('/api/admin/logout-all', {}); await load(); });
 });
 
-load().catch((e) => { document.querySelector('.wrap').insertAdjacentHTML('beforeend', `<p class="err">${esc(e.message)}</p>`); });
+load().catch((e) => { document.querySelector('.c-container').insertAdjacentHTML('beforeend', `<p class="c-field__error">${esc(e.message)}</p>`); });
 </script>
 </body>
 </html>

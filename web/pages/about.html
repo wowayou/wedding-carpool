@@ -1,0 +1,58 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN">
+<head>
+<!-- head -->
+</head>
+<body>
+<!-- include:header -->
+<main id="main" class="c-main">
+<div class="c-container">
+  <!-- crumbs -->
+  <article class="c-prose">
+    <p class="c-eyebrow">关于</p>
+    <h1>关于拼车出行规划</h1>
+    <p class="c-lead">一个免费、开源的网页工具：一群人从不同城市去同一个地方时，先定个大方向，心里有个底。</p>
+
+    <h2>它是什么</h2>
+    <p>多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游），有人开车、有人坐高铁。你填目的地、每个人的出发地、谁开车（几个空座）、不开车的人的车次，它用高德的真实行车时间算出：</p>
+    <ul>
+      <li>不开车的人坐到哪个高铁站最合适，不一定是离目的地最近的那个；</li>
+      <li>哪位车主顺路接谁、在哪接、几点出发，绕路不超过各自的上限；</li>
+      <li>搭不上车的人在哪个站汇合打车；</li>
+      <li>可选：散场后怎么回去。</li>
+    </ul>
+    <p>结果是一页可以直接发给大家的方案页：每人一张时间线，地图上标出路线和车站，可以打印或存为 PDF。它给的是初步方案，具体在哪接、几点到，同行的人再商量。想试试，看<a href="/demo">示例方案页</a>或<a href="/guide">使用指南</a>。</p>
+
+    <h2>为什么做</h2>
+    <p>多人异地出行的接送，通常是在群里一个一个问、拿地图一段一段估。人一多，谁顺路接谁、在哪个站接、几点出发，很难凭感觉一次想清楚。这个工具把这件事交给程序去比，让组织的人先有个底，再和大家商量。</p>
+
+    <h2>谁做的</h2>
+    <p>作者是 <a href="https://eigentime.org/" target="_blank" rel="noopener">eigentime</a>，这是一个公益性质的个人项目，免费、无广告。AI 启蒙与学习来自 <a href="https://linux.do/" target="_blank" rel="noopener">LINUX DO</a> 社区。</p>
+
+    <h2>开源和授权</h2>
+    <p>代码以 <b>AGPL-3.0-or-later</b> 授权开源，每个源文件都带 SPDX 许可证标识。你可以使用、研究、修改和自己部署；如果你把修改后的版本作为网络服务运行，AGPL 要求向这个服务的用户提供源码。</p>
+    <ul>
+      <li>源码：<a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">github.com/wowayou/wedding-carpool</a></li>
+      <li>授权说明：仓库里的 <a href="https://github.com/wowayou/wedding-carpool/blob/HEAD/LICENSING.md" target="_blank" rel="noopener">LICENSING.md</a>，写了第三方组件和数据的授权。</li>
+      <li>用到的开源组件：Pyodide（MPL-2.0，在浏览器里运行 Python）、Leaflet（BSD-2-Clause，地图）、marked（MIT，渲染报告）。</li>
+      <li>路线和时间来自高德地图的 Web 服务，地图底图也来自高德，使用条款以高德开放平台为准。</li>
+    </ul>
+
+    <h2>技术原理简述</h2>
+    <ul>
+      <li><b>计算在你的浏览器里做。</b>计算内核是一份 Python 程序，通过 Pyodide 在浏览器里运行；本地版和网页版是同一份代码。</li>
+      <li><b>服务端是 Cloudflare。</b>Worker 负责新建行程、代理高德接口；每个行程一个 Durable Object，存配置、历史版本，并处理多人实时编辑；方案页存在 KV 里。免费套餐就够用，超出额度只会报错，不会扣费。</li>
+      <li><b>调用高德有上限。</b>每个行程、每天、每个月都有上限，用完停下提示，可以改用自己的 Key。</li>
+      <li><b>方案页是自包含的 HTML。</b>放在沙箱里展示，读不到本站的存储和 Cookie，也不能发请求。</li>
+    </ul>
+    <p>更细的架构和安全措施见仓库的 README。存了什么、给了哪些第三方、哪里可能花钱，见<a href="/privacy">费用与隐私</a>。</p>
+
+    <h2>怎么反馈</h2>
+    <p>发现问题或有想法，欢迎到 GitHub 提 <a href="https://github.com/wowayou/wedding-carpool/issues" target="_blank" rel="noopener">issue</a>。想知道每个版本改了什么，看<a href="/changelog">更新记录</a>。想把它部署在自己的 Cloudflare 账号上，按仓库 README 的「自己部署」一节操作。</p>
+  </article>
+</div>
+</main>
+<!-- include:footer -->
+</body>
+</html>

@@ -1,0 +1,31 @@
+# 拼车出行规划：全文
+
+> 这是 https://carpool.eigentime.org 上使用指南、选站说明和常见问题的全文纯文本，方便 AI 问答引用。内容和网页一致，构建时由页面正文生成，生成于 {{date}}（北京时间）。简短的导航式摘要见 https://carpool.eigentime.org/llms.txt 。
+
+拼车出行规划是一个免费、无广告、开源（AGPL-3.0）的网页工具：多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游）时，先定个大方向，算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。路线和时间来自高德地图，只供参考；具体在哪接、几点到，同行的人再商量。
+
+---
+
+{{text:/guide}}
+
+---
+
+{{text:/guide/station}}
+
+---
+
+## 常见问题（首页）
+
+{{faq:home}}
+
+---
+
+## 适合的场合
+
+- 婚礼亲友拼车：https://carpool.eigentime.org/for/wedding
+- 同学或家庭聚会：https://carpool.eigentime.org/for/reunion
+- 团建和公司活动：https://carpool.eigentime.org/for/team
+
+---
+
+相关页面：示例方案页 https://carpool.eigentime.org/demo ；费用与隐私 https://carpool.eigentime.org/privacy ；关于 https://carpool.eigentime.org/about ；源码 https://github.com/wowayou/wedding-carpool

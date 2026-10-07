@@ -1,0 +1,248 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN">
+<head>
+<!-- head -->
+<style>
+  /* 样式指南页自己的排版，组件本身都在 design.css */
+  .dg-demo { padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); margin-bottom: var(--sp-4); }
+  .dg-swatches { display: grid; gap: var(--sp-3); grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .dg-icons { display: grid; gap: var(--sp-2); grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+  .dg-icons div { display: grid; justify-items: center; gap: 6px; padding: var(--sp-3) var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--surface); font-size: var(--fs-12); color: var(--ink-2); }
+  .dg-icons .c-icon { width: 24px; height: 24px; color: var(--ink); }
+  .dg-type p { margin: 0 0 var(--sp-2); }
+  .dg-space i { display: block; height: 12px; background: var(--accent); border-radius: 3px; }
+  .dg-contrast td, .dg-contrast th { font-size: var(--fs-13); }
+</style>
+</head>
+<body>
+<!-- include:header -->
+<main id="main" class="c-main">
+<div class="c-container">
+  <p class="c-breadcrumb"><a href="/">首页</a> / 样式指南</p>
+  <p class="c-eyebrow">样式指南</p>
+  <h1>设计系统</h1>
+  <p class="c-lead">拼车出行规划的设计变量和组件。样式写在 <code>/design.css</code>，规范见仓库的 <code>docs/design-system.md</code>。这一页跟随系统的浅色或深色，改系统设置就能看到两种主题。</p>
+
+  <section class="c-section" id="colors">
+    <h2>颜色</h2>
+    <div class="dg-swatches" id="swatches">
+      <div class="c-swatch"><i style="background: var(--bg)"></i><span>--bg<br>页面底色</span></div>
+      <div class="c-swatch"><i style="background: var(--surface)"></i><span>--surface<br>卡片、输入框</span></div>
+      <div class="c-swatch"><i style="background: var(--surface-2)"></i><span>--surface-2<br>次级底色、表头</span></div>
+      <div class="c-swatch"><i style="background: var(--line)"></i><span>--line<br>分隔线</span></div>
+      <div class="c-swatch"><i style="background: var(--line-strong)"></i><span>--line-strong<br>输入框边框</span></div>
+      <div class="c-swatch"><i style="background: var(--ink)"></i><span>--ink<br>正文</span></div>
+      <div class="c-swatch"><i style="background: var(--ink-2)"></i><span>--ink-2<br>次要文字</span></div>
+      <div class="c-swatch"><i style="background: var(--ink-3)"></i><span>--ink-3<br>说明、占位</span></div>
+      <div class="c-swatch"><i style="background: var(--accent)"></i><span>--accent<br>品牌、主按钮、链接</span></div>
+      <div class="c-swatch"><i style="background: var(--accent-hover)"></i><span>--accent-hover</span></div>
+      <div class="c-swatch"><i style="background: var(--accent-soft)"></i><span>--accent-soft<br>强调底色</span></div>
+      <div class="c-swatch"><i style="background: var(--on-accent)"></i><span>--on-accent<br>主按钮上的文字</span></div>
+      <div class="c-swatch"><i style="background: var(--drive)"></i><span>--drive<br>开车的</span></div>
+      <div class="c-swatch"><i style="background: var(--ride)"></i><span>--ride<br>坐车的、高铁</span></div>
+      <div class="c-swatch"><i style="background: var(--taxi)"></i><span>--taxi<br>打车</span></div>
+      <div class="c-swatch"><i style="background: var(--dest)"></i><span>--dest<br>目的地</span></div>
+      <div class="c-swatch"><i style="background: var(--station)"></i><span>--station<br>车站</span></div>
+      <div class="c-swatch"><i style="background: var(--ok)"></i><span>--ok</span></div>
+      <div class="c-swatch"><i style="background: var(--ok-soft)"></i><span>--ok-soft</span></div>
+      <div class="c-swatch"><i style="background: var(--warn)"></i><span>--warn</span></div>
+      <div class="c-swatch"><i style="background: var(--warn-soft)"></i><span>--warn-soft</span></div>
+      <div class="c-swatch"><i style="background: var(--danger)"></i><span>--danger</span></div>
+      <div class="c-swatch"><i style="background: var(--danger-soft)"></i><span>--danger-soft</span></div>
+      <div class="c-swatch"><i style="background: var(--info)"></i><span>--info</span></div>
+      <div class="c-swatch"><i style="background: var(--info-soft)"></i><span>--info-soft</span></div>
+    </div>
+    <p class="c-hint" style="margin-top: var(--sp-3)">每个色块下面的十六进制值由页面脚本读出当前主题的实际值。文字和背景的对比度在构建时检查，数值记在 docs/design-system.md。</p>
+  </section>
+
+  <section class="c-section" id="type">
+    <h2>字体和字号</h2>
+    <div class="dg-demo dg-type">
+      <p style="font-size: var(--fs-36); line-height: 1.3; font-weight: 650">36 先定个大方向</p>
+      <p style="font-size: var(--fs-28); line-height: 1.3; font-weight: 650">28 先定个大方向</p>
+      <p style="font-size: var(--fs-22); line-height: 1.3; font-weight: 650">22 先定个大方向</p>
+      <p style="font-size: var(--fs-18)">18 先定个大方向，心里有个底</p>
+      <p style="font-size: var(--fs-16)">16 先定个大方向，心里有个底（正文）</p>
+      <p style="font-size: var(--fs-14)">14 先定个大方向，心里有个底</p>
+      <p style="font-size: var(--fs-13)" class="c-muted">13 说明文字 · 次要文字</p>
+      <p style="font-size: var(--fs-12)" class="c-hint">12 标签和注释</p>
+      <p class="c-tnum">时刻、次数、金额等宽数字：<b>08:35 → 11:20</b>，共 <b>1,234</b> 次，<code>G7351</code>，按键 <kbd>Tab</kbd></p>
+    </div>
+  </section>
+
+  <section class="c-section" id="buttons">
+    <h2>按钮</h2>
+    <div class="dg-demo c-row">
+      <button class="c-btn c-btn--primary" type="button">新建行程</button>
+      <button class="c-btn" type="button">次要</button>
+      <button class="c-btn c-btn--ghost" type="button">幽灵</button>
+      <button class="c-btn c-btn--danger" type="button">{{icon:trash}}删除行程</button>
+      <button class="c-btn c-btn--link" type="button">文字链接</button>
+    </div>
+    <div class="dg-demo c-row">
+      <button class="c-btn c-btn--primary c-btn--sm" type="button">小</button>
+      <button class="c-btn c-btn--primary" type="button">中</button>
+      <button class="c-btn c-btn--primary c-btn--lg" type="button">大</button>
+      <button class="c-btn c-btn--primary is-loading" type="button" aria-busy="true">加载中</button>
+      <button class="c-btn c-btn--primary" type="button" disabled>禁用</button>
+      <button class="c-btn" type="button" disabled>禁用</button>
+    </div>
+  </section>
+
+  <section class="c-section" id="forms">
+    <h2>表单</h2>
+    <div class="dg-demo">
+      <label class="c-field"><span class="c-field__label">行程名称</span><input class="c-input" placeholder="比如 小王婚礼 10 月 19 日"><span class="c-field__hint">提示：给大家一眼能认出来的名字。</span></label>
+      <div class="c-field has-error"><label class="c-field__label" for="dg-code">邀请码</label><input class="c-input" id="dg-code" value="abc" aria-invalid="true" aria-describedby="dg-code-err"><span class="c-field__error" id="dg-code-err">邀请码不对。检查有没有多复制或少复制一个字符，或者向发给你的人再要一个。</span></div>
+      <label class="c-field"><span class="c-field__label">出发城市</span><select class="c-select"><option>杭州</option><option>南京</option></select></label>
+      <label class="c-field"><span class="c-field__label">备注</span><textarea class="c-textarea" placeholder="比如 带一个行李箱"></textarea></label>
+      <div class="c-row">
+        <label class="c-check"><input type="checkbox" checked> 也规划返程</label>
+        <label class="c-check"><input type="radio" name="dg-r" checked> 我有邀请码</label>
+        <label class="c-check"><input type="radio" name="dg-r"> 用自己的 Key</label>
+        <label class="c-check c-check--pill"><input type="radio" name="dg-p" checked> 药丸选项</label>
+        <label class="c-check c-check--pill"><input type="radio" name="dg-p"> 另一个</label>
+        <label class="c-switch"><input type="checkbox" role="switch" checked><span class="c-switch__track"></span>到家附近接</label>
+      </div>
+    </div>
+  </section>
+
+  <section class="c-section" id="containers">
+    <h2>卡片、标签和提示条</h2>
+    <div class="c-grid" style="margin-bottom: var(--sp-4)">
+      <div class="c-card"><h3 class="c-card__title">普通卡片</h3><p class="c-muted">用边框，不用阴影。</p></div>
+      <div class="c-card c-card--drive"><h3 class="c-card__title">老王 <span class="c-tag c-tag--drive">开车 · 空 3 座</span></h3><p class="c-muted">左边的色条表示角色。</p></div>
+      <div class="c-card c-card--ride"><h3 class="c-card__title">小李 <span class="c-tag c-tag--ride">坐高铁</span></h3><p class="c-muted">坐车的用橙色。</p></div>
+      <div class="c-card c-card--taxi"><h3 class="c-card__title">小陈 <span class="c-tag c-tag--taxi">打车</span></h3><p class="c-muted">打车的用灰色。</p></div>
+    </div>
+    <div class="dg-demo c-row">
+      <span class="c-tag">默认</span><span class="c-tag c-tag--accent">品牌</span><span class="c-tag c-tag--ok">有效</span><span class="c-tag c-tag--warn">快用完</span><span class="c-tag c-tag--danger">已停用</span><span class="c-tag c-tag--info">提示</span>
+    </div>
+    <div class="c-alert c-alert--info">{{icon:info}}<div><p>这是初步方案，具体在哪接、几点到，大家在群里再商量。</p></div></div>
+    <div class="c-alert c-alert--ok">{{icon:check}}<div><p>已生成邀请码，邀请链接已复制。</p></div></div>
+    <div class="c-alert c-alert--warn">{{icon:alert}}<div><p>配置改过了，下面的方案可能已经过期，重新点一下「计算方案」。</p></div></div>
+    <div class="c-alert c-alert--danger">{{icon:alert}}<div><p>保存失败：网络断开了。改动还在这个页面里，联网后会自动补存。</p></div></div>
+  </section>
+
+  <section class="c-section" id="overlays">
+    <h2>弹窗、抽屉和轻提示</h2>
+    <p class="c-muted">浮层是唯一用阴影的地方。弹窗和抽屉用原生 <code>&lt;dialog&gt;</code>，自带焦点管理，按 <kbd>Esc</kbd> 关闭。</p>
+    <div class="dg-demo c-row">
+      <button class="c-btn" type="button" id="dgOpenModal">打开弹窗</button>
+      <button class="c-btn" type="button" id="dgOpenDrawer">打开抽屉</button>
+      <button class="c-btn" type="button" id="dgToast">弹出轻提示</button>
+      <button class="c-btn" type="button" id="dgToastErr">弹出错误提示</button>
+    </div>
+    <dialog class="c-modal" id="dgModal" aria-labelledby="dgModalTitle">
+      <form method="dialog">
+        <div class="c-modal__body">
+          <h2 class="c-modal__title" id="dgModalTitle">删除这个行程？</h2>
+          <p>删除后所有链接立即失效，不能恢复。请输入行程名称「小王婚礼」确认。</p>
+          <label class="c-field"><span class="c-field__label">行程名称</span><input class="c-input" autocomplete="off"></label>
+        </div>
+        <div class="c-modal__actions">
+          <button class="c-btn" value="cancel">取消</button>
+          <button class="c-btn c-btn--danger c-btn--solid" value="ok">删除行程</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="c-drawer" id="dgDrawer" aria-labelledby="dgDrawerTitle">
+      <div class="c-drawer__head"><h2 id="dgDrawerTitle">推荐车站</h2><form method="dialog"><button class="c-btn c-btn--ghost c-btn--sm" aria-label="关闭">{{icon:close}}</button></form></div>
+      <div class="c-drawer__body"><p>正在找：目的地周边、车主出发地附近、沿各车主的路线。</p><div class="c-progress" style="--value: 60%" role="progressbar" aria-valuenow="60" aria-valuemin="0" aria-valuemax="100"><i></i></div></div>
+    </dialog>
+    <div class="c-toasts" id="dgToasts" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="c-section" id="data">
+    <h2>数据展示</h2>
+    <div class="c-tabs" role="tablist" aria-label="示例分页签" id="dgTabs">
+      <button role="tab" aria-selected="true" type="button">填写</button>
+      <button role="tab" aria-selected="false" type="button">地图</button>
+      <button role="tab" aria-selected="false" type="button">方案</button>
+    </div>
+    <div class="c-table-wrap">
+      <table class="c-table">
+        <thead><tr><th>候选站</th><th class="c-num">站到目的地</th><th class="c-num">老王绕路</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>黄山北</td><td class="c-num">70 分钟</td><td class="c-num">37 分钟</td><td><span class="c-tag c-tag--ok">推荐</span></td></tr>
+          <tr class="is-off"><td>屯溪</td><td class="c-num">55 分钟</td><td class="c-num">52 分钟</td><td><span class="c-tag c-tag--danger">超过上限</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="c-hint">表格在窄屏上横向滚动，数字列右对齐并用等宽数字。上面的数字只是示意。</p>
+    <ol class="c-steps c-steps--row">
+      <li><h3>填目的地和成员</h3><p>谁开车、从哪出发</p></li>
+      <li><h3>推荐车站</h3><p>自动找顺路的站</p></li>
+      <li><h3>算方案</h3><p>每人一张时间线</p></li>
+    </ol>
+    <ol class="c-steps">
+      <li><h3>新建行程</h3><p>填名称，用邀请码或自己的高德 Key。</p></li>
+      <li><h3>发布方案页</h3><p>把链接发给同行的人。</p></li>
+    </ol>
+    <div class="dg-demo">
+      <p class="c-hint" style="margin: 0 0 6px">进度条：今天站点公共额度已用 62%</p>
+      <div class="c-progress" style="--value: 62%" role="progressbar" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100"><i></i></div>
+      <p class="c-hint" style="margin: 12px 0 6px">警告和危险色</p>
+      <div class="c-progress c-progress--warn" style="--value: 85%"><i></i></div>
+      <div class="c-progress c-progress--danger" style="--value: 100%; margin-top: 6px"><i></i></div>
+    </div>
+    <div class="c-empty">{{icon:map}}<h3>还没有方案</h3><p>先填好目的地和成员，再点「计算方案」。</p></div>
+    <div class="dg-demo" style="margin-top: var(--sp-4)" aria-hidden="true">
+      <span class="c-skeleton" style="width: 60%; margin-bottom: 10px"></span><span class="c-skeleton" style="width: 90%; margin-bottom: 10px"></span><span class="c-skeleton" style="width: 40%"></span>
+    </div>
+  </section>
+
+  <section class="c-section" id="structure">
+    <h2>页面结构</h2>
+    <p class="c-muted">本页的页头和页脚就是站点页头页脚（<code>web/partials/</code>）。编辑页和管理页用精简页头：</p>
+    <header class="c-bar" style="border: 1px solid var(--line); border-radius: var(--r-card)">
+      <a class="c-brand" href="/" aria-label="拼车出行规划，回首页"><img src="/favicon.svg" width="28" height="28" alt=""></a>
+      <p class="c-bar__title">小王婚礼 10 月 19 日</p>
+      <div class="c-bar__actions"><button class="c-btn c-btn--sm" type="button">{{icon:copy}}复制编辑链接</button><button class="c-btn c-btn--primary c-btn--sm" type="button">发布方案页</button></div>
+    </header>
+    <nav class="c-breadcrumb" aria-label="面包屑示例"><ol><li><a href="/">首页</a></li><li><a href="/guide">使用指南</a></li><li aria-current="page">怎么选高铁站</li></ol></nav>
+  </section>
+
+  <section class="c-section" id="icons">
+    <h2>图标</h2>
+    <p class="c-muted">24 网格，1.75 描边，使用 <code>currentColor</code>。不用 emoji 当图标。</p>
+    <div class="dg-icons">
+      <div>{{icon:car}}car</div><div>{{icon:train}}train</div><div>{{icon:taxi}}taxi</div><div>{{icon:pin}}pin</div>
+      <div>{{icon:station}}station</div><div>{{icon:copy}}copy</div><div>{{icon:external}}external</div><div>{{icon:print}}print</div>
+      <div>{{icon:menu}}menu</div><div>{{icon:close}}close</div><div>{{icon:check}}check</div><div>{{icon:alert}}alert</div>
+      <div>{{icon:info}}info</div><div>{{icon:plus}}plus</div><div>{{icon:trash}}trash</div><div>{{icon:map}}map</div>
+      <div>{{icon:edit}}edit</div><div>{{icon:arrow-right}}arrow-right</div><div>{{icon:chevron-down}}chevron-down</div>
+      <div>{{icon:heart}}heart</div><div>{{icon:users}}users</div><div>{{icon:briefcase}}briefcase</div><div>{{icon:github}}github</div>
+    </div>
+  </section>
+</div>
+</main>
+<!-- include:footer -->
+<script>
+// 只为样式指南里的演示：色块读出实际值、弹窗、抽屉、轻提示、分页签
+const $ = (s) => document.querySelector(s);
+const rootStyle = getComputedStyle(document.documentElement);
+for (const el of document.querySelectorAll('#swatches .c-swatch')) {
+  const name = /--[\w-]+/.exec(el.textContent)[0];
+  el.querySelector('span').insertAdjacentHTML('beforeend', `<br><code>${rootStyle.getPropertyValue(name).trim()}</code>`);
+}
+$('#dgOpenModal').addEventListener('click', () => $('#dgModal').showModal());
+$('#dgOpenDrawer').addEventListener('click', () => $('#dgDrawer').showModal());
+const toast = (text, kind) => {
+  const el = document.createElement('div');
+  el.className = `c-toast c-toast--${kind}`;
+  el.textContent = text;
+  $('#dgToasts').append(el);
+  setTimeout(() => el.remove(), 3500);
+};
+$('#dgToast').addEventListener('click', () => toast('已复制编辑链接', 'ok'));
+$('#dgToastErr').addEventListener('click', () => toast('保存失败：网络断开了，联网后会自动补存。', 'danger'));
+$('#dgTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[role=tab]');
+  if (!tab) return;
+  for (const t of $('#dgTabs').querySelectorAll('[role=tab]')) t.setAttribute('aria-selected', String(t === tab));
+});
+</script>
+</body>
+</html>

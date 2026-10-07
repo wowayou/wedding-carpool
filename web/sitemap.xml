@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- 这是模板：构建时 web/site.mjs 按 web/site-data.mjs 里「可收录」的页面生成 <url> 列表，lastmod 取构建日期（北京时间）。要加页面改 site-data.mjs，不要改这里。 -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://carpool.eigentime.org/</loc><lastmod>2026-10-07</lastmod></url>
-  <url><loc>https://carpool.eigentime.org/demo</loc><lastmod>2026-10-07</lastmod></url>
-  <url><loc>https://carpool.eigentime.org/privacy</loc><lastmod>2026-10-07</lastmod></url>
+<!-- urls -->
 </urlset>

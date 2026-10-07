@@ -2,34 +2,35 @@
 
 > 多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游）时，先定个大方向：算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。免费、无广告、开源（AGPL-3.0）。
 
+定位是「初步方案」：先心里有个底，具体在哪接、几点到，同行的人再沟通。路线和时间来自高德地图，只供参考。
+
 ## 这个工具做什么
 
 - 输入目的地、每位成员的出发地、谁开车（几个空座）、不开车的人的高铁车次。
 - 自动推荐顺路的高铁站，计算每位车主的接人路线、绕路时间和出发时间，也可以规划返程。
 - 生成一页独立的出行方案：每人一张时间线，地图上标出路线和车站，可以打印或存为 PDF。
-- 定位是「初步方案」：先心里有个底，具体在哪接、几点到，同行的人再沟通。路线和时间来自高德地图，只供参考。
+
+## 使用和原理
+
+- [使用指南](https://carpool.eigentime.org/guide)：从新建行程到发布方案页的八个步骤。
+- [怎么选接人的高铁站](https://carpool.eigentime.org/guide/station)：车主绕路、乘客用时、出站缓冲，以及为什么最近的站不一定最好。
+- [示例方案页](https://carpool.eigentime.org/demo)：虚构的行程，看方案页长什么样。
 
 ## 适合哪些场合
 
-- 婚礼：亲友从各地来，安排谁顺路接谁。
-- 同学或家庭聚会、团建和公司活动。
-- 自驾游拼车、去看演唱会和比赛、会议和活动的接站。
+- [婚礼亲友拼车](https://carpool.eigentime.org/for/wedding)
+- [同学或家庭聚会](https://carpool.eigentime.org/for/reunion)
+- [团建和公司活动](https://carpool.eigentime.org/for/team)
+- 其他：自驾游拼车、看演唱会和比赛、会议和活动的接站。
 
-## 怎么用
+## 费用、隐私和项目
 
-1. 打开首页，新建行程（需要站长发的邀请码，或者填自己的高德 Key）。
-2. 填目的地和成员，开车的填空座。
-3. 点「推荐车站」，给不开车的人填 12306 查到的车次。
-4. 点「计算方案」，满意后「发布方案页」，把链接发给同行的人。
-
-## 费用和隐私
-
-- 不用注册，没有广告，不做付费功能；行程在出行日期过后 60 天和连续 180 天没人编辑中较晚的那天自动删除。
-- 详见 [费用与隐私](https://carpool.eigentime.org/privacy)。
-
-## 链接
-
-- [首页](https://carpool.eigentime.org/)
-- [示例方案页（虚构的行程）](https://carpool.eigentime.org/demo)
+- [费用与隐私](https://carpool.eigentime.org/privacy)：存了什么、存在哪、谁能看、保留多久、哪里可能花钱。行程在出行日期过后 60 天和连续 180 天没人编辑中较晚的那天自动删除。
+- [关于](https://carpool.eigentime.org/about)：是什么、谁做的、开源和授权、技术原理。
+- [更新记录](https://carpool.eigentime.org/changelog)
 - [源码（AGPL-3.0）](https://github.com/wowayou/wedding-carpool)
 - [作者主页](https://eigentime.org/)
+
+## 给 AI 问答的全文
+
+- [llms-full.txt](https://carpool.eigentime.org/llms-full.txt)：使用指南、选站说明和常见问题的全文纯文本。

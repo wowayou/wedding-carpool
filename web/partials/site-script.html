@@ -1,0 +1,23 @@
+<script>
+// 站点页头的交互：手机菜单和「场景」下拉。没有脚本时导航直接展开，照样能用。
+document.documentElement.classList.add('js');
+document.addEventListener('DOMContentLoaded', () => {
+  const header = document.querySelector('.c-site-header');
+  const toggle = header && header.querySelector('.c-nav-toggle');
+  const setMenu = (open) => {
+    header.classList.toggle('is-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+  };
+  if (toggle) toggle.addEventListener('click', () => setMenu(!header.classList.contains('is-open')));
+  const groups = [...document.querySelectorAll('.c-nav__group')];
+  const setGroup = (g, open) => { g.classList.toggle('is-open', open); g.querySelector('button').setAttribute('aria-expanded', String(open)); };
+  for (const g of groups) g.querySelector('button').addEventListener('click', () => setGroup(g, !g.classList.contains('is-open')));
+  document.addEventListener('click', (e) => { for (const g of groups) if (!g.contains(e.target)) setGroup(g, false); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    for (const g of groups) setGroup(g, false);
+    if (toggle && header.classList.contains('is-open')) { setMenu(false); toggle.focus(); }
+  });
+});
+</script>
