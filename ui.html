@@ -182,6 +182,15 @@
     <button class="btn primary" style="width:100%;margin-top:10px">进入</button>
   </form>
 </div>
+<div class="overlay" id="codeBox" hidden>
+  <form id="codeForm">
+    <h2>输入编辑口令</h2>
+    <p id="codeMsg"></p>
+    <input id="codeInput" maxlength="20" autocomplete="off" placeholder="编辑口令" required>
+    <div class="muted" id="codeErr" style="color:var(--danger);min-height:1.4em;font-size:13px"></div>
+    <button class="btn primary" style="width:100%;margin-top:6px">进入</button>
+  </form>
+</div>
 <div class="overlay" id="denied" hidden>
   <div class="box"><h2>打不开这个行程</h2><p id="deniedText"></p><a class="btn primary" href="/">回首页</a></div>
 </div>
@@ -239,9 +248,50 @@ async function api(path, body) {
   let res;
   try { res = await fetch(path, opts); } catch { throw new Error('网络连不上，稍后再试'); }
   const data = await res.json().catch(() => ({ error: res.statusText }));
-  if (res.status === 401 && mode === 'online') deny(data.error || '编辑链接无效或已失效');
+  if (res.status === 401 && mode === 'online') {
+    if (!/^EDIT_CODE_/.test(data.info)) deny(data.error || '编辑链接无效或已失效');
+    else if (!path.endsWith('/session')) { await askCode(); return api(path, body); } // 口令变了：输对后把这次请求再发一遍
+  }
   if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
   return data;
+}
+
+// ---------- 编辑口令：设了口令的行程，新设备（或口令被换后）要输入口令才能换到会话 ----------
+const editKey = () => new URLSearchParams(location.hash.slice(1)).get('k') || store.get('carpool_trips', []).find((t) => t.id === tripId)?.key;
+let codePrompt = null;
+function askCode(message = '这个行程设了编辑口令，问一下发给你链接的人。') {
+  codePrompt ||= new Promise((resolve) => {
+    $('#codeMsg').textContent = message;
+    $('#codeErr').textContent = '';
+    $('#codeInput').value = '';
+    $('#codeBox').hidden = false;
+    $('#codeInput').focus();
+    $('#codeForm').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api(`${API}/session`, { key: editKey(), code: $('#codeInput').value });
+        $('#codeBox').hidden = true;
+        codePrompt = null;
+        resolve();
+      } catch (err) {
+        $('#codeErr').textContent = err.data?.info === 'EDIT_CODE_WRONG' ? '口令不对' : err.data?.info === 'EDIT_CODE_REQUIRED' ? '请输入口令' : err.message;
+        $('#codeInput').select();
+      }
+    };
+  });
+  return codePrompt;
+}
+
+// 实时连接被请出（口令被设置或更换）：口令被清除的话直接就能回来，否则输口令
+async function reauthAfterCodeChange() {
+  try {
+    await api(`${API}/session`, { key: editKey() });
+  } catch (err) {
+    if (/^EDIT_CODE_/.test(err.data?.info)) await askCode('发起人设置了新的编辑口令，请输入后继续。');
+    else if (err.status !== 401) { setTimeout(reauthAfterCodeChange, 3000); return; }
+    else return;
+  }
+  connectSync();
 }
 
 function toast(msg, ms = 2600) {
@@ -805,6 +855,7 @@ function connectSync() {
     renderPeers();
     markPeers();
     if (e.code === 4001) { dirty = false; deny('编辑链接已经被重置，旧链接失效了'); return; }
+    if (e.code === 4003) { setStatus(); reauthAfterCodeChange(); return; }
     setStatus();
     setTimeout(connectSync, retryDelay);
     retryDelay = Math.min(retryDelay * 2, 15000);
@@ -1238,6 +1289,8 @@ function openMenu() {
         : '<span class="muted">还没发布：算出方案后点「发布方案页」</span>'}</span>
       <span>访问口令</span><span><span class="row"><input id="shareCode" value="${esc(share.code)}" maxlength="20" placeholder="不设"><button class="ghost" id="shareCodeBtn">保存</button></span>
         <span class="muted">设了口令，看方案页要先输入；方案页本来就不含精确出发地和家庭位置</span></span>
+      <span>编辑口令</span><span><span class="row"><input id="editCode" maxlength="20" autocomplete="off" placeholder="${trip.editCode ? '已设置；输入新口令可更换' : '不设'}"><button class="ghost" id="editCodeBtn">${trip.editCode ? '更换' : '设置'}</button></span>
+        ${trip.editCode ? '<button class="link" id="editCodeClear">清除编辑口令</button> ' : ''}<span class="muted">4 到 20 个字符。设了以后，新设备打开编辑链接要先输口令，正在编辑的其他人会被请出、重新输入。和方案页的访问口令是两回事</span></span>
       <span>保留到</span><span class="muted">${expires ? fmtDate(trip.expiresAt) : '—'}：出行日期过后 60 天、或连续 180 天没人编辑，自动删除（取较晚的）</span>
       <span>高德额度</span><span class="muted">${trip.mode === 'own' ? '用你自己的高德 Key' : '用站点的公共额度'}，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用${trip.mode === 'own' ? '' : '<br><button class="link" id="ownKeyBtn">改用自己的高德 Key</button>'}</span>
     </div>
@@ -1271,6 +1324,27 @@ function openMenu() {
       openMenu();
     };
   });
+  const setEditCode = async (code, done) => {
+    try {
+      await api(`${API}/edit-code`, { code, client_id: me.clientId });
+      trip.editCode = Boolean(code);
+      toast(done, 4000);
+      openMenu();
+    } catch (e) { toast(e.message); }
+  };
+  if ($('#editCodeBtn')) {
+    $('#editCodeBtn').onclick = () => {
+      const code = $('#editCode').value.trim();
+      if (code.length < 4 || code.length > 20) { toast('编辑口令要 4 到 20 个字符'); return; }
+      if (!confirm('设置编辑口令？正在编辑的其他人会被请出，要输入口令才能回来；以后新设备打开编辑链接也要输口令。记得把口令告诉一起编辑的人。')) return;
+      setEditCode(code, '已设置编辑口令，告诉一起编辑的人');
+    };
+  }
+  if ($('#editCodeClear')) {
+    $('#editCodeClear').onclick = () => {
+      if (confirm('清除编辑口令？之后只凭编辑链接就能打开。')) setEditCode('', '已清除编辑口令');
+    };
+  }
   if ($('#rotateBtn')) {
     $('#rotateBtn').onclick = async () => {
       if (!confirm('重置编辑链接？所有人手里的旧链接立即失效，正在编辑的其他人会被请出。新链接只发给需要编辑的人。')) return;
@@ -1376,7 +1450,7 @@ async function loadConfig(keepFocus) {
   cfg = data.config;
   synced = clone(cfg);
   version = data.version ?? null;
-  if (mode === 'online') Object.assign(trip, { name: data.name, mode: data.mode, share: data.share, usage: data.usage, expiresAt: data.expiresAt });
+  if (mode === 'online') Object.assign(trip, { name: data.name, mode: data.mode, share: data.share, usage: data.usage, expiresAt: data.expiresAt, editCode: data.editCode });
   else trip.file = data.file;
   renderTitle();
   renderExpiry();
@@ -1514,8 +1588,13 @@ window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); 
       tripId = location.pathname.match(/^\/t\/([a-z2-9]{10})/)?.[1];
       if (!tripId) { location.href = '/'; return; }
       API = `/api/t/${tripId}`;
-      const key = new URLSearchParams(location.hash.slice(1)).get('k') || store.get('carpool_trips', []).find((t) => t.id === tripId)?.key;
-      if (key) await api(`${API}/session`, { key });
+      const key = editKey();
+      if (key) {
+        await api(`${API}/session`, { key }).catch(async (e) => {
+          if (!/^EDIT_CODE_/.test(e.data?.info)) throw e;
+          await askCode(); // 设了编辑口令：输对才继续加载
+        });
+      }
       await loadConfig();
       rememberTrip(key);
       if (!me.name) await askName();
