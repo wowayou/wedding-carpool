@@ -373,7 +373,7 @@ const SHARE_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline' https://cdnjs.cloudflare.com",
   "style-src 'unsafe-inline' https://cdnjs.cloudflare.com",
-  'img-src data: https://cdnjs.cloudflare.com https://*.is.autonavi.com',
+  'img-src data: https://cdnjs.cloudflare.com https://*.is.autonavi.com https://carpool.eigentime.org', // 最后一个是站点图标
   "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "frame-ancestors 'none'",
 ].join('; ');
 
@@ -1093,25 +1093,60 @@ export class Usage {
 
 // ---------- 入口 ----------
 
+// Worker 生成的响应（JSON、方案页、口令页、编辑页、404）也要带安全头；静态文件的同一组头在 web/_headers。
+// 两处要保持一致。X-Frame-Options 和 frame-ancestors 只能放在响应头里，meta 标签里无效
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=15552000',
+  'permissions-policy': 'geolocation=(), camera=(), microphone=()',
+};
+
+function withSecurityHeaders(res, extra = {}) {
+  if (res.status === 101 || res.webSocket) return res; // WebSocket 升级响应不能改
+  const out = new Response(res.body, res); // 复制一份，ASSETS 等来源的响应头是只读的
+  // 方案页自带的 referrer-policy 等更严格的设置保留，其余补齐
+  for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...extra })) if (!out.headers.has(k)) out.headers.set(k, v);
+  return out;
+}
+
+// 改动状态的请求只接受本站页面发起的：带了 Origin 但不是本站就拒绝；不带的（curl、部分旧浏览器的同源 POST）放行
+function crossSiteMutation(request, url) {
+  const origin = request.headers.get('origin');
+  if (!origin || origin === url.origin) return false;
+  if (!['POST', 'DELETE', 'PUT', 'PATCH'].includes(request.method)) return false;
+  return url.pathname.startsWith('/api/') || /^\/p\/[a-z2-9]{10,12}$/.test(url.pathname);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const { pathname } = url;
-    try {
-      if (pathname === '/api/env') return json({ mode: 'online', ownerKey: Boolean(env.ACCESS_CODE && env.AMAP_KEY) });
-      if (pathname === '/api/status' && request.method === 'GET') return await publicStatus(env, url);
-      if (pathname === '/api/trips' && request.method === 'POST') return await createTrip(request, env);
-      if (pathname.startsWith('/api/admin/')) return await adminApi(request, env, url);
-      const trip = pathname.match(/^\/api\/t\/([a-z2-9]+)(\/.*)$/);
-      if (trip) return ID_RE.test(trip[1]) ? await tripApi(request, env, url, trip[1], trip[2]) : json({ error: '行程不存在' }, 404);
-      if (pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);
-      const page = pathname.match(/^\/p\/([a-z2-9]{10,12})$/);
-      // 方案页：链接本身是访问凭证，可另设口令。10 位是方案页 id，12 位是 v1 单独发布的旧链接
-      if (page) return await sharePage(request, env, url, page[1]);
-      if (/^\/t\/[a-z2-9]{10}\/?$/.test(pathname)) return env.ASSETS.fetch(new Request(new URL('/edit', url)));
-      return env.ASSETS.fetch(request);
-    } catch (err) {
-      return json({ error: err.message || String(err) }, err.status || 500);
-    }
+    const isEditPage = /^\/t\/[a-z2-9]{10}\/?$/.test(url.pathname);
+    return withSecurityHeaders(await route(request, env, url), isEditPage ? { 'content-security-policy': "frame-ancestors 'none'" } : {});
   },
 };
+
+async function route(request, env, url) {
+  const { pathname } = url;
+  try {
+    if (crossSiteMutation(request, url)) return json({ error: '只接受本站发起的请求' }, 403);
+    if (pathname === '/api/env') return json({ mode: 'online', ownerKey: Boolean(env.ACCESS_CODE && env.AMAP_KEY) });
+    if (pathname === '/api/status' && request.method === 'GET') return await publicStatus(env, url);
+    if (pathname === '/api/trips' && request.method === 'POST') return await createTrip(request, env);
+    if (pathname.startsWith('/api/admin/')) return await adminApi(request, env, url);
+    const trip = pathname.match(/^\/api\/t\/([a-z2-9]+)(\/.*)$/);
+    if (trip) return ID_RE.test(trip[1]) ? await tripApi(request, env, url, trip[1], trip[2]) : json({ error: '行程不存在' }, 404);
+    if (pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);
+    const page = pathname.match(/^\/p\/([a-z2-9]{10,12})$/);
+    // 方案页：链接本身是访问凭证，可另设口令。10 位是方案页 id，12 位是 v1 单独发布的旧链接
+    if (page) return await sharePage(request, env, url, page[1]);
+    if (/^\/t\/[a-z2-9]{10}\/?$/.test(pathname)) return env.ASSETS.fetch(new Request(new URL('/edit', url)));
+    return env.ASSETS.fetch(request);
+  } catch (err) {
+    // 4xx 是我们自己抛的、写给用户看的提示；其余不把内部错误原文交给客户端
+    if (err.status && err.status < 500) return json({ error: err.message }, err.status);
+    console.error('未处理的错误', err);
+    return json({ error: '服务器出错了，请稍后再试' }, 500);
+  }
+}

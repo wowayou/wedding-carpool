@@ -69,10 +69,10 @@ beforeEach(() => {
   };
 });
 
-const call = (path, { method = 'GET', body, cookie, ip = '1.1.1.1', form } = {}) => worker.fetch(new Request(`https://carpool.test${path}`, {
+const call = (path, { method = 'GET', body, cookie, ip = '1.1.1.1', form, origin } = {}) => worker.fetch(new Request(`https://carpool.test${path}`, {
   method,
   body: form ? new URLSearchParams(form) : body && JSON.stringify(body),
-  headers: { 'cf-connecting-ip': ip, ...(cookie ? { cookie } : {}), ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
+  headers: { 'cf-connecting-ip': ip, ...(origin ? { origin } : {}), ...(cookie ? { cookie } : {}), ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
 }), env);
 
 // 站长口令不能当邀请码：用公共额度的测试行程都用一个管理页发的邀请码来建
@@ -857,4 +857,82 @@ test('额度类报错文案都含「额度」，编辑页靠它弹出改用自�
   env.OWNER_MONTHLY_LBS_BUDGET = '1';
   await batchOf(t, lbs(1, 'a'));
   assert.match((await batchOf(t, lbs(1, 'b'))).results[0].error, /额度/);
+});
+
+const SECURITY = {
+  'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=15552000', 'permissions-policy': 'geolocation=(), camera=(), microphone=()',
+};
+const assertSecure = (res, extra = {}) => {
+  for (const [k, v] of Object.entries({ ...SECURITY, ...extra })) assert.equal(res.headers.get(k), v, k);
+};
+
+test('Worker 生成的响应都带安全头', async () => {
+  assertSecure(await call('/api/env'));
+  assertSecure(await call('/api/nothing'));
+  assertSecure(await call('/p/nopenopeno')); // 404 文本
+  const t = await newTrip();
+  assertSecure(await call(`${t.base}/config`, { cookie: t.cookie }));
+  const edit = await call(`/t/${t.id}`); // 来自 ASSETS 的响应头只读，也要能补上
+  assertSecure(edit, { 'content-security-policy': "frame-ancestors 'none'" });
+  assertSecure(await call('/privacy'));
+  assert.equal((await call('/privacy')).headers.get('content-security-policy'), null); // 静态页的 CSP 在 meta 里
+  // 方案页：保留自己的沙箱 CSP 和更严的 referrer-policy，其余补齐
+  const share = (await publish(t, '<!doctype html><p>hi</p>')).share;
+  const page = await call(share.url);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy'), /^sandbox /);
+  assert.equal(page.headers.get('x-frame-options'), 'DENY');
+  assert.equal(page.headers.get('strict-transport-security'), 'max-age=15552000');
+  // 口令页
+  await shareAction(t, { action: 'code', code: 'abc' });
+  assertSecure(await call(share.url));
+});
+
+test('SHARE_CSP 允许沙箱里的方案页加载站点图标', async () => {
+  const t = await newTrip();
+  const share = (await publish(t, '<!doctype html><p>hi</p>')).share;
+  assert.match((await call(share.url)).headers.get('content-security-policy'), /img-src [^;]*https:\/\/carpool\.eigentime\.org/);
+});
+
+test('改动状态的请求：跨站 Origin 被拒，同源和不带 Origin 的放行', async () => {
+  const evil = 'https://evil.example';
+  const same = 'https://carpool.test';
+  const r = await call('/api/trips', { method: 'POST', body: {}, origin: evil });
+  assert.equal(r.status, 403);
+  assert.equal((await r.json()).error, '只接受本站发起的请求');
+  assertSecure(r);
+  assert.equal((await call('/api/trips', { method: 'POST', body: {}, origin: same })).status, 400); // 过了校验，被后面的参数检查拒绝
+  assert.equal((await call('/api/trips', { method: 'POST', body: {} })).status, 400);
+  assert.equal((await call('/api/admin/login', { method: 'POST', body: { code: 'x' }, origin: evil })).status, 403);
+  const t = await newTrip();
+  assert.equal((await call(`${t.base}/config`, { method: 'POST', cookie: t.cookie, body: { name: 'x' }, origin: evil })).status, 403);
+  assert.equal((await call(`${t.base}/share`, { method: 'DELETE', cookie: t.cookie, origin: evil })).status, 403);
+  // 口令表单
+  const url = (await publish(t, '<!doctype html><p>hi</p>')).share.url;
+  await shareAction(t, { action: 'code', code: 'abc' });
+  assert.equal((await call(url, { method: 'POST', form: { code: 'abc' }, origin: evil })).status, 403);
+  assert.equal((await call(url, { method: 'POST', form: { code: 'abc' }, origin: same })).status, 303);
+  assert.equal((await call(url, { method: 'POST', form: { code: 'abc' } })).status, 303);
+  // 读请求不受影响
+  assert.equal((await call('/api/env', { origin: evil })).status, 200);
+});
+
+test('500 错误不泄露内部信息，4xx 的提示原样返回', async () => {
+  const logged = [];
+  const orig = console.error;
+  console.error = (...a) => logged.push(a);
+  try {
+    env.DATA.getWithMetadata = async () => { throw new Error('KV 内部错误 secret-detail'); };
+    const r = await call('/p/abcdefghij');
+    assert.equal(r.status, 500);
+    const text = await r.text();
+    assert.doesNotMatch(text, /secret-detail/);
+    assert.match(text, /服务器出错了，请稍后再试/);
+    assertSecure(r);
+    assert.ok(logged.length >= 1 && String(logged[0][1]).includes('secret-detail'));
+  } finally { console.error = orig; }
+  const bad = await call('/api/trips', { method: 'POST', body: { amapKey: 'short' } });
+  assert.equal(bad.status, 400);
+  assert.notEqual((await bad.json()).error, '服务器出错了，请稍后再试');
 });
