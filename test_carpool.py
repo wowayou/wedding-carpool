@@ -5,6 +5,7 @@
     python3 -m unittest -v test_carpool.py
 """
 
+import datetime as dt
 import io
 import json
 import tempfile
@@ -359,6 +360,14 @@ class TrainScheduleTest(unittest.TestCase):
         self.assertNotIn("116.000000,30.000000", html)  # 导航链接也不写出发地：起点留空，手机上用当前位置
         self.assertIn("老王 出发", html)
 
+    def test_share_page_expiry_and_print(self):
+        state = service.compute(self.cfg, FakeAmap())
+        html = share.render_share(state, 0, expires=dt.date(2027, 4, 5))
+        self.assertIn("这一页会在 2027-04-05 前后自动删除", html)
+        self.assertNotIn("自动删除", share.render_share(state, 0))  # 本地版没有保留期，不写这行
+        for text in ("window.print()", "@media print", "break-inside: avoid", "favicon.svg"):
+            self.assertIn(text, html)
+
     def test_share_page_hides_home_pickup(self):
         cfg = config([person("老王", WANG, car_seats=3), person("小李", "116.5,30.0"), person("小陈", "114.0,34.0")])
         state = service.compute(cfg, FakeAmap())
@@ -386,6 +395,9 @@ class BrowserBridgeTest(unittest.TestCase):
         self.assertIsNotNone(out["plans"][0]["routes"][0]["direct_path"])  # 直达路线用来对比绕路
         self.assertTrue(self.call("share", plan=0)["html"].startswith("<!doctype html>"))
         self.assertIn("没有方案", self.call("share", plan=7)["error"])
+        ms = int(dt.datetime(2027, 4, 5, 23, 30, tzinfo=dt.timezone(dt.timedelta(hours=8))).timestamp() * 1000)  # 北京时间深夜，不能按 UTC 取日期
+        self.assertIn("这一页会在 2027-04-05 前后自动删除", self.call("share", plan=0, expires=ms)["html"])
+        self.assertNotIn("自动删除", self.call("share", plan=0)["html"])
 
     def test_errors_become_messages(self):
         self.assertIn("people", self.call("plan", config=config([]))["error"])

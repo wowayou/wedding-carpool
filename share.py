@@ -125,7 +125,9 @@ def _return_section(state: dict, index: int) -> str:
     return f'<h2>返程 · {depart} 散场后出发</h2>{"".join(cards)}'
 
 
-def render_share(state: dict, index: int, back_index: int = 0, generated: dt.datetime | None = None) -> str:
+def render_share(state: dict, index: int, back_index: int = 0, generated: dt.datetime | None = None,
+                 expires: dt.date | None = None) -> str:
+    """expires：在线版里这个行程的自动删除日期，写进页脚；本地版没有保留期，不传。"""
     trip, pts, T = state["trip"], state["pts"], state["T"]
     plan: carpool.Plan = state["plans"][index]
     people = {p.name: p for p in trip.people}
@@ -225,6 +227,7 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
     summary = (f"{plan.carried} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
                + (f"，{taxi_people} 人打车" if plan.taxi else "") + ("，含返程" if trip.back and trip.back_plans else ""))
     stamp = (generated or dt.datetime.now()).strftime("%m-%d %H:%M")
+    expire_note = f"<br>这一页会在 {expires.isoformat()} 前后自动删除" if expires else ""
     return TEMPLATE.format(
         title=escape(f"{venue.name} 出行方案"),
         eyebrow=escape(f"{_date_label(trip.travel_date)} 出发 · 方案 {index + 1}"),
@@ -237,6 +240,7 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
         back=_return_section(state, back_index),
         buffer=round(trip.exit_buffer),
         stamp=escape(stamp),
+        expire_note=expire_note,
         data=json.dumps(map_data, ensure_ascii=False).replace("</", "<\\/"),
     )
 
@@ -250,6 +254,8 @@ TEMPLATE = """<!doctype html>
 <meta name="description" content="{description}">
 <meta property="og:title" content="{title}">
 <meta property="og:description" content="{description}">
+<link rel="icon" type="image/svg+xml" href="https://carpool.eigentime.org/favicon.svg">
+<link rel="apple-touch-icon" href="https://carpool.eigentime.org/apple-touch-icon.png">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {{ --bg: #faf7f2; --card: #fff; --ink: #24201c; --muted: #7a7168; --line: #ebe4da; --accent: #b4442c; --drive: #15803d; --ride: #d97706; --taxi: #6b7280; }}
@@ -283,6 +289,27 @@ TEMPLATE = """<!doctype html>
   footer {{ color: var(--muted); font-size: 12px; margin-top: 24px; line-height: 1.8; }}
   footer a {{ color: var(--muted); }}
   .leaflet-tooltip.lbl {{ font-size: 12px; padding: 1px 6px; }}
+  button.btn {{ font: inherit; font-size: 14px; cursor: pointer; }}
+  /* 打印 / 存为 PDF：去掉按钮，地图定高，卡片不跨页；颜色之外用线型和文字区分，黑白打印也能看 */
+  @media print {{
+    @page {{ size: A4; margin: 14mm 12mm; }}
+    html {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    body {{ background: #fff; font-size: 13px; line-height: 1.55; }}
+    .wrap {{ max-width: none; padding: 0; }}
+    header {{ padding: 0 0 8px; }}
+    .navs, .btn, .line a, .note a {{ display: none !important; }}
+    #map {{ height: 330px; min-height: 0; break-inside: avoid; border-color: #888; }}
+    .leaflet-control-container {{ display: none; }}
+    h2 {{ color: #000; break-after: avoid; margin: 16px 0 8px; }}
+    .card {{ break-inside: avoid; border-color: #888; border-left-width: 6px; border-left-color: #000; }}
+    .card.rider {{ border-left-style: double; border-left-width: 8px; border-left-color: #000; }}
+    .card.taxi {{ border-left-style: dotted; border-left-color: #000; }}
+    .tag {{ border: 1px solid #888; background: #fff; color: #000; }}
+    .sum, .draft, .meta, .legend, footer, footer a {{ color: #222; }}
+    .note {{ background: #fff; border: 1px solid #aaa; color: #000; }}
+    .eyebrow {{ color: #000; }}
+    .line li {{ border-top-color: #aaa; }}
+  }}
 </style>
 </head>
 <body>
@@ -292,7 +319,10 @@ TEMPLATE = """<!doctype html>
     <h1>去 {venue}</h1>
     <p class="sum">{summary}</p>
     <p class="draft">这是先定大方向的初步方案：心里有个底，具体在哪接、几点到，大家在群里再商量。</p>
-    <a class="btn ghost" href="{venue_url}" target="_blank" rel="noopener">在高德里看目的地</a>
+    <div class="navs">
+      <a class="btn ghost" href="{venue_url}" target="_blank" rel="noopener">在高德里看目的地</a>
+      <button class="btn ghost" id="printBtn" type="button">打印 / 存为 PDF</button>
+    </div>
   </header>
   <div id="map"></div>
   <p class="legend">彩色线：接人后的实际路线；灰色虚线：不接人时的直达路线，两条线分开的那段就是绕的路。</p>
@@ -307,11 +337,12 @@ TEMPLATE = """<!doctype html>
     <li>高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。</li>
     <li>车次、余票以 12306 为准，提前买票。</li>
   </ul>
-  <footer>生成于 {stamp} · 链接会打开高德地图<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a></footer>
+  <footer>生成于 {stamp} · 链接会打开高德地图{expire_note}<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a></footer>
 </div>
 <script id="data" type="application/json">{data}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
+document.getElementById('printBtn').addEventListener('click', function () {{ window.print(); }});
 (function () {{
   if (!window.L) {{ document.getElementById('map').style.display = 'none'; return; }}
   var data = JSON.parse(document.getElementById('data').textContent);

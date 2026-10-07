@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sys
 import time
@@ -123,7 +124,9 @@ def handle(method: str, args_json: str) -> str:
             index = int(args.get("plan", 0))
             if not 0 <= index < len(_last["plans"]):
                 raise SystemExit(f"没有方案 {index + 1}")
-            result = {"html": share.render_share(_last, index, int(args.get("back_plan", 0)))}
+            expires = args.get("expires")  # 行程的自动删除时间（毫秒时间戳），按北京时间取日期
+            expires_date = dt.datetime.fromtimestamp(expires / 1000, dt.timezone(dt.timedelta(hours=8))).date() if expires else None
+            result = {"html": share.render_share(_last, index, int(args.get("back_plan", 0)), expires=expires_date)}
         else:
             raise SystemExit(f"未知操作：{method}")
     except SystemExit as e:
