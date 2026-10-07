@@ -97,14 +97,14 @@ python3 carpool.py trip.toml   # 只用命令行：报告打印到终端，并�
 ## 自己部署（Cloudflare Workers）
 
 ```
-浏览器：界面 + Pyodide（浏览器里运行的 Python，跑 carpool.py 等，计算都在这里）
+浏览器：界面 + Pyodide（浏览器里运行的 Python，跑 carpool.py 等，计算都在这里；Pyodide、地图组件随站点自己托管在 /vendor/）
    │  编辑链接换来的 Cookie（只对该行程的路径有效）；WebSocket 实时同步
    ▼
 Worker（web/worker.js，用 placement.region 固定在香港附近运行，离高德近）
    ├─ 新建行程：校验邀请码或自带 Key，限制新建频率
    ├─ ConfigRoom（Durable Object，每个行程一个）：配置、版本号、历史、当天用量、在线名单、
    │                                         方案页设置、到期删除的定时任务
-   ├─ Usage（Durable Object）：全站新建次数、站长 Key 当天用量、邀请码
+   ├─ Usage（Durable Object）：全站新建次数、站长 Key 当天用量、邀请码、按天汇总的访问统计
    ├─ 高德代理：只放行用到的接口；先查 Cloudflare 节点缓存，再按每秒 3 个批量请求
    ├─ 管理页接口：/api/admin/*，站长口令登录，之后凭会话令牌
    └─ KV：方案页（带访问口令和过期时间）、按 Key 和接口类别记的配额标记
@@ -123,14 +123,29 @@ npx wrangler secret put ACCESS_CODE        # 站长口令：只用来登录管�
 npm run deploy                             # 构建 dist/ 并部署
 ```
 
+构建时（`web/vendor.mjs`）会下载编辑页用的 Pyodide、Leaflet、marked（约 13 MB），逐个校验 sha256，缓存在 `.cache/vendor/`，拷到 `dist/vendor/`；第一次构建要能访问 jsDelivr 和 cdnjs，下载失败或校验不对会让构建报错，不会回退到 CDN。网络要走代理的话，设好 `HTTPS_PROXY`（下载用 curl）。许可证文件随依赖一起放在 `dist/vendor/` 下。
+
 可选设置：
 
 - 在 `wrangler.jsonc` 的 `vars` 里设 `TRIP_DAILY_LIMIT`、`OWN_TRIP_DAILY_LIMIT`、`OWNER_DAILY_LIMIT`，调整每日上限；设 `OWNER_MONTHLY_LBS_BUDGET`、`OWNER_MONTHLY_SEARCH_BUDGET`，调整站点公共额度的月预算（默认 140000 和 4500）；
 - 在 `routes` 里绑定自己的域名。`workers.dev` 域名在国内不翻墙常常打不开。
+- `wrangler.jsonc` 的 `assets.run_worker_first` 里的页面路径（`/`、`/demo`、`/guide`、`/for/*` 等）让 Worker 先处理再转给静态文件，用来统计页面访问；`not_found_handling: "404-page"` 让不存在的地址返回 `404.html`。这两处和 `web/worker.js` 配套，不要删。
 - 不设 `AMAP_KEY` 和 `ACCESS_CODE` 的话，就只能自带 Key 新建行程。
 - 高德 Key 的使用条款和配额以[高德开放平台](https://lbs.amap.com/)为准。按 2025 年 5 月起的定价，个人认证开发者「非商业目的」的免费月配额是：路线、测距、地理编码等基础服务 15 万次，关键字、周边等搜索服务 5000 次，只有认证后的第一年；用于商业目的要另外购买许可。部署前请自己确认你的用途符合条款。
 
 本地调试：在 `.dev.vars` 里写上 `AMAP_KEY=...` 和 `ACCESS_CODE=...`，然后运行 `npm run dev`。12306 站名表 `web/stations12306.json` 由 `web/gen_stations12306.py` 生成，需要时重新生成。
+
+## 自部署升级
+
+版本发布在 GitHub Releases，更新内容看仓库的 [`CHANGELOG.md`](CHANGELOG.md)；从 v3.2.0 开始按版本号发布。
+
+1. **关注新版本**：在 GitHub 仓库页点 Watch → Custom → 勾上 Releases，有新版本会通知你。
+2. **拉取上游的更新**：
+   - 你是 fork 的：在你的 fork 页面点 **Sync fork**，再 `git pull` 到本机；
+   - 你是直接克隆的：`git pull`（想固定在某个版本，用 `git checkout v3.2.0` 这样的标签）。
+3. **看 `CHANGELOG.md` 里标了「不兼容」的条目**：它们说明了配置、环境变量或接口有哪些必须同步改动的地方（比如 `wrangler.jsonc` 里的 `assets` 设置）。你自己改过 `wrangler.jsonc`（KV id、域名、`vars`）的话，合并时保留你的值，只补上新增的条目。
+4. **部署**：`npm install && npm run deploy`。Durable Object 的迁移由 wrangler 按 `wrangler.jsonc` 里的 `migrations` 自动执行，不用手动处理；已有的行程和方案页不受影响。
+5. **出问题要回滚**：`npx wrangler rollback`，回到上一个已部署的版本（要指定版本时先 `npx wrangler deployments list` 看版本号）。回滚只换代码，不会改动已存的数据；如果新版本新增了 Durable Object 迁移，回滚后那一步迁移不会撤销。
 
 ## 搜索引擎与 AI 问答
 
@@ -138,10 +153,11 @@ npm run deploy                             # 构建 dist/ 并部署
 
 ## 安全措施
 
-- 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；cdnjs 上的脚本和样式带 SRI 完整性校验。
+- 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；编辑页的 Pyodide、Leaflet、marked 都是自己托管的同源文件，不放行任何 CDN；示例页和方案页仍用 cdnjs，带 SRI 完整性校验。
 - 所有响应都带安全头（`nosniff`、`X-Frame-Options`、`Referrer-Policy`、HSTS、`Permissions-Policy`）：静态文件在 `web/_headers`，Worker 生成的响应在 `web/worker.js`，两处要保持一致。
 - 方案页的 HTML 由编辑者的浏览器上传，所以放进 CSP 沙箱（独立的匿名来源）：读不到本站的存储和 Cookie，也不能发请求。
 - 改动状态的请求（`/api/*` 的 POST 和 DELETE、方案页口令表单）校验 Origin，跨站来源会被拒；WebSocket 也校验 Origin；500 错误不返回内部错误原文。
+- 流量统计在服务端做，只记按天汇总的次数（页面访问、爬虫、外站来源的域名和 `?from=` 参数、新建行程、发布和打开方案页的次数），不记 IP 和完整地址，不用 Cookie，保留 35 天；管理接口 `/api/admin/stats` 返回近 30 天。
 - Cloudflare 的 Web Analytics 会自动往页面里注入统计脚本，和「不做统计埋点」不一致，而且会被 CSP 拦下。自己部署时请在 Cloudflare 后台关掉。
 
 ## 已知限制
