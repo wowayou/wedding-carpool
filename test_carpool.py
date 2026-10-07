@@ -436,6 +436,19 @@ class ResolveAndSuggestTest(unittest.TestCase):
         cfg = config([person("老王", WANG, car_seats=3)], stations=(("西站", WEST),))
         self.assertEqual([s["name"] for s in service.suggest_stations(cfg, FakeAmap(pois=pois))["stations"]], ["近站"])
 
+    def test_progress_is_reported_by_stage(self):
+        seen = []
+        carpool.progress = lambda label, done, total: seen.append((label, done, total))
+        try:
+            service.compute(config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")]), FakeAmap())
+        finally:
+            carpool.progress = None
+        labels = list(dict.fromkeys(label for label, _, _ in seen))
+        self.assertEqual(labels[:2], ["定位目的地、成员和车站", "查询行车时间"])
+        self.assertIn("比较各种接人组合", labels)
+        self.assertEqual(labels[-1], "获取路线轨迹")
+        self.assertIn(("查询行车时间", 3, 4), seen)  # 目的地、两个车站、小陈家
+
     def test_trip_limit_errors_stop_like_quota(self):
         with self.assertRaises(carpool.QuotaError) as ctx:
             carpool.check_quota("TRIP_DAILY_LIMIT", "这个行程今天的高德调用已到上限")

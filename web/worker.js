@@ -4,7 +4,8 @@
 // 绑定：ROOM（Durable Object，每个行程一个实例）、USAGE（Durable Object，全站计数）、
 //       DATA（KV：方案页、高德配额标记）、ASSETS（静态文件 dist/）
 // 密钥：AMAP_KEY（站长的高德 Key）、ACCESS_CODE（创建口令，用站长 Key 新建行程时要填）
-// 可选变量：TRIP_DAILY_LIMIT（单个行程每天的高德调用上限）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）
+// 可选变量：TRIP_DAILY_LIMIT（用站长 Key 的行程每天的高德调用上限）、OWN_TRIP_DAILY_LIMIT（自带 Key 的行程每天上限，
+//          只防程序出错时无限调用）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）
 
 // 只放行计算用到的高德接口
 const AMAP_PATHS = new Set([
@@ -17,6 +18,7 @@ const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const HISTORY_LIMIT = 100; // 每个行程保留的历史版本数
 const HISTORY_MERGE_MS = 2 * 60 * 1000; // 同一个人 2 分钟内的连续保存合并成一个历史版本
 const DEFAULT_TRIP_DAILY_LIMIT = 1500;
+const DEFAULT_OWN_TRIP_DAILY_LIMIT = 3000;
 const DEFAULT_OWNER_DAILY_LIMIT = 4000;
 const CREATE_PER_IP_PER_DAY = 10;
 const CREATE_PER_DAY = 200;
@@ -79,6 +81,19 @@ const internal = (path, body, key) => new Request(`https://internal${path}`, {
 
 // ---------- 新建行程 ----------
 
+// 用一次真实调用确认 Key 可用；配额或频率问题不算 Key 无效。返回错误说明，可用时返回空
+async function amapKeyProblem(amapKey) {
+  if (!/^[0-9a-f]{32}$/i.test(amapKey)) return '高德 Key 应该是 32 位的字母和数字';
+  const check = await fetch(`https://restapi.amap.com/v3/geocode/geo?${new URLSearchParams({ address: '北京市', key: amapKey })}`)
+    .then((r) => r.json()).catch(() => null);
+  if (!check) return '暂时连不上高德，稍后再试';
+  const info = String(check.info || '');
+  if (String(check.status) !== '1' && !QUOTA_RE.test(info) && !QPS_RE.test(info)) {
+    return `这个高德 Key 用不了（${info}）。需要「Web服务」类型的 Key，且不能设置 IP 白名单`;
+  }
+  return '';
+}
+
 async function createTrip(request, env) {
   const body = await readJson(request, 4096);
   const name = String(body.name || '').trim().slice(0, 60) || '未命名行程';
@@ -91,15 +106,8 @@ async function createTrip(request, env) {
     mode = 'owner';
   } else if (body.amapKey) {
     amapKey = String(body.amapKey).trim();
-    if (!/^[0-9a-f]{32}$/i.test(amapKey)) return json({ error: '高德 Key 应该是 32 位的字母和数字' }, 400);
-    // 用一次真实调用确认 Key 可用；配额或频率问题不算 Key 无效
-    const check = await fetch(`https://restapi.amap.com/v3/geocode/geo?${new URLSearchParams({ address: '北京市', key: amapKey })}`)
-      .then((r) => r.json()).catch(() => null);
-    if (!check) return json({ error: '暂时连不上高德，稍后再试' }, 502);
-    const info = String(check.info || '');
-    if (String(check.status) !== '1' && !QUOTA_RE.test(info) && !QPS_RE.test(info)) {
-      return json({ error: `这个高德 Key 用不了（${info}）。需要「Web服务」类型的 Key，且不能设置 IP 白名单` }, 400);
-    }
+    const problem = await amapKeyProblem(amapKey);
+    if (problem) return json({ error: problem }, 400);
     mode = 'own';
   } else {
     return json({ error: '要么填创建口令，要么填自己的高德 Key' }, 400);
@@ -130,6 +138,12 @@ async function tripApi(request, env, url, id, sub) {
   if (!key) return json({ error: '需要用编辑链接打开', status: '0', info: 'UNAUTHORIZED' }, 401);
   if (sub === '/amap-batch' || sub.startsWith('/amap/')) return tripAmap(request, env, url, room, key, sub);
   if (sub === '/page' && request.method === 'POST') return publishPage(request, env, url, room, key, id);
+  if (sub === '/key' && request.method === 'POST') { // 改用自己的高德 Key：公共额度用完时可以接着算
+    const amapKey = String((await readJson(request, 1024)).amapKey || '').trim();
+    const problem = await amapKeyProblem(amapKey);
+    if (problem) return json({ error: problem }, 400);
+    return room.fetch(internal('/set-key', { amapKey }, key));
+  }
   if (sub === '/delete' && request.method === 'POST') {
     const res = await room.fetch(internal('/delete', {}, key));
     if (res.ok) await env.DATA.delete(`page:${id}`);
@@ -201,7 +215,11 @@ async function tripAmap(request, env, url, room, key, sub) {
   const misses = results.map((r, i) => (r === null ? i : -1)).filter((i) => i >= 0);
 
   // 鉴权，并按行程的每日上限领取调用次数（缓存命中不算）
-  const grant = await room.fetch(internal('/amap-take', { n: misses.length, limit: limitOf(env, 'TRIP_DAILY_LIMIT', DEFAULT_TRIP_DAILY_LIMIT) }, key));
+  const grant = await room.fetch(internal('/amap-take', {
+    n: misses.length,
+    limit: limitOf(env, 'TRIP_DAILY_LIMIT', DEFAULT_TRIP_DAILY_LIMIT),
+    ownLimit: limitOf(env, 'OWN_TRIP_DAILY_LIMIT', DEFAULT_OWN_TRIP_DAILY_LIMIT),
+  }, key));
   if (!grant.ok) return grant;
   const { mode, amapKey, granted: tripGranted, limit: tripLimit } = await grant.json();
   let granted = tripGranted;
@@ -290,6 +308,13 @@ export class ConfigRoom {
       return json({ at: meta.pageAt });
     }
     if (path === '/amap-take') return this.take(meta, body);
+    if (path === '/set-key') {
+      Object.assign(meta, { mode: 'own', amapKey: body.amapKey });
+      await this.storage.put('meta', meta);
+      await this.storage.delete('usage'); // 之前的用量算在站长 Key 上，换 Key 后重新计
+      this.broadcast({ type: 'meta', name: meta.name, mode: 'own' });
+      return json({ mode: 'own' });
+    }
     if (path === '/delete') {
       this.broadcast({ type: 'deleted' });
       await this.storage.deleteAll(); // 配置、历史、用量都清掉；实例没有数据后由平台回收
@@ -364,7 +389,8 @@ export class ConfigRoom {
     return json({ name: meta.name });
   }
 
-  async take(meta, { n = 0, limit }) {
+  async take(meta, { n = 0, limit, ownLimit }) {
+    if (meta.mode === 'own') limit = ownLimit;
     const today = beijingDay();
     const usage = await this.storage.get('usage');
     const used = usage?.day === today ? usage.count : 0;

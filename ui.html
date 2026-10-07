@@ -115,6 +115,12 @@
   .overlay p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1f2328; color: #fff; padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 2000; max-width: 90vw; }
   .toast.show { opacity: .95; }
+  .progress { margin-top: 6px; font-size: 12px; color: var(--ink); }
+  .progress[hidden] { display: none; }
+  .progress .bar { height: 4px; background: var(--chip); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+  .progress .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .progress .bar i.indeterminate { width: 30% !important; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
   .online-only { display: none; } body.online .online-only { display: revert; } body.online .local-only { display: none; }
   @media (max-width: 900px) {
     .app { grid-template-columns: 1fr; height: auto; }
@@ -136,6 +142,7 @@
         <button class="btn primary" id="plan">计算方案</button>
       </div>
       <div class="bar-sub"><span id="status"></span><span class="peers" id="peers"></span></div>
+      <div class="progress" id="progress" hidden><span id="progressText"></span><div class="bar"><i id="progressBar"></i></div></div>
     </header>
     <nav class="steps" id="steps"></nav>
     <div id="form"><div class="empty" style="padding:16px">加载中…</div></div>
@@ -171,6 +178,18 @@
 </div>
 <div class="overlay" id="denied" hidden>
   <div class="box"><h2>打不开这个行程</h2><p id="deniedText"></p><a class="btn primary" href="/">回首页</a></div>
+</div>
+<div class="overlay" id="quotaBox" hidden>
+  <div class="box" style="width:min(440px,92vw)">
+    <h2 id="quotaTitle">今天的高德额度用完了</h2>
+    <p id="quotaText"></p>
+    <label class="f"><span>填你自己的高德 Web 服务 Key，马上接着用</span><input id="quotaKey" autocomplete="off" placeholder="32 位字母和数字"></label>
+    <p class="muted">申请大约 3 分钟：<a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只保存在服务器上、只用于这个行程，调用次数算在你自己的免费额度里。</p>
+    <div class="row" style="align-items:center"><button class="btn primary" id="quotaKeyBtn">用我的 Key 继续</button><span class="muted" id="quotaErr" style="color:var(--danger)"></span></div>
+    <p class="muted" style="margin-top:12px">也可以明天再来：额度在北京时间零点恢复，已填的内容都在。</p>
+    <p class="muted">这个工具是公益性质的，免费、无广告。觉得有用的话可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。</p>
+    <button class="btn" id="quotaClose">关闭</button>
+  </div>
 </div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
 
@@ -484,6 +503,7 @@ async function search(base, textKey) {
       : '<button disabled>没找到，换个说法试试</button>';
   } catch (e) {
     box.innerHTML = `<button disabled>${esc(e.message)}</button>`;
+    if (mode === 'online' && isQuotaError(e.message)) showQuota(e.message);
   }
 }
 
@@ -722,7 +742,7 @@ function connectSync() {
     const msg = JSON.parse(e.data);
     if (msg.type === 'presence') { peers = msg.people; renderPeers(); markPeers(); }
     if (msg.type === 'config') applyRemote(msg);
-    if (msg.type === 'meta') { trip.name = msg.name; renderTitle(); }
+    if (msg.type === 'meta') { trip.name = msg.name; if (msg.mode) trip.mode = msg.mode; renderTitle(); }
     if (msg.type === 'page') { trip.page = { url: `/p/${tripId}`, at: msg.at }; }
     if (msg.type === 'deleted') { dirty = false; socket.onclose = null; socket.close(); deny('这个行程已经被删除了'); }
     if (msg.type === 'hello' && version !== null && msg.version !== version) {
@@ -775,12 +795,43 @@ function markPeers() {
   }
 }
 
+// ---------- 进度：长操作分阶段显示（在线版由 Pyodide 里的计算报告阶段，本地版只显示已用时间） ----------
+let progressState = null, progressTimer = null;
+function startProgress(title) {
+  progressState = { title, label: mode === 'online' ? '准备中' : '计算中', done: null, total: null, start: Date.now() };
+  $('#progress').hidden = false;
+  clearInterval(progressTimer);
+  progressTimer = setInterval(renderProgress, 1000);
+  renderProgress();
+}
+function updateProgress(p) {
+  if (!progressState) return;
+  Object.assign(progressState, p);
+  renderProgress();
+}
+function stopProgress() {
+  clearInterval(progressTimer);
+  progressState = null;
+  $('#progress').hidden = true;
+}
+function renderProgress() {
+  const s = progressState;
+  if (!s) return;
+  const counted = s.total ? ` ${Math.min(s.done + 1, s.total)}/${s.total}` : '';
+  const text = `${s.title}：${s.label}${counted} · 已用 ${Math.round((Date.now() - s.start) / 1000)} 秒`;
+  $('#progressText').textContent = text;
+  $('#progressBar').style.width = s.total ? `${Math.round((100 * s.done) / s.total)}%` : '';
+  $('#progressBar').classList.toggle('indeterminate', !s.total);
+  const inDrawer = document.getElementById('drawerProgress');
+  if (inDrawer) inDrawer.textContent = text;
+}
+
 // ---------- 计算后端：本地调 ui.py；在线在 Web Worker 里的 Pyodide 中算（web/pyworker.js） ----------
 let pyWorker = null, pyCalls = 0;
 const pyPending = new Map();
 function py(method, args) {
   if (!pyWorker) {
-    toast('第一次计算要先下载计算环境（约 12MB），稍等…', 4000);
+    updateProgress({ label: '下载计算环境（第一次约 12MB）', done: null, total: null });
     pyWorker = new Worker('/pyworker.js', { type: 'module' });
     pyWorker.onerror = (e) => { // 计算环境加载失败：把等待中的调用都结束掉，别一直转圈
       const msg = `计算环境加载失败：${e.message || '网络问题'}`;
@@ -789,6 +840,7 @@ function py(method, args) {
       pyWorker = null;
     };
     pyWorker.onmessage = (e) => {
+      if (e.data.progress) { updateProgress(e.data.progress); return; }
       const { id, result: out } = e.data;
       const pending = pyPending.get(id);
       if (!pending) return;
@@ -825,15 +877,50 @@ const backend = {
   },
 };
 
+// ---------- 额度：用完时提示，可以当场改用自己的高德 Key ----------
+const isQuotaError = (msg) => /额度|配额|上限/.test(String(msg));
+function showQuota(message, proactive = false) {
+  $('#quotaTitle').textContent = proactive ? '改用自己的高德 Key' : '今天的高德额度用完了';
+  $('#quotaText').textContent = proactive
+    ? '换成你自己的 Key 后，这个行程的高德调用都算在你的额度里，不再占用站点的公共额度。'
+    : `${message} 已经停下，没有继续调用。`;
+  $('#quotaErr').textContent = '';
+  $('#quotaKey').value = '';
+  $('#quotaBox').hidden = false;
+  $('#quotaKey').focus();
+}
+$('#quotaClose').addEventListener('click', () => { $('#quotaBox').hidden = true; });
+$('#quotaKeyBtn').addEventListener('click', async () => {
+  const btn = $('#quotaKeyBtn');
+  btn.disabled = true;
+  $('#quotaErr').textContent = '正在验证…';
+  try {
+    await api(`${API}/key`, { amapKey: $('#quotaKey').value.trim() });
+    trip.mode = 'own';
+    $('#quotaBox').hidden = true;
+    toast('已改用你的高德 Key，可以接着算了', 4000);
+  } catch (e) {
+    $('#quotaErr').textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+function reportError(action, e) {
+  if (mode === 'online' && isQuotaError(e.message)) showQuota(e.message);
+  else alert(`${action}失败：${e.message}`);
+}
+
 // ---------- 推荐车站 ----------
 async function suggestStations() {
   if (!cfg.people.some((p) => p.car_seats !== undefined) && !cfg.venue.location && !cfg.venue.address) {
     toast('先填目的地和开车的成员，推荐才有依据');
     return;
   }
-  openDrawer('推荐车站', '<div class="empty">正在找：目的地周边、车主出发地附近、沿各车主的路线。要查几十个点，第一次可能要一两分钟，之后会快很多。</div>');
+  openDrawer('推荐车站', '<div class="empty">正在找：目的地周边、车主出发地附近、沿各车主的路线。要查几十个点，第一次可能要一两分钟，之后会快很多。<div id="drawerProgress" class="muted"></div></div>');
+  startProgress('推荐车站');
   try {
     const out = await backend.suggest(cfg);
+    stopProgress();
     applyResolved(out.resolved);
     if (!out.stations.length) { $('#drawerBody').innerHTML = '<div class="empty">附近没找到火车站，可以手动添加。</div>'; return; }
     $('#drawerBody').innerHTML = `<p class="muted">按「车主最少绕路」排序；绕路超过各自上限的车主不会去接。勾选后加入候选站。</p>
@@ -850,7 +937,9 @@ async function suggestStations() {
       toast(`加了 ${picked.length} 个车站，接下来给不开车的人填车次`);
     };
   } catch (e) {
+    stopProgress();
     $('#drawerBody').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
+    if (mode === 'online' && isQuotaError(e.message)) showQuota(e.message);
   }
 }
 
@@ -868,6 +957,7 @@ async function runPlan() {
   const btn = $('#plan');
   btn.disabled = true;
   btn.textContent = '计算中…';
+  startProgress('计算方案');
   try {
     if (dirty) await save(true);
     const hash = configHash();
@@ -879,8 +969,9 @@ async function runPlan() {
     renderResults(true);
     toast(saved ? `算好了。顺便记下了 ${saved} 个地点的坐标，下次不用再查` : '算好了');
   } catch (e) {
-    alert('计算失败：' + e.message);
+    reportError('计算', e);
   } finally {
+    stopProgress();
     btn.disabled = false;
     btn.textContent = '计算方案';
     renderSteps();
@@ -909,6 +1000,32 @@ function showLayers() {
   else { map.removeLayer(planLayer); previewLayer.addTo(map); }
 }
 
+// 标签互相遮挡时，按优先级（目的地 > 用到的车站 > 开车的 > 不开车的 > 其他车站）只留前面的，鼠标移上去再显示
+function declutter() {
+  if (!map) return;
+  const layer = map.hasLayer(planLayer) ? planLayer : previewLayer;
+  const items = [];
+  layer.eachLayer((m) => {
+    const tip = m.getTooltip && m.getTooltip();
+    const el = tip && tip.options.permanent && tip.getElement();
+    if (el) items.push([m.options.priority ?? 5, el]);
+  });
+  items.sort((a, b) => a[0] - b[0]);
+  const placed = [];
+  for (const [, el] of items) {
+    el.style.visibility = '';
+    const r = el.getBoundingClientRect();
+    if (placed.some((p) => r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top)) el.style.visibility = 'hidden';
+    else placed.push(r);
+  }
+}
+function labelled(marker, priority) {
+  marker.options.priority = priority;
+  marker.on('mouseover', () => { const el = marker.getTooltip()?.getElement(); if (el) el.style.visibility = ''; });
+  marker.on('mouseout', declutter);
+  return marker;
+}
+
 let previewTimer = null;
 function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(drawPreview, 250); }
 
@@ -916,12 +1033,13 @@ function drawPreview() {
   if (!map || !cfg) return;
   previewLayer.clearLayers();
   const pts = [];
+  const priority = { venue: 0, car: 2, home: 3, st: 4 };
   const add = (loc, kind, label, r = 7) => {
     const ll = parseLoc(loc);
     if (!ll) return;
     pts.push(ll);
-    L.circleMarker(ll, { radius: r, color: '#fff', weight: 2, fillColor: POINT_STYLE[kind], fillOpacity: kind === 'st' ? 0.75 : 1 })
-      .bindTooltip(esc(label), { permanent: kind !== 'st', direction: 'top', offset: [0, -6], className: 'lbl' }).addTo(previewLayer);
+    labelled(L.circleMarker(ll, { radius: r, color: '#fff', weight: 2, fillColor: POINT_STYLE[kind], fillOpacity: kind === 'st' ? 0.75 : 1 })
+      .bindTooltip(esc(label), { permanent: kind !== 'st', direction: 'top', offset: [0, -6], className: 'lbl' }), priority[kind]).addTo(previewLayer);
   };
   add(cfg.venue?.location, 'venue', cfg.venue?.name || '目的地', 10);
   (cfg.stations || []).forEach((s) => add(s.location, 'st', s.name || '车站', 6));
@@ -931,6 +1049,7 @@ function drawPreview() {
     fitted = true;
   }
   showLayers();
+  setTimeout(declutter, 0);
 }
 
 function drawPlan(fit) {
@@ -961,11 +1080,12 @@ function drawPlan(fit) {
   for (const [id, p] of Object.entries(pts)) {
     const kind = id === 'venue' ? 'venue' : id.split(':')[0];
     const highlighted = kind !== 'st' || used.has(id);
-    L.circleMarker([p.lat, p.lng], {
+    const priority = kind === 'venue' ? 0 : kind === 'st' ? (used.has(id) ? 1 : 4) : kind === 'car' ? 2 : 3;
+    labelled(L.circleMarker([p.lat, p.lng], {
       radius: kind === 'venue' ? 10 : kind === 'st' ? (used.has(id) ? 9 : 5) : 7,
       color: '#fff', weight: 2, fillColor: POINT_STYLE[kind], fillOpacity: highlighted ? 1 : 0.5,
     }).bindTooltip(esc(p.name) + (stopNotes[id] ? `<br><b>${stopNotes[id].map(esc).join('<br>')}</b>` : ''),
-      { permanent: highlighted, direction: 'top', offset: [0, -6], className: 'lbl' }).addTo(planLayer);
+      { permanent: highlighted, direction: 'top', offset: [0, -6], className: 'lbl' }), priority).addTo(planLayer);
   }
   if (fit) {
     const focus = [ll('venue'), ...[...used].map(ll),
@@ -973,6 +1093,7 @@ function drawPlan(fit) {
     map.fitBounds(L.latLngBounds(focus).pad(0.1));
   }
   showLayers();
+  setTimeout(declutter, 0);
 }
 
 function initMap() {
@@ -982,6 +1103,7 @@ function initMap() {
   }).addTo(map);
   planLayer = L.layerGroup();
   previewLayer = L.layerGroup().addTo(map);
+  map.on('zoomend moveend resize', declutter);
   const legend = L.control({ position: 'bottomleft' });
   legend.onAdd = () => {
     const d = L.DomUtil.create('div', 'legend');
@@ -1046,9 +1168,11 @@ function openMenu() {
     <div class="kv"><span>行程名称</span><span class="row"><input id="tripName" value="${esc(trip.name)}"><button class="ghost" id="renameBtn">改名</button></span>
       <span>邀请编辑</span><span class="row"><input readonly value="${esc(editLink)}"><button class="ghost" data-copy="${esc(editLink)}">复制</button></span>
       <span>方案页</span><span>${page ? `<a href="${esc(page.url)}" target="_blank" rel="noopener">${esc(location.origin + page.url)}</a> <button class="link" data-copy="${esc(location.origin + page.url)}">复制</button><br><span class="muted">${esc(fmtTime(page.at))}发布；重新发布会更新这个链接</span>` : '<span class="muted">还没发布：算出方案后点「发布方案页」</span>'}</span>
-      <span>高德额度</span><span class="muted">${trip.mode === 'own' ? '用你自己的高德 Key' : '用站长的高德 Key'}，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用</span>
+      <span>高德额度</span><span class="muted">${trip.mode === 'own' ? '用你自己的高德 Key' : '用站点的公共额度'}，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用${trip.mode === 'own' ? '' : '<br><button class="link" id="ownKeyBtn">改用自己的高德 Key</button>'}</span>
     </div>
     <p class="muted">编辑链接等于编辑权限，只发给一起规划的人。要给大家看结果，发「方案页」链接就行，不用发编辑链接。</p>` : ''}
+    <h3 style="font-size:13px;margin:14px 0 6px">支持</h3>
+    <p class="muted">这个工具是公益性质的，免费、无广告。觉得有用的话可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。</p>
     <h3 style="font-size:13px;margin:14px 0 6px">备份</h3>
     <div class="row"><button class="btn" id="exportBtn">导出配置（JSON）</button><button class="btn" id="importBtn">导入配置</button></div>
     <p class="muted">导入会替换现在的配置${mode === 'online' ? '，旧内容留在「历史」里' : ''}。</p>
@@ -1057,6 +1181,7 @@ function openMenu() {
     <p class="muted">配置、历史版本和方案页都会删掉，所有人的编辑链接和方案页链接都会失效，不能恢复。</p>
     <button class="btn" id="deleteBtn" style="color:var(--danger)">删除这个行程</button>` : ''}`);
   $('#exportBtn').onclick = exportConfig;
+  if ($('#ownKeyBtn')) $('#ownKeyBtn').onclick = () => { closeDrawer(); showQuota('', true); };
   if ($('#deleteBtn')) {
     $('#deleteBtn').onclick = async () => {
       const typed = prompt(`确定删除？请输入行程名称「${trip.name}」确认：`);

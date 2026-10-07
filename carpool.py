@@ -39,6 +39,18 @@ COMBO_LIMIT = 30_000  # 车主路线组合的枚举上限，车多时自动收�
 INF = math.inf
 
 
+# 进度回调：长操作分阶段报告 (阶段说明, 已完成数, 总数)，网页版用来显示进度条；本地版不设
+progress = None
+current_stage = ""
+
+
+def report(label: str, done: int | None = None, total: int | None = None) -> None:
+    global current_stage
+    current_stage = label
+    if progress:
+        progress(label, done, total)
+
+
 class AmapError(RuntimeError):
     pass
 
@@ -342,6 +354,7 @@ def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
     opt = cfg.get("options", {})
     default_detour = float(opt.get("max_detour_min", 30))
     v = cfg.get("venue") or {}
+    report("定位目的地、成员和车站")
     prefetch(amap, lambda: [
         *([amap.geocode_query(v.get("address") or v.get("name", ""), v.get("city"))] if not v.get("location") else []),
         *(amap.geocode_query(p.get("from", ""), p.get("city")) for p in cfg.get("people", []) if not p.get("location")),
@@ -423,10 +436,14 @@ def estimate_rail(amap, trip: Trip) -> None:
     if not trip.estimate_rail or not riders or not by_name:
         return
     print(f"正在估算 {len(riders)} 位乘客到各站的公共交通用时…", file=sys.stderr)
+    total = sum(len(by_name) if p.stations is None else len(p.stations) for p in riders)
+    done = 0
     for p in riders:
         allowed = list(by_name) if p.stations is None else [s for s in p.stations if s in by_name]
         missing, error = [], ""
         for s in allowed:
+            report("估算坐公共交通到各站的用时", done, total)
+            done += 1
             try:  # 网络和频率限制在 _get 里已经重试过，这里失败就是真的查不到
                 est = amap.transit(p.home, by_name[s], trip.travel_date, trip.travel_time)
             except QuotaError:
@@ -462,8 +479,10 @@ def build_matrix(amap, pts: dict[str, Place], skip: set[str]) -> dict[tuple[str,
     print(f"正在向高德查询行车时间（约 {len(dests)} 次请求）…", file=sys.stderr)
     T: dict[tuple[str, str], float] = {}
     plan = [(d, [o for o in origins if o != d]) for d in dests]
+    report("查询行车时间", 0, len(plan))
     prefetch(amap, lambda: [amap.distance_query([pts[o] for o in srcs], pts[d]) for d, srcs in plan if len(srcs) <= 100])
-    for d, srcs in plan:
+    for i, (d, srcs) in enumerate(plan):
+        report("查询行车时间", i, len(plan))
         for o, m in zip(srcs, amap.drive_minutes([pts[o] for o in srcs], pts[d])):
             if m is not None:
                 T[(o, d)] = m
@@ -613,6 +632,7 @@ def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Perso
 
 
 def solve(trip: Trip, T, top: int = 3) -> list[Plan]:
+    report("比较各种接人组合")
     drivers = [p for p in trip.people if p.drives]
     riders = [p for p in trip.people if not p.drives]
     names = [s.name for s in trip.stations]

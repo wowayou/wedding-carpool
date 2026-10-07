@@ -178,7 +178,8 @@ TEMPLATE = """<!doctype html>
   .btn.ghost {{ background: #fff; color: var(--accent); border: 1px solid var(--accent); }}
   .note {{ margin: 8px 0 0; padding: 8px 10px; background: #f7f3ec; border-radius: 8px; font-size: 13px; color: #5b524a; }}
   .tips {{ font-size: 14px; color: #4b443d; padding-left: 20px; }}
-  footer {{ color: var(--muted); font-size: 12px; margin-top: 24px; }}
+  footer {{ color: var(--muted); font-size: 12px; margin-top: 24px; line-height: 1.8; }}
+  footer a {{ color: var(--muted); }}
   .leaflet-tooltip.lbl {{ font-size: 12px; padding: 1px 6px; }}
 </style>
 </head>
@@ -202,7 +203,7 @@ TEMPLATE = """<!doctype html>
     <li>高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。</li>
     <li>车次、余票以 12306 为准，提前买票。</li>
   </ul>
-  <footer>生成于 {stamp} · 链接会打开高德地图</footer>
+  <footer>生成于 {stamp} · 链接会打开高德地图<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行</footer>
 </div>
 <script id="data" type="application/json">{data}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -226,14 +227,34 @@ TEMPLATE = """<!doctype html>
     bounds = bounds.concat(r.path);
   }});
   data.taxis.forEach(function (t) {{ L.polyline(t, {{ color: '#6b7280', weight: 3, dashArray: '4 6' }}).addTo(map); }});
+  // 标签互相遮挡时按优先级（目的地 > 车站 > 出发地）只留前面的，点或移到点上再显示
+  var labelled = [];
+  function declutter() {{
+    var placed = [];
+    labelled.forEach(function (m) {{
+      var el = m.getTooltip().getElement();
+      if (!el) return;
+      el.style.visibility = '';
+      var r = el.getBoundingClientRect();
+      var hit = placed.some(function (p) {{ return r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top; }});
+      if (hit) el.style.visibility = 'hidden'; else placed.push(r);
+    }});
+  }}
   data.points.forEach(function (p) {{
     var el = document.createElement('span'); el.textContent = p.name;
     p.notes.forEach(function (n) {{ var b = document.createElement('b'); b.textContent = n; el.appendChild(document.createElement('br')); el.appendChild(b); }});
-    L.circleMarker([p.lat, p.lng], {{ radius: p.kind === 'venue' ? 9 : 7, color: '#fff', weight: 2, fillColor: colors[p.kind], fillOpacity: 1 }})
+    var m = L.circleMarker([p.lat, p.lng], {{ radius: p.kind === 'venue' ? 9 : 7, color: '#fff', weight: 2, fillColor: colors[p.kind], fillOpacity: 1 }})
       .bindTooltip(el, {{ permanent: true, direction: 'top', offset: [0, -6], className: 'lbl' }}).addTo(map);
+    m.priority = p.kind === 'venue' ? 0 : p.kind === 'st' ? 1 : 2;
+    m.on('mouseover click', function () {{ var t = m.getTooltip().getElement(); if (t) t.style.visibility = ''; }});
+    m.on('mouseout', declutter);
+    labelled.push(m);
     bounds.push([p.lat, p.lng]);
   }});
+  labelled.sort(function (a, b) {{ return a.priority - b.priority; }});
   map.fitBounds(L.latLngBounds(bounds).pad(0.08));
+  map.on('zoomend moveend resize', declutter);
+  setTimeout(declutter, 0);
 }})();
 </script>
 </body>

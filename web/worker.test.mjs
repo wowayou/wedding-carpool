@@ -151,7 +151,7 @@ test('行程每日上限和站长 Key 全站上限', async () => {
     body: { requests: Array.from({ length: n }, (_, i) => ({ path: '/v3/distance', query: `${tag}=${i}` })) } }).then((r) => r.json());
   assert.deepEqual((await batch(a, 3, 'a')).results.map((r) => r.info), ['OK', 'OK', 'TRIP_DAILY_LIMIT']);
   assert.deepEqual((await batch(b, 2, 'b')).results.map((r) => r.info), ['OK', 'OWNER_DAILY_LIMIT']);
-  assert.deepEqual((await batch(own, 2, 'c')).results.map((r) => r.info), ['OK', 'OK']); // 自带 Key 不占站长额度
+  assert.deepEqual((await batch(own, 3, 'c')).results.map((r) => r.info), ['OK', 'OK', 'OK']); // 自带 Key 不占站长额度，也不受行程上限 2 的限制
   assert.equal((await (await call(`${a.base}/config`, { cookie: a.cookie })).json()).usage, 2);
 });
 
@@ -206,6 +206,21 @@ test('在线名单和正在编辑的格子', async () => {
   room.webSocketClose(sockets[0], 1000, 'bye');
   assert.deepEqual(sockets[1].sent.at(-1).people.map((p) => p.name), ['小陈']);
   room.webSocketMessage(sockets[1], 'not json'); // 乱发的消息忽略
+});
+
+test('额度用完后改用自己的 Key：校验 Key、重置用量、之后走新 Key', async () => {
+  env.TRIP_DAILY_LIMIT = '1';
+  const t = await newTrip();
+  const one = (q) => call(`${t.base}/amap/v3/distance?${q}`, { cookie: t.cookie }).then((r) => r.json());
+  await one('a=1');
+  assert.equal((await one('a=2')).info, 'TRIP_DAILY_LIMIT');
+  assert.equal((await call(`${t.base}/key`, { method: 'POST', cookie: t.cookie, body: { amapKey: 'bad' } })).status, 400);
+  assert.equal((await call(`${t.base}/key`, { method: 'POST', body: { amapKey: OWN_KEY } })).status, 401);
+  assert.equal((await (await call(`${t.base}/key`, { method: 'POST', cookie: t.cookie, body: { amapKey: OWN_KEY } })).json()).mode, 'own');
+  assert.equal(sockets[0].sent.at(-1).mode, 'own');
+  upstream = [];
+  assert.equal((await one('a=3')).info, 'OK');
+  assert.equal(new URL(upstream.at(-1)).searchParams.get('key'), OWN_KEY);
 });
 
 test('删除行程：数据和方案页都清掉，之后链接失效', async () => {

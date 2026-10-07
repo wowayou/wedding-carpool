@@ -27,8 +27,12 @@ def compute(cfg: dict, amap) -> dict:
         for r in plan.routes:
             for key in ((r.driver, r.stops), (r.driver, ())):
                 places.setdefault(key, [pts[i] for i in (f"car:{key[0]}", *key[1], "venue")])
+    carpool.report("获取路线轨迹", 0, len(places))
     carpool.prefetch(amap, lambda: [amap.driving_query(ps) for ps in places.values()])
-    paths = {key: _path(amap, ps) for key, ps in places.items()}
+    paths = {}
+    for i, (key, ps) in enumerate(places.items()):
+        carpool.report("获取路线轨迹", i, len(places))
+        paths[key] = _path(amap, ps)
     return {"trip": trip, "pts": pts, "T": T, "plans": plans, "paths": paths}
 
 
@@ -76,6 +80,7 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit
     existing = {s.get("name") for s in cfg.get("stations") or []}
 
     # 车主直达路线，沿途取点
+    carpool.report("获取车主路线，沿途取点")
     carpool.prefetch(amap, lambda: [amap.driving_query([d.home, venue]) for d in drivers])
     # 高德周边搜索半径最大 50 公里：目的地本身搜 50 公里，再在周围 60 公里处补一圈，覆盖到约 100 公里
     centers: list[tuple[carpool.Place, float, str]] = [(venue, 50, "目的地附近")]
@@ -93,10 +98,12 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit
         except (carpool.AmapError, KeyError, IndexError):
             path = []
         centers += [(pt, ROUTE_RADIUS_KM, f"{d.name}路上") for pt in _samples(path, SAMPLE_EVERY_KM)]
+    carpool.report("搜索附近的火车站", 0, len(centers))
     carpool.prefetch(amap, lambda: [amap.around_query(c, r) for c, r, _ in centers])
 
     found: dict[str, tuple[carpool.Place, str]] = {}
-    for center, radius, where in centers:
+    for i, (center, radius, where) in enumerate(centers):
+        carpool.report("搜索附近的火车站", i, len(centers))
         for st in carpool.pick_stations(amap.stations_around(center, radius), center, radius, 25):
             if st.name in found or st.name in existing:
                 continue
@@ -111,9 +118,11 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit
     origins = stations + [d.home for d in drivers]
     to_venue = dict(zip([st.name for st in stations] + [f"car:{d.name}" for d in drivers],
                         amap.drive_minutes(origins, venue)))
+    carpool.report("测算各站顺不顺路", 0, len(stations))
     carpool.prefetch(amap, lambda: [amap.distance_query([d.home for d in drivers], st) for st in stations] if drivers else [])
     rows = []
-    for st in stations:
+    for i, st in enumerate(stations):
+        carpool.report("测算各站顺不顺路", i, len(stations))
         best = None
         if drivers:
             for d, m in zip(drivers, amap.drive_minutes([d.home for d in drivers], st)):

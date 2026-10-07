@@ -52,8 +52,12 @@ class BrowserAmap(carpool.Amap):
             if key not in self.cache and key not in seen:
                 seen.add(key)
                 todo.append((key, path, query))
+        stage = carpool.current_stage
+        batches = (len(todo) + BATCH_LIMIT - 1) // BATCH_LIMIT
         for i in range(0, len(todo), BATCH_LIMIT):
             chunk = todo[i:i + BATCH_LIMIT]
+            # 一批要按高德的频率上限慢慢发，可能要十几秒；告诉页面在等什么
+            _post_progress(f"{stage}（批量请求 {len(todo)} 个，第 {i // BATCH_LIMIT + 1}/{batches} 批）", None, None)
             try:
                 results = self._post_json(f"{self.base}/amap-batch", {"requests": [{"path": p, "query": q} for _, p, q in chunk]})["results"]
             except (ConnectionError, KeyError, ValueError):
@@ -77,6 +81,19 @@ class BrowserAmap(carpool.Amap):
 
 
 BATCH_LIMIT = 40  # Worker 免费套餐单次请求最多 50 个子请求
+
+
+def _post_progress(label: str, done, total) -> None:
+    """把进度发给页面（Web Worker 的 postMessage，页面在计算进行中也能收到）。"""
+    try:
+        from js import Object, postMessage
+        from pyodide.ffi import to_js
+    except ImportError:  # 不在浏览器里（测试）
+        return
+    postMessage(to_js({"progress": {"label": label, "done": done, "total": total}}, dict_converter=Object.fromEntries))
+
+
+carpool.progress = _post_progress
 amap: carpool.Amap = BrowserAmap()
 _last: dict | None = None
 
