@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /t/
+Disallow: /p/
+Disallow: /api/
+Disallow: /admin
+Sitemap: https://carpool.eigentime.org/sitemap.xml

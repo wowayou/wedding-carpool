@@ -4,17 +4,121 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>拼车出行规划</title>
-<meta name="description" content="多人从不同城市去同一个地方：算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。">
+<title>拼车出行规划：多人异地出行，算出谁顺路接谁、在哪个高铁站接</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="description" content="多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游）：先定个大方向，算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。免费、无广告、开源。">
+<link rel="canonical" href="https://carpool.eigentime.org/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="拼车出行规划：多人异地出行，算出谁顺路接谁、在哪个高铁站接">
+<meta property="og:description" content="多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游）：先定个大方向，算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。免费、无广告、开源。">
+<meta property="og:url" content="https://carpool.eigentime.org/">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:site_name" content="拼车出行规划">
+<meta property="og:image" content="https://carpool.eigentime.org/demo-shot.png">
+<meta property="og:image:width" content="1140">
+<meta property="og:image:height" content="1350">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="拼车出行规划：多人异地出行，算出谁顺路接谁、在哪个高铁站接">
+<meta name="twitter:description" content="多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游）：先定个大方向，算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。免费、无广告、开源。">
+<meta name="twitter:image" content="https://carpool.eigentime.org/demo-shot.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "拼车出行规划",
+  "url": "https://carpool.eigentime.org/",
+  "description": "多人从不同城市去同一个地方（婚礼、聚会、团建、自驾游）：先定个大方向，算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。免费、无广告、开源。",
+  "applicationCategory": "TravelApplication",
+  "operatingSystem": "Web",
+  "inLanguage": "zh-CN",
+  "isAccessibleForFree": true,
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "CNY"
+  },
+  "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+  "author": {
+    "@type": "Person",
+    "name": "eigentime",
+    "url": "https://eigentime.org/"
+  },
+  "codeRepository": "https://github.com/wowayou/wedding-carpool",
+  "image": "https://carpool.eigentime.org/demo-shot.png"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "怎么决定在哪个高铁站接人？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "先在目的地周边、车主出发地附近和沿途自动找候选高铁站，再按车主顺路的程度、不开车的人坐车到站的时间排序；填了车次的话，会按到站时间倒推车主几点出发。最后选哪个站，大家看完方案再商量。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "要注册吗？要钱吗？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "不用注册，没有账号，也没有广告和付费功能。新建行程需要站长发的邀请码，或者填你自己的高德 Key；拿到编辑链接的人就能一起编辑。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "数据存多久？谁能看到？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "行程在「出行日期过后 60 天」和「连续 180 天没人编辑」中较晚的那天自动删除，也可以随时手动删除。行程只有拿到编辑链接的人能看到和修改；方案页拿到链接就能看，不含精确的出发地和家庭位置。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "算出来的结果准吗？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "它只是帮你先定个大方向、心里有个底：行车时间和路线来自高德地图，按查询时的路况估算，只供参考。具体在哪接、几点到，同行的人在群里再商量；当天以实际路况为准，车次和余票以 12306 为准。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "能不能自己部署一份？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "可以。代码开源（AGPL-3.0），按 GitHub 仓库的说明用自己的 Cloudflare 账号和高德 Key 部署即可，数据完全在你自己手里。"
+      }
+    }
+  ]
+}
+</script>
 <style>
   :root { --bg: #faf7f2; --ink: #24201c; --muted: #7a7168; --line: #ebe4da; --accent: #b4442c; --soft: #fbefe9; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
-  .wrap { max-width: 760px; margin: 0 auto; padding: 0 18px 48px; }
-  header { padding: 42px 0 18px; }
-  h1 { font-size: 28px; margin: 0 0 6px; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 18px 48px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 18px 0 0; font-weight: 600; font-size: 16px; }
+  .brand img { width: 32px; height: 32px; display: block; }
+  .brand a { margin-left: auto; font-weight: normal; font-size: 13px; color: var(--muted); }
+  header { padding: 28px 0 8px; max-width: 640px; }
+  h1 { font-size: 30px; line-height: 1.3; margin: 0 0 10px; }
   .lead { color: #4b443d; margin: 0; }
-  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 22px 0; }
+  .hero { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 28px; align-items: start; margin-top: 8px; }
+  .hero .side { position: sticky; top: 16px; }
+  .shot { margin: 18px 0 0; }
+  .shot picture, .shot img { display: block; width: 100%; height: auto; }
+  .shot img { border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(60, 40, 20, .12); background: #fff; }
+  .shot figcaption { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .shot a { color: var(--accent); font-weight: 600; }
+  .cta { display: none; margin-top: 16px; }
+  .quota { margin: 14px 0 0; padding: 7px 12px; border-radius: 10px; background: #fff; border: 1px solid var(--line); font-size: 13px; color: #4b443d; }
+  .quota.warn { background: #fff7e6; border-color: #f3dcb0; color: #92400e; }
+  .keep { margin: 12px 0 0; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 22px 0 0; }
   .steps div { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
   .steps b { display: block; color: var(--accent); }
   .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin: 18px 0; }
@@ -36,15 +140,43 @@
   .trip button { border: 0; background: none; color: var(--muted); cursor: pointer; }
   footer { color: var(--muted); font-size: 13px; margin-top: 28px; }
   footer a { color: var(--muted); }
+  .info { margin: 36px 0 0; max-width: 700px; }
+  .info h2 { font-size: 20px; margin: 0 0 12px; }
+  .info ul { padding-left: 20px; margin: 0; }
+  .info li { margin-bottom: 6px; }
+  details { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 16px; margin-bottom: 8px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 8px 0 2px; color: #4b443d; }
+  .btn.big { padding: 10px 22px; font-size: 16px; }
   [hidden] { display: none !important; }
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .hero .side { position: static; order: -1; }
+    h1 { font-size: 26px; }
+    .cta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="brand"><img src="/favicon.svg" width="32" height="32" alt=""><span>拼车出行规划</span><a href="/privacy">费用与隐私</a></div>
   <header>
-    <h1>拼车出行规划</h1>
-    <p class="lead">一群人从不同城市去同一个地方（婚礼、聚会、团建……），有人开车、有人坐高铁。这里帮你算出：谁开车顺路接谁、在哪个站接、几点出发；不开车的人坐到哪个站最合适；最后生成一页出行方案发给大家。先定个大方向、心里有个底，具体细节大家在群里再商量。</p>
+    <h1>先定个大方向，<br>心里有个底</h1>
+    <p class="lead">一群人从不同城市去同一个地方（婚礼、聚会、团建……），有人开车、有人坐高铁。这里帮你算出一个初步方案：谁开车顺路接谁、在哪个站接；不开车的人坐到哪个站最合适。生成一页发给大家，具体细节再在群里商量。</p>
+    <div class="cta"><a class="btn big" href="#create">新建行程</a><a href="/demo">看示例方案页</a></div>
+    <div class="quota" id="quota" hidden></div>
   </header>
+
+  <div class="hero">
+  <div class="main">
+  <figure class="shot">
+    <a href="/demo" aria-label="打开示例方案页">
+    <picture>
+      <source type="image/webp" srcset="/demo-shot.webp">
+      <img src="/demo-shot.png" width="1140" height="1350" alt="示例方案页：黄山宏村出行，一位车主从杭州、一位从南京出发，沿途接人，地图上标出路线和车站">
+    </picture></a>
+    <figcaption><span>示例（虚构的行程）：每个人一张时间线，地图看绕了哪段路</span><a href="/demo">看示例方案页 →</a></figcaption>
+  </figure>
 
   <div class="steps">
     <div><b>① 填目的地和成员</b>谁开车、从哪出发、几个空座</div>
@@ -52,6 +184,8 @@
     <div><b>③ 填车次</b>一键打开填好出发地的 12306 查车次</div>
     <div><b>④ 算方案、发链接</b>每人一张时间线，地图看绕了哪段路</div>
   </div>
+  </div>
+  <div class="side">
 
   <div class="card" id="mine" hidden>
     <h2>我打开过的行程</h2>
@@ -70,15 +204,40 @@
       <label><span>高德 Web 服务 Key</span><input type="text" id="amapKey" autocomplete="off" placeholder="32 位字母和数字"></label>
       <p class="hint">在 <a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只保存在服务器上，不会再显示在网页里；调用次数算在你自己的免费额度里，用完会停下提示。</p>
     </div>
-    <button class="btn" id="createBtn">新建并开始编辑</button>
+    <button class="btn big" id="createBtn">新建并开始编辑</button>
+    <p class="hint keep">行程会在「出行日期过后 60 天」和「连续 180 天没人编辑」中较晚的那天自动删除，也可以随时手动删。</p>
     <div class="err" id="err"></div>
     <p class="hint">新建后会得到一个<b>编辑链接</b>，发给一起规划的人就能多人同时编辑。只想让大家看结果的话，发之后生成的<b>方案页</b>链接就行。</p>
   </form>
 
+  </div>
+  </div>
+
+  <section class="info" id="scenes">
+    <h2>适合哪些场合</h2>
+    <ul>
+      <li><b>婚礼</b>：亲友从各地来，安排谁开车顺路接谁、不开车的人坐到哪个站。</li>
+      <li><b>同学或家庭聚会</b>：几家人从不同城市出发，算出哪辆车顺路带上谁，少开几辆车。</li>
+      <li><b>团建和公司活动</b>：同事分散在几个城市，先定好在哪个站汇合、几点出发。</li>
+      <li><b>自驾游拼车</b>：几辆车各自出发，沿途顺路接上坐高铁来的朋友。</li>
+      <li><b>去看演唱会和比赛</b>：外地的朋友约着去同一座城市，拼车或在车站汇合。</li>
+      <li><b>会议和活动的接站</b>：外地嘉宾坐高铁到站，安排车主顺路接到会场。</li>
+    </ul>
+  </section>
+
+  <section class="info" id="faq">
+    <h2>常见问题</h2>
+      <details><summary>怎么决定在哪个高铁站接人？</summary><p>先在目的地周边、车主出发地附近和沿途自动找候选高铁站，再按车主顺路的程度、不开车的人坐车到站的时间排序；填了车次的话，会按到站时间倒推车主几点出发。最后选哪个站，大家看完方案再商量。</p></details>
+      <details><summary>要注册吗？要钱吗？</summary><p>不用注册，没有账号，也没有广告和付费功能。新建行程需要站长发的邀请码，或者填你自己的高德 Key；拿到编辑链接的人就能一起编辑。</p></details>
+      <details><summary>数据存多久？谁能看到？</summary><p>行程在「出行日期过后 60 天」和「连续 180 天没人编辑」中较晚的那天自动删除，也可以随时手动删除。行程只有拿到编辑链接的人能看到和修改；方案页拿到链接就能看，不含精确的出发地和家庭位置。</p></details>
+      <details><summary>算出来的结果准吗？</summary><p>它只是帮你先定个大方向、心里有个底：行车时间和路线来自高德地图，按查询时的路况估算，只供参考。具体在哪接、几点到，同行的人在群里再商量；当天以实际路况为准，车次和余票以 12306 为准。</p></details>
+      <details><summary>能不能自己部署一份？</summary><p>可以。代码开源（AGPL-3.0），按 GitHub 仓库的说明用自己的 Cloudflare 账号和高德 Key 部署即可，数据完全在你自己手里。</p></details>
+  </section>
+
   <footer>
     数据保存在 Cloudflare：行程只有拿到编辑链接的人能看到和修改；方案页链接拿到就能看，可以加访问口令，不含精确的出发地和家庭位置；行程按期限自动删除。详见<a href="/privacy">费用与隐私</a>。
     开源：<a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">github.com/wowayou/wedding-carpool</a>，可以自己部署一份。<br>
-    这个工具是公益性质的，免费、无广告。觉得有用的话可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。
+    这个工具是公益性质的，免费、无广告。作者主页：<a href="https://eigentime.org/" target="_blank" rel="noopener">eigentime.org</a>。AI 启蒙与学习来自 <a href="https://linux.do/" target="_blank" rel="noopener">LINUX DO</a> 社区
   </footer>
 </div>
 <script>
@@ -109,6 +268,7 @@ document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener(
 
 $('#create').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!creating) return;
   const byKey = document.querySelector('input[name=mode]:checked').value === 'key';
   const body = { name: $('#name').value.trim(), ...(byKey ? { amapKey: $('#amapKey').value.trim() } : { code: $('#code').value }) };
   $('#createBtn').disabled = true;
@@ -124,9 +284,37 @@ $('#create').addEventListener('submit', async (e) => {
   } catch (err) {
     $('#err').textContent = err.message;
   } finally {
-    $('#createBtn').disabled = false;
+    $('#createBtn').disabled = !creating;
   }
 });
+
+// 站点额度状态（A.7 的 /api/status）：请求失败、404、格式不对都整块隐藏，不报错
+let creating = true;
+function showStatus(data) {
+  const box = $('#quota');
+  const pub = data && data.public;
+  const levels = ['ok', 'tight', 'out', 'paused'];
+  if (!pub || !levels.includes(pub.level) || typeof data.creating !== 'boolean') return;
+  const lines = [];
+  let warn = pub.level !== 'ok';
+  const pct = Number.isFinite(pub.usedPct) ? Math.max(0, Math.min(100, Math.round(pub.usedPct))) : null;
+  if (pub.level === 'ok' || pub.level === 'tight') {
+    if (pct === null) return;
+    lines.push(`今天站点公共额度：已用 ${pct}%` + (pub.level === 'tight' ? '，比较紧张；也可以改用自己的高德 Key' : ''));
+  } else if (pub.level === 'out') {
+    lines.push('今天的公共额度用完了，可以改用自己的高德 Key，或者明天再来');
+  } else {
+    lines.push('站点暂停了公共额度，可以改用自己的高德 Key');
+  }
+  if (Number.isFinite(pub.searchMonthPct) && pub.searchMonthPct >= 90) { lines.push('本月地点搜索额度快用完了'); warn = true; }
+  if (!data.creating) { lines.push('站点暂停了新建行程'); warn = true; }
+  creating = data.creating;
+  $('#createBtn').disabled = !creating;
+  box.classList.toggle('warn', warn);
+  box.textContent = lines.join('。');
+  box.hidden = false;
+}
+fetch('/api/status').then((r) => (r.ok ? r.json() : null)).then(showStatus).catch(() => {});
 
 renderTrips();
 // 邀请链接 /?invite=xxxx：自动填好邀请码

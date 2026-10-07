@@ -4,6 +4,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="canonical" href="https://carpool.eigentime.org/privacy">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>费用与隐私 · 拼车出行规划</title>
 <meta name="description" content="拼车出行规划存了哪些数据、存在哪、谁能看、保留多久，以及可能产生费用的地方。">
 <style>
@@ -19,6 +22,9 @@
   th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
   th { background: #f6f1ea; font-weight: 600; }
   a { color: var(--accent); }
+  .keep { background: #fbefe9; border: 1px solid #e8b9a8; border-left: 5px solid var(--accent); border-radius: 12px; padding: 4px 18px 8px; margin: 20px 0 4px; }
+  .keep h2 { margin: 12px 0 6px; }
+  .keep .rule { margin: 0 0 4px; }
   .box { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
 </style>
 </head>
@@ -29,6 +35,16 @@
   <p class="lead">这一页说明这个服务存了什么、存在哪、谁能看、保留多久，以及哪里可能花钱。代码开源（AGPL-3.0），下面每一条都可以在 <a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">GitHub 仓库</a>里核对。</p>
 
   <div class="box"><b>一句话</b>：没有账号、没有广告、不做统计埋点。行程数据只有拿到编辑链接的人能看到和修改；方案页拿到链接就能看，可以加访问口令，而且不含精确的出发地和家庭位置。行程会按期限自动删除，也可以随时手动删除。</div>
+
+  <div class="keep">
+    <h2>保留多久、怎么删除</h2>
+    <p class="rule">到期规则：<b>出行日期过后 60 天</b>和<b>连续 180 天没人编辑</b>，取较晚的那个。</p>
+    <ul>
+      <li>到期后<b>自动删除</b>整个行程，包括配置、历史版本和方案页。到期前 7 天编辑页会提示，可以先导出备份。</li>
+      <li>编辑页「更多」里可以<b>随时删除行程</b>，删除后所有链接立即失效，不能恢复。</li>
+      <li>Cloudflare 内部的备份和日志按 Cloudflare 的政策保留。</li>
+    </ul>
+  </div>
 
   <h2>存了什么</h2>
   <table>
@@ -50,7 +66,7 @@
     <li>数据存在 <a href="https://www.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a>：每个行程一个独立的存储实例（Durable Object），方案页存在 Cloudflare KV（会复制到各地的节点）。</li>
     <li><b>编辑链接</b>（<code>/t/行程#k=密钥</code>）等于编辑权限，密钥约 120 位随机、无法猜测；密钥在 <code>#</code> 之后，不会出现在服务器日志里。链接外传了，可以在编辑页「更多」里<b>重置</b>，旧链接立即失效。</li>
     <li><b>方案页</b>（<code>/p/…</code>）拿到链接就能看，不会被搜索引擎收录。可以设访问口令，可以换链接或停止分享。方案页上车主路线从出发地约 2 公里外开始画，「到家附近接」的地点不标位置。</li>
-    <li>站长可以通过 Cloudflare 后台从技术上访问存储，除非排查故障不会去看。</li>
+    <li>站长可以通过 Cloudflare 后台从技术上访问存储，只有排查故障的时候才有可能去看。</li>
   </ul>
 
   <h2>交给了哪些第三方</h2>
@@ -60,13 +76,6 @@
     <li><b>12306</b>：「查车次」只是跳转到 12306 的查询页，本站不向 12306 发送任何数据。</li>
   </ul>
 
-  <h2>保留多久、怎么删除</h2>
-  <ul>
-    <li>行程在「出行日期过后 60 天」和「连续 180 天没人编辑」两个时间里取较晚的那个，<b>到期自动删除</b>，包括配置、历史版本和方案页。到期前 7 天编辑页会提示，可以先导出备份。</li>
-    <li>编辑页「更多」里可以<b>随时删除行程</b>，删除后所有链接立即失效，不能恢复。</li>
-    <li>Cloudflare 内部的备份和日志按 Cloudflare 的政策保留。</li>
-  </ul>
-
   <h2>方案只供参考</h2>
   <p>行车时间和路线来自高德，按查询时的路况估算；地图数据、路况和现实也可能不完全一致。算出来的方案只供参考，不能作为开车和出行的唯一依据：当天以实际路况为准，开车遵守交通规则。车次、余票以 12306 为准。</p>
 
@@ -74,12 +83,12 @@
   <p>这个工具是公益性质的，<b>免费、无广告、没有付费功能</b>。运营成本和额度：</p>
   <table>
     <tr><th>资源</th><th>现在的用法</th><th>超出时会怎样</th></tr>
-    <tr><td>Cloudflare Workers、Durable Objects、KV</td><td>免费套餐（每天 10 万次请求等）</td><td>当天报错，不会产生费用</td></tr>
+    <tr><td>Cloudflare Workers、Durable Objects、KV</td><td>免费套餐，和站长的其他服务共用一个账户的额度（每天 10 万次请求、KV 每天 1000 次写入等）</td><td>用完当天报错，不会产生费用</td></tr>
     <tr><td>高德 Web 服务（站点公共额度）</td><td>站长的 Key，按行程和全站分别设每日上限</td><td>停下提示，不会继续调用，也不会自动购买；可以改用自己的 Key 接着用，或者第二天再来</td></tr>
     <tr><td>高德 Web 服务（你自己的 Key）</td><td>算在你自己的免费额度里</td><td>高德返回额度用完时停下提示；本站不会替你购买任何额度</td></tr>
     <tr><td>域名</td><td>站长自费</td><td>—</td></tr>
   </table>
-  <p>觉得有用的话，可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。</p>
+  <p>作者主页：<a href="https://eigentime.org/" target="_blank" rel="noopener">eigentime.org</a></p>
 
   <h2>自己部署</h2>
   <p>不想把数据放在这里，可以按 <a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">README</a> 用自己的 Cloudflare 账号和高德 Key 部署一份。</p>

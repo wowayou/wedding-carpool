@@ -5,6 +5,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>拼车出行规划</title>
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {
@@ -26,6 +29,8 @@
   .bar-top { display: flex; gap: 8px; align-items: center; }
   .bar-top h1 { margin: 0; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar-sub { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--muted); min-height: 22px; }
+  .expiry { border: 1px solid var(--line); background: var(--chip); color: var(--muted); border-radius: 999px; padding: 0 8px; font-size: 12px; line-height: 18px; margin-left: 4px; }
+  .expiry.soon { border-color: #fed7aa; background: var(--warn-bg); color: var(--warn-ink); }
   .peers { display: flex; gap: 4px; flex-wrap: wrap; }
   .peer-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 2px; border-radius: 999px; background: var(--chip); font-size: 12px; color: var(--ink); }
   .peer-chip i { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-style: normal; font-size: 11px; }
@@ -142,7 +147,7 @@
         <button class="btn local-only" id="save">保存</button>
         <button class="btn primary" id="plan">计算方案</button>
       </div>
-      <div class="bar-sub"><span id="status"></span><span class="peers" id="peers"></span></div>
+      <div class="bar-sub"><span><span id="status"></span> <button class="expiry" id="expiryChip" title="这个行程到期会自动删除，点开看说明" hidden></button></span><span class="peers" id="peers"></span></div>
       <div class="progress" id="progress" hidden><span id="progressText"></span><div class="bar"><i id="progressBar"></i></div></div>
     </header>
     <nav class="steps" id="steps"></nav>
@@ -188,7 +193,7 @@
     <p class="muted">申请大约 3 分钟：<a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只保存在服务器上、只用于这个行程，调用次数算在你自己的免费额度里。</p>
     <div class="row" style="align-items:center"><button class="btn primary" id="quotaKeyBtn">用我的 Key 继续</button><span class="muted" id="quotaErr" style="color:var(--danger)"></span></div>
     <p class="muted" style="margin-top:12px">也可以明天再来：额度在北京时间零点恢复，已填的内容都在。</p>
-    <p class="muted">这个工具是公益性质的，免费、无广告。觉得有用的话可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。</p>
+    <p class="muted">这个工具是公益性质的，免费、无广告。作者主页：<a href="https://eigentime.org/" target="_blank" rel="noopener">eigentime.org</a></p>
     <button class="btn" id="quotaClose">关闭</button>
   </div>
 </div>
@@ -918,7 +923,7 @@ const backend = {
   },
   async share(plan, backPlan) {
     if (mode !== 'online') return api('/api/share', { plan, back_plan: backPlan });
-    const { html } = await py('share', { plan, back_plan: backPlan });
+    const { html } = await py('share', { plan, back_plan: backPlan, expires: trip.expiresAt || null }); // 方案页页脚写明自动删除日期
     return api(`${API}/page`, { html });
   },
 };
@@ -1233,12 +1238,12 @@ function openMenu() {
         : '<span class="muted">还没发布：算出方案后点「发布方案页」</span>'}</span>
       <span>访问口令</span><span><span class="row"><input id="shareCode" value="${esc(share.code)}" maxlength="20" placeholder="不设"><button class="ghost" id="shareCodeBtn">保存</button></span>
         <span class="muted">设了口令，看方案页要先输入；方案页本来就不含精确出发地和家庭位置</span></span>
-      <span>保留到</span><span class="muted">${expires ? `${expires.getFullYear()}-${expires.getMonth() + 1}-${expires.getDate()}` : '—'}：出行日期过后 60 天、或连续 180 天没人编辑，自动删除（取较晚的）</span>
+      <span>保留到</span><span class="muted">${expires ? fmtDate(trip.expiresAt) : '—'}：出行日期过后 60 天、或连续 180 天没人编辑，自动删除（取较晚的）</span>
       <span>高德额度</span><span class="muted">${trip.mode === 'own' ? '用你自己的高德 Key' : '用站点的公共额度'}，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用${trip.mode === 'own' ? '' : '<br><button class="link" id="ownKeyBtn">改用自己的高德 Key</button>'}</span>
     </div>
     <p class="muted">编辑链接等于编辑权限，只发给一起规划的人。要给大家看结果，发「方案页」链接就行，不用发编辑链接。<a href="/privacy" target="_blank" rel="noopener">数据存了什么、存多久、可能的费用</a></p>` : ''}
-    <h3 style="font-size:13px;margin:14px 0 6px">支持</h3>
-    <p class="muted">这个工具是公益性质的，免费、无广告。觉得有用的话可以<a href="https://eigentime.org/support/?from=carpool" target="_blank" rel="noopener">自愿支持作者</a>：完全自愿；所有功能始终免费；支持不换取任何功能、优先权或产品方向。</p>
+    <h3 style="font-size:13px;margin:14px 0 6px">关于</h3>
+    <p class="muted">这个工具是公益性质的，免费、无广告。作者主页：<a href="https://eigentime.org/" target="_blank" rel="noopener">eigentime.org</a></p>
     <h3 style="font-size:13px;margin:14px 0 6px">备份</h3>
     <div class="row"><button class="btn" id="exportBtn">导出配置（JSON）</button><button class="btn" id="importBtn">导入配置</button></div>
     <p class="muted">导入会替换现在的配置${mode === 'online' ? '，旧内容留在「历史」里' : ''}。</p>
@@ -1334,6 +1339,16 @@ function rememberTrip(key) {
   store.set('carpool_trips', list.slice(0, 30));
 }
 
+// 保留到哪天：只有在线模式有保留期；点标签打开「更多」，里面有规则说明
+const fmtDate = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+function renderExpiry() {
+  const chip = $('#expiryChip');
+  chip.hidden = !(mode === 'online' && trip.expiresAt);
+  if (chip.hidden) return;
+  chip.textContent = `保留到 ${fmtDate(trip.expiresAt)}`;
+  chip.classList.toggle('soon', trip.expiresAt - Date.now() <= 7 * 864e5);
+}
+
 function renderTitle() {
   const name = mode === 'online' ? trip.name || '未命名行程' : '拼车出行规划';
   $('#title').textContent = name;
@@ -1364,6 +1379,7 @@ async function loadConfig(keepFocus) {
   if (mode === 'online') Object.assign(trip, { name: data.name, mode: data.mode, share: data.share, usage: data.usage, expiresAt: data.expiresAt });
   else trip.file = data.file;
   renderTitle();
+  renderExpiry();
   if (keepFocus) rerenderKeepingFocus(); else renderForm();
   setStatus();
 }
@@ -1461,6 +1477,7 @@ $('#drawer').addEventListener('click', async (e) => {
 
 $('#historyBtn').addEventListener('click', openHistory);
 $('#menuBtn').addEventListener('click', openMenu);
+$('#expiryChip').addEventListener('click', openMenu);
 $('#importFile').addEventListener('change', (e) => { if (e.target.files[0]) importConfig(e.target.files[0]); e.target.value = ''; });
 $('#save').addEventListener('click', () => save().catch((e) => alert('保存失败：' + e.message)));
 $('#plan').addEventListener('click', runPlan);

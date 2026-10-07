@@ -10,5 +10,10 @@ cpSync('web/pyworker.js', 'dist/pyworker.js');
 cpSync('web/stations12306.json', 'dist/stations12306.json');
 cpSync('web/privacy.html', 'dist/privacy.html'); // 费用与隐私说明
 cpSync('web/admin.html', 'dist/admin.html'); // 管理页：邀请码、用量
+// 图标和首屏示例：站点根目录；/demo 是静态的示例方案页（虚构行程，由 demo 流程生成，不经过 Worker）
+for (const name of ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'demo-shot.webp']) cpSync(`web/${name}`, `dist/${name}`);
+cpSync('web/demo-shot.png', 'dist/demo-shot.png');
+cpSync('web/demo.html', 'dist/demo.html');
+for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt']) cpSync(`web/${name}`, `dist/${name}`); // 搜索引擎和 AI 问答用
 for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py']) cpSync(name, `dist/py/${name}`);
 console.log('dist/ 已生成');
