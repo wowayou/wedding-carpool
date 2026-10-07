@@ -1,0 +1,7 @@
+# 静态文件的安全响应头（只作用于直接由静态资源返回的页面；Worker 生成的响应在 web/worker.js 里加同一组，两处保持一致）
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=15552000
+  Permissions-Policy: geolocation=(), camera=(), microphone=()

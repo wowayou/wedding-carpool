@@ -256,7 +256,7 @@ TEMPLATE = """<!doctype html>
 <meta property="og:description" content="{description}">
 <link rel="icon" type="image/svg+xml" href="https://carpool.eigentime.org/favicon.svg">
 <link rel="apple-touch-icon" href="https://carpool.eigentime.org/apple-touch-icon.png">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous">
 <style>
   :root {{ --bg: #faf7f2; --card: #fff; --ink: #24201c; --muted: #7a7168; --line: #ebe4da; --accent: #b4442c; --drive: #15803d; --ride: #d97706; --taxi: #6b7280; }}
   * {{ box-sizing: border-box; }}
@@ -340,7 +340,7 @@ TEMPLATE = """<!doctype html>
   <footer>生成于 {stamp} · 链接会打开高德地图{expire_note}<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a></footer>
 </div>
 <script id="data" type="application/json">{data}</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
 <script>
 document.getElementById('printBtn').addEventListener('click', function () {{ window.print(); }});
 (function () {{
