@@ -63,7 +63,8 @@ class QuotaError(AmapError):
 # 配额类错误：日调用量超限（含账号维度、海外）、额度用完、服务到期
 # 网页版还有两种：单个行程每天的上限、站长 Key 全站每天的上限
 QUOTA_INFOS = ("DAILY_QUERY_OVER_LIMIT", "QUOTA_PLAN_RUN_OUT", "SERVICE_EXPIRED", "TRIP_DAILY_LIMIT", "OWNER_DAILY_LIMIT",
-               "INVITE_DISABLED", "OWNER_RESERVED")  # 后两种：邀请码停用、公共额度留给已在算的行程
+               "INVITE_DISABLED", "OWNER_RESERVED",  # 邀请码停用、公共额度留给已在算的行程
+               "PUBLIC_PAUSED", "TRIP_BLOCKED", "MONTHLY_BUDGET")  # 站长暂停了公共额度、停用了这个行程的公共额度、站点本月预算用完
 
 
 def check_quota(info: str, detail: str = "") -> None:

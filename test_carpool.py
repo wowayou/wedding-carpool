@@ -479,6 +479,13 @@ class ResolveAndSuggestTest(unittest.TestCase):
             carpool.check_quota("TRIP_DAILY_LIMIT", "这个行程今天的高德调用已到上限")
         self.assertIn("行程今天", str(ctx.exception))
 
+    def test_emergency_and_budget_infos_stop_like_quota(self):
+        for info in ("PUBLIC_PAUSED", "TRIP_BLOCKED", "MONTHLY_BUDGET"):
+            with self.assertRaises(carpool.QuotaError, msg=info) as ctx:
+                carpool.check_quota(info, "站点暂时停用了公共额度")
+            self.assertIn("额度", str(ctx.exception))
+        carpool.check_quota("OK")  # 普通返回不受影响
+
 
 class ReturnTripTest(unittest.TestCase):
     """返程插件：目的地 → 送人点 → 车主家，送到站要赶得上车次。"""

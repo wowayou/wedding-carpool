@@ -4,9 +4,10 @@
 //
 // 绑定：ROOM（Durable Object，每个行程一个实例）、USAGE（Durable Object，全站计数）、
 //       DATA（KV：方案页、高德配额标记）、ASSETS（静态文件 dist/）
-// 密钥：AMAP_KEY（站长的高德 Key）、ACCESS_CODE（创建口令，用站长 Key 新建行程时要填）
+// 密钥：AMAP_KEY（站长的高德 Key）、ACCESS_CODE（站长口令，只用于登录管理页，不能当邀请码）
 // 可选变量：TRIP_DAILY_LIMIT（用站长 Key 的行程每天的高德调用上限）、OWN_TRIP_DAILY_LIMIT（自带 Key 的行程每天上限，
-//          只防程序出错时无限调用）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）
+//          只防程序出错时无限调用）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）、
+//          OWNER_MONTHLY_LBS_BUDGET / OWNER_MONTHLY_SEARCH_BUDGET（站长 Key 每月的路线测距类、搜索类预算）
 
 // 只放行计算用到的高德接口
 const AMAP_PATHS = new Set([
@@ -21,11 +22,23 @@ const HISTORY_MERGE_MS = 2 * 60 * 1000; // 同一个人 2 分钟内的连续保�
 const DEFAULT_TRIP_DAILY_LIMIT = 1500;
 const DEFAULT_OWN_TRIP_DAILY_LIMIT = 3000;
 const DEFAULT_OWNER_DAILY_LIMIT = 4000;
+// 站长 Key 每月预算，按高德的两类分别记；比高德的免费额度留一点余量。高德没有查剩余额度的接口，只能自己计数
+const DEFAULT_OWNER_MONTHLY_BUDGET = { lbs: 140000, search: 4500 };
+const DAILY_KEEP_DAYS = 35; // 每天的用量只保留这么久（月累计要用到整个自然月）
+const DAILY_SHOW_DAYS = 30; // 管理页显示近多少天
 const CREATE_PER_IP_PER_DAY = 10;
 // 数据保留期：出行日期后 60 天、最后一次编辑后 180 天，取较晚的那个；到期由行程实例的定时任务删除
 const RETAIN_AFTER_TRAVEL_MS = 60 * 86400e3;
 const RETAIN_IDLE_MS = 180 * 86400e3;
 const SHARE_ATTEMPTS_PER_HOUR = 20; // 方案页访问口令每个方案页每小时最多试 20 次
+const EDIT_CODE_TRIES_PER_HOUR = 10; // 编辑口令每个行程每小时最多试错 10 次
+const EDIT_CODE_LENGTH = [4, 20];
+// 管理页登录：同一 IP 15 分钟内最多试错 5 次，全站每小时最多试错 30 次；会话令牌 24 小时过期
+const ADMIN_FAILS_PER_IP = 5, ADMIN_IP_WINDOW_MS = 15 * 60e3;
+const ADMIN_FAILS_GLOBAL = 30, ADMIN_GLOBAL_WINDOW_MS = 3600e3;
+const ADMIN_SESSION_SECONDS = 86400;
+const ADMIN_OPS_LIMIT = 50; // 管理操作记录保留条数
+const TRACKED_TRIPS_LIMIT = 200; // 最近用过公共额度的行程，最多记这么多个
 const OWNER_RESERVE_RATIO = 0.8; // 公共额度用过八成后，当天还没用过公共额度的行程不再分配，留给已经在算的
 const CREATE_PER_DAY = 200;
 // 成功结果在 Cloudflare 节点上缓存：地点类变化慢，行车时间和路线跟路况走，缓存短一些
@@ -39,8 +52,10 @@ const quotaClass = (path) => (SEARCH_PATHS.has(path) ? 'search' : 'lbs');
 const QPS_RE = /QPS|TOO_FREQUENT/;
 const EMPTY_CONFIG = { venue: { name: '' }, options: { max_detour_min: 30, max_stops: 2 }, stations: [], people: [] };
 
+const QUOTA_CLASSES = ['lbs', 'search'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const beijingDay = (now = Date.now()) => new Date(now + 8 * 3600e3).toISOString().slice(0, 10);
+const DAY_MS = 86400e3;
 
 function nextBeijingMidnight(now = Date.now()) {
   const day = 86400e3, offset = 8 * 3600e3;
@@ -63,6 +78,16 @@ async function sha256(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// 常数时间比较：两边先哈希成等长，再逐字节比（运行时有 timingSafeEqual 就直接用）
+async function safeEqual(a, b) {
+  const digest = async (text) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  const [x, y] = await Promise.all([digest(String(a)), digest(String(b))]);
+  if (typeof crypto.subtle.timingSafeEqual === 'function') return crypto.subtle.timingSafeEqual(x, y);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
 function randomId(length) {
   const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
   return [...crypto.getRandomValues(new Uint8Array(length))].map((b) => alphabet[b % alphabet.length]).join('');
@@ -82,9 +107,10 @@ function getCookie(request, name) {
 const limitOf = (env, name, fallback) => Number(env[name]) || fallback;
 const roomOf = (env, id) => env.ROOM.get(env.ROOM.idFromName(id));
 const usageOf = (env) => env.USAGE.get(env.USAGE.idFromName('global'));
-const internal = (path, body, key) => new Request(`https://internal${path}`, {
+// auth：{ key, code }，编辑密钥和编辑口令哈希（来自 Cookie），由 Worker 填写，不能让客户端自己带
+const internal = (path, body, auth) => new Request(`https://internal${path}`, {
   method: body === undefined ? 'GET' : 'POST',
-  headers: key === undefined ? {} : { 'x-trip-key': key },
+  headers: auth === undefined ? {} : { 'x-trip-key': auth.key, 'x-trip-code': auth.code || '' },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
@@ -103,27 +129,31 @@ async function amapKeyProblem(amapKey) {
   return '';
 }
 
+const tripNameOf = (body) => String(body.name || '').trim().slice(0, 60) || '未命名行程';
+
 async function createTrip(request, env) {
   const body = await readJson(request, 4096);
-  const name = String(body.name || '').trim().slice(0, 60) || '未命名行程';
+  const name = tripNameOf(body);
   let mode, amapKey = null;
   const code = String(body.code || '').trim();
   if (code) {
-    mode = 'owner'; // 站长口令或邀请码：用站点的公共额度
+    mode = 'owner'; // 邀请码：用站点的公共额度（站长口令只能登录管理页，不能当邀请码）
   } else if (body.amapKey) {
     amapKey = String(body.amapKey).trim();
+    const open = await usageOf(env).fetch(internal('/create-check', {})); // 暂停新建时不用再去验 Key
+    if (!open.ok) return open;
     const problem = await amapKeyProblem(amapKey);
     if (problem) return json({ error: problem }, 400);
     mode = 'own';
   } else {
-    return json({ error: '要么填创建口令，要么填自己的高德 Key' }, 400);
+    return json({ error: '要么填邀请码，要么填自己的高德 Key' }, 400);
   }
   const ip = await sha256(request.headers.get('cf-connecting-ip') || 'unknown');
   const gate = await usageOf(env).fetch(internal('/create', { ip }));
   if (!gate.ok) return gate;
   const id = randomId(10), key = randomId(24);
   let invite = null, tripLimit = null;
-  if (code && !(env.ACCESS_CODE && code === env.ACCESS_CODE)) {
+  if (code) {
     // 邀请码：检查有效、未过期、没用满，并占一个名额
     const res = await usageOf(env).fetch(internal('/invite-use', { code, tripId: id }));
     if (!res.ok) { await sleep(800); return res; } // 拖慢猜邀请码
@@ -133,59 +163,124 @@ async function createTrip(request, env) {
   return json({ id, key, url: `/t/${id}#k=${key}` });
 }
 
-// ---------- 管理页：站长口令登录，管理邀请码、看用量 ----------
+// 站长在管理页用公共额度新建行程：仍算进全站每天新建总数，不受单 IP 限制，也不受「暂停新建」影响
+async function adminCreateTrip(request, env) {
+  const name = tripNameOf(await readJson(request, 1024));
+  const gate = await usageOf(env).fetch(internal('/create', { ip: null, admin: true }));
+  if (!gate.ok) return gate;
+  const id = randomId(10), key = randomId(24);
+  await roomOf(env, id).fetch(internal('/init', { id, name, mode: 'owner', amapKey: null, invite: null, tripLimit: null, keyHash: await sha256(key) }));
+  await usageOf(env).fetch(internal('/admin-log', { op: '用公共额度新建行程', target: id }));
+  return json({ id, key, url: `/t/${id}#k=${key}` });
+}
 
-const adminToken = (env) => sha256(`admin:${env.ACCESS_CODE}`);
+// ---------- 管理页：站长口令登录，管理邀请码、看用量、应急开关 ----------
+
+const statusCacheKey = (url) => new Request(`${url.origin}/api/status`);
 
 async function adminApi(request, env, url) {
   const sub = url.pathname.slice('/api/admin'.length);
   if (!env.ACCESS_CODE) return json({ error: '这个站点没有设置站长口令' }, 404);
+  const usage = usageOf(env);
+  const secure = url.protocol === 'https:' ? ' Secure;' : '';
+  const cookie = (value, maxAge) => `adm=${value}; Path=/api/admin; HttpOnly;${secure} SameSite=Strict; Max-Age=${maxAge}`;
   if (sub === '/login' && request.method === 'POST') {
     const { code = '' } = await readJson(request, 1024);
-    if (code !== env.ACCESS_CODE) { await sleep(800); return json({ error: '口令不对' }, 401); }
-    const secure = url.protocol === 'https:' ? ' Secure;' : '';
-    return json({ ok: true }, 200, { 'set-cookie': `adm=${await adminToken(env)}; Path=/api/admin; HttpOnly;${secure} SameSite=Strict; Max-Age=86400` });
+    const ip = await sha256(request.headers.get('cf-connecting-ip') || 'unknown');
+    const gate = await usage.fetch(internal('/admin-gate', { ip }));
+    if (!gate.ok) return gate;
+    if (!(await safeEqual(code, env.ACCESS_CODE))) {
+      await usage.fetch(internal('/admin-fail', { ip }));
+      await sleep(800);
+      return json({ error: '口令不对' }, 401);
+    }
+    // 登录成功发随机令牌；服务端只存令牌的哈希和过期时间
+    const token = randomId(32);
+    await usage.fetch(internal('/admin-login', { hash: await sha256(token), expiresAt: Date.now() + ADMIN_SESSION_SECONDS * 1000 }));
+    return json({ ok: true }, 200, { 'set-cookie': cookie(token, ADMIN_SESSION_SECONDS) });
   }
-  if (getCookie(request, 'adm') !== (await adminToken(env))) return json({ error: '需要站长口令' }, 401);
-  const usage = usageOf(env);
-  if (sub === '/stats') return usage.fetch(internal('/stats', { ownerLimit: limitOf(env, 'OWNER_DAILY_LIMIT', DEFAULT_OWNER_DAILY_LIMIT) }));
-  if (sub === '/invites' && request.method === 'POST') return usage.fetch(internal('/invite-create', await readJson(request, 2048)));
+  const token = getCookie(request, 'adm');
+  const checked = token ? await usage.fetch(internal('/admin-check', { hash: await sha256(token) })) : null;
+  if (!checked?.ok) return json({ error: '需要站长口令' }, 401);
+  const post = request.method === 'POST';
+  if (sub === '/stats') {
+    return usage.fetch(internal('/stats', {
+      ownerLimit: limitOf(env, 'OWNER_DAILY_LIMIT', DEFAULT_OWNER_DAILY_LIMIT), budgets: budgetsOf(env),
+    }));
+  }
+  if (sub === '/logout-all' && post) {
+    const res = await usage.fetch(internal('/admin-logout-all', {}));
+    return json(await res.json(), 200, { 'set-cookie': cookie('', 0) });
+  }
+  if (sub === '/trips' && post) return adminCreateTrip(request, env);
+  if (sub === '/invites' && post) return usage.fetch(internal('/invite-create', await readJson(request, 2048)));
+  if (sub === '/invites/disable-all' && post) return usage.fetch(internal('/invite-disable-all', {}));
+  if (sub === '/flags' && post) {
+    const res = await usage.fetch(internal('/flags', await readJson(request, 1024)));
+    await globalThis.caches?.default?.delete(statusCacheKey(url)); // 公开状态马上跟着变
+    return res;
+  }
   const one = sub.match(/^\/invites\/([a-z2-9]{8})$/);
-  if (one && request.method === 'POST') return usage.fetch(internal('/invite-update', { code: one[1], ...(await readJson(request, 1024)) }));
+  if (one && post) return usage.fetch(internal('/invite-update', { code: one[1], ...(await readJson(request, 1024)) }));
+  const block = sub.match(/^\/trip-block\/([a-z2-9]{10})$/);
+  if (block && post) return usage.fetch(internal('/trip-block', { id: block[1], ...(await readJson(request, 1024)) }));
   return json({ error: 'not found' }, 404);
+}
+
+const budgetsOf = (env) => ({
+  lbs: limitOf(env, 'OWNER_MONTHLY_LBS_BUDGET', DEFAULT_OWNER_MONTHLY_BUDGET.lbs),
+  search: limitOf(env, 'OWNER_MONTHLY_SEARCH_BUDGET', DEFAULT_OWNER_MONTHLY_BUDGET.search),
+});
+
+// 公开的额度状态：只有粗粒度信息，不含行程、邀请码；在节点上缓存 60 秒，免得每次打开首页都去问全站计数
+async function publicStatus(env, url) {
+  const cache = globalThis.caches?.default; // 只在 Cloudflare 上有
+  const hit = cache && (await cache.match(statusCacheKey(url)));
+  if (hit) return hit;
+  const res = await usageOf(env).fetch(internal('/public-status', {
+    ownerLimit: limitOf(env, 'OWNER_DAILY_LIMIT', DEFAULT_OWNER_DAILY_LIMIT), budgets: budgetsOf(env),
+  }));
+  const out = json(await res.json(), 200, { 'cache-control': 'public, max-age=60' });
+  if (cache) await cache.put(statusCacheKey(url), out.clone());
+  return out;
 }
 
 // ---------- 行程内的接口 ----------
 
+const tripCookie = (name, id, value, secure, maxAge = 7776000) => `${name}_${id}=${value}; Path=/api/t/${id}; HttpOnly;${secure} SameSite=Lax; Max-Age=${maxAge}`;
+
 async function tripApi(request, env, url, id, sub) {
   const room = roomOf(env, id);
+  const secure = url.protocol === 'https:' ? ' Secure;' : '';
   if (sub === '/session' && request.method === 'POST') {
-    // 用编辑链接里的密钥换一个只对这个行程路径生效的 Cookie（WebSocket 也会带上）
-    const { key = '' } = await readJson(request, 1024);
-    const res = await room.fetch(internal('/auth', undefined, String(key)));
-    if (!res.ok) { await sleep(500); return res; }
-    const secure = url.protocol === 'https:' ? ' Secure;' : '';
-    return json(await res.json(), 200, {
-      'set-cookie': `tk_${id}=${key}; Path=/api/t/${id}; HttpOnly;${secure} SameSite=Lax; Max-Age=7776000`,
-    });
+    // 用编辑链接里的密钥（设了编辑口令的还要口令）换 Cookie，只对这个行程路径生效（WebSocket 也会带上）
+    const { key = '', code = '' } = await readJson(request, 1024);
+    const res = await room.fetch(internal('/auth', { code: String(code) }, { key: String(key) }));
+    if (!res.ok) { await sleep(500); return res; } // 拖慢猜密钥和口令
+    const { editCodeHash, ...info } = await res.json();
+    const out = json(info, 200, { 'set-cookie': tripCookie('tk', id, key, secure) });
+    if (editCodeHash) out.headers.append('set-cookie', tripCookie('tc', id, editCodeHash, secure));
+    return out;
   }
   const key = getCookie(request, `tk_${id}`);
   if (!key) return json({ error: '需要用编辑链接打开', status: '0', info: 'UNAUTHORIZED' }, 401);
+  const auth = { key, code: getCookie(request, `tc_${id}`) };
   if (request.headers.get('upgrade') === 'websocket' && request.headers.get('origin') !== url.origin) {
     return json({ error: '只接受本站发起的连接' }, 403); // 防止其他网站借用户的 Cookie 建立同步连接
   }
-  if (sub === '/amap-batch' || sub.startsWith('/amap/')) return tripAmap(request, env, url, room, key, sub);
-  if (sub === '/page' && request.method === 'POST') return publishPage(request, env, url, room, key);
-  if (sub === '/share' && request.method === 'POST') return shareSettings(request, env, room, key);
-  if (sub === '/rotate-key' && request.method === 'POST') return rotateKey(request, env, url, room, key, id);
+  if (sub === '/amap-batch' || sub.startsWith('/amap/')) return tripAmap(request, env, url, room, auth, sub);
+  if (sub === '/page' && request.method === 'POST') return publishPage(request, env, url, room, auth);
+  if (sub === '/share' && request.method === 'POST') return shareSettings(request, env, room, auth);
+  if (sub === '/rotate-key' && request.method === 'POST') return rotateKey(request, env, url, room, auth, id);
+  if (sub === '/edit-code' && request.method === 'POST') return editCodeSettings(request, room, secure, auth, id);
   if (sub === '/key' && request.method === 'POST') { // 改用自己的高德 Key：公共额度用完时可以接着算
     const amapKey = String((await readJson(request, 1024)).amapKey || '').trim();
     const problem = await amapKeyProblem(amapKey);
     if (problem) return json({ error: problem }, 400);
-    return room.fetch(internal('/set-key', { amapKey }, key));
+    return room.fetch(internal('/set-key', { amapKey }, auth));
   }
   if (sub === '/delete' && request.method === 'POST') {
-    const res = await room.fetch(internal('/delete', {}, key));
+    const res = await room.fetch(internal('/delete', {}, auth));
     if (res.ok) {
       const { shareId } = await res.clone().json();
       if (shareId) await env.DATA.delete(`page:${shareId}`);
@@ -197,7 +292,8 @@ async function tripApi(request, env, url, id, sub) {
     return json({ error: '内容太大' }, 413);
   }
   const forward = new Request(`https://internal${sub}${url.search}`, request);
-  forward.headers.set('x-trip-key', key);
+  forward.headers.set('x-trip-key', auth.key);
+  forward.headers.set('x-trip-code', auth.code); // 总是覆盖，不接受客户端自己带的
   return room.fetch(forward);
 }
 
@@ -207,19 +303,19 @@ const pageOptions = (share) => ({
   expiration: Math.floor((share.deadline + 86400e3) / 1000),
 });
 
-async function publishPage(request, env, url, room, key) {
+async function publishPage(request, env, url, room, auth) {
   const { html } = await readJson(request, MAX_PAGE_BYTES);
   if (typeof html !== 'string' || !html.startsWith('<!doctype html>')) return json({ error: '方案页内容不对' }, 400);
-  const res = await room.fetch(internal('/published', {}, key)); // 先鉴权并记下发布时间
+  const res = await room.fetch(internal('/published', {}, auth)); // 先鉴权并记下发布时间
   if (!res.ok) return res;
   const share = await res.json();
   await env.DATA.put(`page:${share.shareId}`, html, pageOptions(share));
   return json({ share: share.public });
 }
 
-async function shareSettings(request, env, room, key) {
+async function shareSettings(request, env, room, auth) {
   const body = await readJson(request, 1024);
-  const res = await room.fetch(internal('/share', body, key));
+  const res = await room.fetch(internal('/share', body, auth));
   if (!res.ok) return res;
   const share = await res.json();
   if (share.action === 'stop') {
@@ -237,14 +333,23 @@ async function shareSettings(request, env, room, key) {
   return json({ share: share.public });
 }
 
-async function rotateKey(request, env, url, room, key, id) {
+async function rotateKey(request, env, url, room, auth, id) {
   const { clientId = '' } = await readJson(request, 1024);
   const next = randomId(24);
-  const res = await room.fetch(internal('/rotate', { keyHash: await sha256(next), clientId }, key));
+  const res = await room.fetch(internal('/rotate', { keyHash: await sha256(next), clientId }, auth));
   if (!res.ok) return res;
   const secure = url.protocol === 'https:' ? ' Secure;' : '';
-  return json({ key: next, url: `/t/${id}#k=${next}` }, 200, {
-    'set-cookie': `tk_${id}=${next}; Path=/api/t/${id}; HttpOnly;${secure} SameSite=Lax; Max-Age=7776000`,
+  return json({ key: next, url: `/t/${id}#k=${next}` }, 200, { 'set-cookie': tripCookie('tk', id, next, secure) }); // 编辑口令不受影响
+}
+
+// 设置或清除编辑口令（空字符串表示清除）；发起人拿到新的口令 Cookie，其他在线连接由行程实例断开
+async function editCodeSettings(request, room, secure, auth, id) {
+  const { code = '', client_id: clientId = '' } = await readJson(request, 1024);
+  const res = await room.fetch(internal('/edit-code', { code: String(code), clientId }, auth));
+  if (!res.ok) return res;
+  const { editCodeHash } = await res.json();
+  return json({ editCode: Boolean(editCodeHash) }, 200, {
+    'set-cookie': editCodeHash ? tripCookie('tc', id, editCodeHash, secure) : tripCookie('tc', id, '', secure, 0),
   });
 }
 
@@ -334,7 +439,22 @@ async function fetchAmap(origin, item, apiKey, quotaKey, env) { // quotaKey：�
   return data;
 }
 
-async function tripAmap(request, env, url, room, key, sub) {
+// 站长 Key（公共额度）拿不到时的提示；文案都含「额度」，编辑页靠它弹出「改用自己的 Key」
+const CLASS_LABEL = { lbs: '路线和测距', search: '地点搜索' };
+function ownerLimitError(reason, cls) {
+  const own = '改用自己的高德 Key 能马上继续';
+  const errors = {
+    INVITE_DISABLED: '建这个行程用的邀请码已停用，不能再用站点的公共额度；改用自己的高德 Key 就能继续',
+    OWNER_RESERVED: '站点今天的公共额度快用完了，剩下的优先留给已经在算的行程；改用自己的高德 Key 能马上继续，或者明天再来',
+    PUBLIC_PAUSED: `站点暂时停用了公共额度；${own}`,
+    TRIP_BLOCKED: `这个行程的公共额度被停用了；${own}`,
+    MONTHLY_BUDGET: `站点这个月「${CLASS_LABEL[cls]}」的公共额度已用完；${own}，或者下个月再来`,
+  };
+  const info = errors[reason] ? reason : 'OWNER_DAILY_LIMIT';
+  return { status: '0', info, error: errors[reason] || '站点今天共用的高德额度已用完。明天再试，或者改用自己的高德 Key' };
+}
+
+async function tripAmap(request, env, url, room, auth, sub) {
   let items;
   const single = sub.startsWith('/amap/');
   if (single) {
@@ -353,23 +473,10 @@ async function tripAmap(request, env, url, room, key, sub) {
     n: misses.length,
     limit: limitOf(env, 'TRIP_DAILY_LIMIT', DEFAULT_TRIP_DAILY_LIMIT),
     ownLimit: limitOf(env, 'OWN_TRIP_DAILY_LIMIT', DEFAULT_OWN_TRIP_DAILY_LIMIT),
-  }, key));
+  }, auth));
   if (!grant.ok) return grant;
-  const { mode, amapKey, granted: tripGranted, limit: tripLimit, usedBefore, invite } = await grant.json();
-  let granted = tripGranted;
-  let limitError = { status: '0', info: 'TRIP_DAILY_LIMIT', error: `这个行程今天的高德调用已到上限（${tripLimit} 次），明天再试` };
-  if (mode === 'owner' && granted) {
-    const ownerLimit = limitOf(env, 'OWNER_DAILY_LIMIT', DEFAULT_OWNER_DAILY_LIMIT);
-    const res = await usageOf(env).fetch(internal('/owner-take', { n: granted, limit: ownerLimit, invite, fresh: usedBefore === 0 }));
-    const { granted: ownerGranted, reason } = await res.json();
-    if (ownerGranted < granted) {
-      limitError = {
-        INVITE_DISABLED: { status: '0', info: 'INVITE_DISABLED', error: '建这个行程用的邀请码已停用，不能再用站点的公共额度；改用自己的高德 Key 就能继续' },
-        OWNER_RESERVED: { status: '0', info: 'OWNER_RESERVED', error: '站点今天的公共额度快用完了，剩下的优先留给已经在算的行程；改用自己的高德 Key 能马上继续，或者明天再来' },
-      }[reason] || { status: '0', info: 'OWNER_DAILY_LIMIT', error: '站点今天共用的高德额度已用完。明天再试，或者改用自己的高德 Key' };
-    }
-    granted = ownerGranted;
-  }
+  const { mode, amapKey, granted: tripGranted, limit: tripLimit, usedBefore, invite, tripId, createdAt } = await grant.json();
+  const tripLimitError = { status: '0', info: 'TRIP_DAILY_LIMIT', error: `这个行程今天的高德调用已到上限（${tripLimit} 次），明天再试` };
   const apiKey = mode === 'own' ? amapKey : env.AMAP_KEY;
   const keyHash = (await sha256(apiKey || '')).slice(0, 16);
   const quotaKeyOf = (i) => `amap_quota_until:${keyHash}:${quotaClass(items[i].path)}`; // 按 Key 和接口类别记，互不影响
@@ -386,9 +493,26 @@ async function tripAmap(request, env, url, room, key, sub) {
   }
   const open = misses.filter((i) => !spent.has(quotaClass(items[i].path)));
   for (const i of misses) if (spent.has(quotaClass(items[i].path))) results[i] = blockedOf(i);
-  for (const i of open.slice(granted)) results[i] = limitError;
+  for (const i of open.slice(tripGranted)) results[i] = tripLimitError;
+  let todo = open.slice(0, tripGranted);
+  if (mode === 'owner' && todo.length) {
+    // 站长 Key：按类别向全站计数领取（每日总上限、每月预算、应急开关都在那边判断）
+    const want = { lbs: 0, search: 0 };
+    for (const i of todo) want[quotaClass(items[i].path)] += 1;
+    const res = await usageOf(env).fetch(internal('/owner-take', {
+      want, limit: limitOf(env, 'OWNER_DAILY_LIMIT', DEFAULT_OWNER_DAILY_LIMIT), budgets: budgetsOf(env),
+      invite, fresh: usedBefore === 0, tripId, createdAt,
+    }));
+    const { granted: ownerGranted, reasons } = await res.json();
+    const given = { lbs: 0, search: 0 };
+    todo = todo.filter((i) => {
+      const cls = quotaClass(items[i].path);
+      if (given[cls] < ownerGranted[cls]) { given[cls] += 1; return true; }
+      results[i] = ownerLimitError(reasons[cls], cls);
+      return false;
+    });
+  }
   // 没命中缓存的按每秒 AMAP_QPS 个发；被限流的等一会儿再试一次
-  let todo = open.slice(0, granted);
   for (const round of [0, 1]) {
     if (round) {
       todo = todo.filter((i) => QPS_RE.test(String(results[i].info || '')) && !spent.has(quotaClass(items[i].path)));
@@ -437,12 +561,16 @@ export class ConfigRoom {
     if (!meta || meta.keyHash !== (await sha256(request.headers.get('x-trip-key') || ''))) {
       return json({ error: '编辑链接无效或已失效', status: '0', info: 'UNAUTHORIZED' }, 401);
     }
+    if (path !== '/auth' && meta.editCodeHash && request.headers.get('x-trip-code') !== meta.editCodeHash) {
+      // 设了编辑口令：Cookie 里的口令哈希也要对（包括实时同步连接）
+      return json({ error: '需要输入编辑口令', status: '0', info: 'EDIT_CODE_REQUIRED' }, 401);
+    }
     if (!meta.shareId && meta.pageAt) { // v3 之前发布过的行程：方案页沿用 /p/<行程 id>，重新发布时更新的还是大家手里的那个链接
       meta.shareId = meta.id;
       await this.storage.put('meta', meta);
     }
     const body = request.method === 'POST' ? await request.json().catch(() => ({})) : null;
-    if (path === '/auth') return json({ name: meta.name, mode: meta.mode });
+    if (path === '/auth') return this.auth(meta, body);
     if (path === '/sync') return this.connect(request);
     if (path === '/config' && request.method === 'GET') return this.read(meta);
     if (path === '/config') return this.save(body);
@@ -473,13 +601,10 @@ export class ConfigRoom {
       // 换编辑密钥：旧链接和旧 Cookie 立即失效；除发起人外，已连着的实时连接都断开
       meta.keyHash = body.keyHash;
       await this.storage.put('meta', meta);
-      for (const ws of this.ctx.getWebSockets()) {
-        if ((ws.deserializeAttachment() || {}).clientId !== body.clientId) {
-          try { ws.close(4001, 'key rotated'); } catch { /* 已经断了 */ }
-        }
-      }
+      this.kickOthers(body.clientId, 4001, 'key rotated');
       return json({ ok: true });
     }
+    if (path === '/edit-code') return this.setEditCode(meta, body);
     if (path === '/amap-take') return this.take(meta, body);
     if (path === '/set-key') {
       Object.assign(meta, { mode: 'own', amapKey: body.amapKey });
@@ -495,6 +620,43 @@ export class ConfigRoom {
       return json({ deleted: true, shareId: meta.shareId || null });
     }
     return json({ error: 'not found' }, 404);
+  }
+
+  // 用编辑密钥换会话（密钥已在 fetch 里验过）；设了编辑口令的还要口令，每小时最多试错 EDIT_CODE_TRIES_PER_HOUR 次
+  async auth(meta, { code = '' }) {
+    if (meta.editCodeHash) {
+      code = String(code).trim();
+      if (!code) return json({ error: '这个行程设了编辑口令，请输入', status: '0', info: 'EDIT_CODE_REQUIRED' }, 401);
+      const hour = Math.floor(Date.now() / 3600e3);
+      const saved = await this.storage.get('codeTries');
+      const tries = saved?.hour === hour ? saved.count : 0;
+      if (tries >= EDIT_CODE_TRIES_PER_HOUR) return json({ error: '试得太多了，请一小时后再试', status: '0', info: 'TOO_MANY_TRIES' }, 429);
+      if ((await sha256(`${meta.id}:edit:${code}`)) !== meta.editCodeHash) {
+        await this.storage.put('codeTries', { hour, count: tries + 1 });
+        return json({ error: '编辑口令不对', status: '0', info: 'EDIT_CODE_WRONG' }, 401);
+      }
+    }
+    return json({ name: meta.name, mode: meta.mode, editCodeHash: meta.editCodeHash || null });
+  }
+
+  // 设置或清除编辑口令；设置后除发起人外的在线连接都断开（关闭码 4003），要重新输入口令
+  async setEditCode(meta, { code = '', clientId = '' }) {
+    code = String(code).trim();
+    const [min, max] = EDIT_CODE_LENGTH;
+    if (code && (code.length < min || code.length > max)) return json({ error: `编辑口令要 ${min} 到 ${max} 个字符` }, 400);
+    meta.editCodeHash = code ? await sha256(`${meta.id}:edit:${code}`) : null;
+    await this.storage.put('meta', meta);
+    await this.storage.delete('codeTries');
+    if (code) this.kickOthers(clientId, 4003, 'edit code changed');
+    return json({ editCodeHash: meta.editCodeHash });
+  }
+
+  kickOthers(clientId, code, reason) {
+    for (const ws of this.ctx.getWebSockets()) {
+      if ((ws.deserializeAttachment() || {}).clientId !== clientId) {
+        try { ws.close(code, reason); } catch { /* 已经断了 */ }
+      }
+    }
   }
 
   async init({ id, name, mode, amapKey, keyHash, invite = null, tripLimit = null }) {
@@ -553,7 +715,7 @@ export class ConfigRoom {
     if (!meta.deadline) await this.schedule(meta, state.config, state.at); // v3 之前建的行程补上保留期
     return json({
       config: state.config, version: state.version, author: state.author, at: state.at,
-      name: meta.name, mode: meta.mode, expiresAt: meta.deadline,
+      name: meta.name, mode: meta.mode, expiresAt: meta.deadline, editCode: Boolean(meta.editCodeHash),
       share: { url: meta.pageAt && meta.shareId ? `/p/${meta.shareId}` : null, at: meta.pageAt, code: meta.shareCode || '' },
       usage: usage?.day === beijingDay() ? usage.count : 0,
     });
@@ -619,7 +781,7 @@ export class ConfigRoom {
     if (granted) await this.storage.put('usage', { day: today, count: used + granted });
     return json({
       mode: meta.mode, amapKey: meta.mode === 'own' ? meta.amapKey : null, invite: meta.mode === 'own' ? null : meta.invite || null,
-      granted, limit, usedBefore: used, used: used + granted,
+      granted, limit, usedBefore: used, used: used + granted, tripId: meta.id, createdAt: meta.createdAt,
     });
   }
 
@@ -673,64 +835,145 @@ export class ConfigRoom {
   }
 }
 
-// ---------- 全站计数：新建行程的频率、站长 Key 的每日用量 ----------
+// ---------- 全站计数：新建行程的频率、站长 Key 的用量、邀请码、管理会话和应急开关 ----------
 
 export class Usage {
   constructor(ctx) { this.ctx = ctx; }
+
+  get storage() { return this.ctx.storage; }
+
+  // 每天的站长 Key 用量：{ 'YYYY-MM-DD': { lbs, search } }，只留 DAILY_KEEP_DAYS 天
+  async loadDaily(today) {
+    const daily = await this.storage.get('daily');
+    if (daily) return daily;
+    const old = await this.storage.get('owner'); // 升级前只有当天的总数，不分类：按路线类算，宁多勿少
+    return old?.day === today ? { [today]: { lbs: old.count, search: 0 } } : {};
+  }
+
+  async saveDaily(daily, now = Date.now()) {
+    const oldest = beijingDay(now - (DAILY_KEEP_DAYS - 1) * DAY_MS);
+    for (const day of Object.keys(daily)) if (day < oldest) delete daily[day];
+    await this.storage.put('daily', daily);
+  }
+
+  // 今天和本月的用量
+  usageOf(daily, today) {
+    const sum = (days) => Object.fromEntries(QUOTA_CLASSES.map((c) => [c, days.reduce((n, d) => n + (daily[d]?.[c] || 0), 0)]));
+    const month = Object.keys(daily).filter((d) => d.slice(0, 7) === today.slice(0, 7));
+    return { today: sum([today]), month: sum(month) };
+  }
+
+  // 记一条管理操作，只留最近 ADMIN_OPS_LIMIT 条
+  async log(op, target = '') {
+    const ops = (await this.storage.get('ops')) || [];
+    ops.unshift({ at: Date.now(), op, target });
+    await this.storage.put('ops', ops.slice(0, ADMIN_OPS_LIMIT));
+  }
 
   async fetch(request) {
     const path = new URL(request.url).pathname;
     const body = await request.json();
     const today = beijingDay();
-    if (path === '/create') {
-      const saved = (await this.ctx.storage.get('create')) || {};
+    if (path === '/create' || path === '/create-check') {
+      const flags = (await this.storage.get('flags')) || {};
+      if (flags.creationPaused && !body.admin) return json({ error: '站点暂停了新建行程', info: 'CREATION_PAUSED' }, 503);
+      if (path === '/create-check') return json({ ok: true });
+      const saved = (await this.storage.get('create')) || {};
       const stats = saved.day === today ? saved : { day: today, total: 0, ips: {} };
       if (stats.total >= CREATE_PER_DAY) return json({ error: '今天新建的行程太多了，明天再试' }, 429);
-      if ((stats.ips[body.ip] || 0) >= CREATE_PER_IP_PER_DAY) return json({ error: '你今天新建的行程太多了，明天再试' }, 429);
+      if (body.ip && (stats.ips[body.ip] || 0) >= CREATE_PER_IP_PER_DAY) return json({ error: '你今天新建的行程太多了，明天再试' }, 429);
       stats.total += 1;
-      stats.ips[body.ip] = (stats.ips[body.ip] || 0) + 1;
-      await this.ctx.storage.put('create', stats);
+      if (body.ip) stats.ips[body.ip] = (stats.ips[body.ip] || 0) + 1;
+      await this.storage.put('create', stats);
       return json({ ok: true });
     }
     if (path === '/share-attempt') {
       const hour = Math.floor(Date.now() / 3600e3);
-      const saved = (await this.ctx.storage.get('attempts')) || {};
+      const saved = (await this.storage.get('attempts')) || {};
       const attempts = saved.hour === hour ? saved : { hour, counts: {} };
       attempts.counts[body.id] = (attempts.counts[body.id] || 0) + 1;
-      await this.ctx.storage.put('attempts', attempts);
+      await this.storage.put('attempts', attempts);
       return attempts.counts[body.id] > SHARE_ATTEMPTS_PER_HOUR ? json({ error: 'too many' }, 429) : json({ ok: true });
     }
-    if (path === '/owner-take') {
-      const saved = (await this.ctx.storage.get('owner')) || {};
-      const used = saved.day === today ? saved.count : 0;
-      const invites = (await this.ctx.storage.get('invites')) || {};
-      const inv = body.invite ? invites[body.invite] : null;
-      if (body.invite && (!inv || !inv.active)) return json({ granted: 0, used, reason: 'INVITE_DISABLED' });
-      if (body.fresh && used >= body.limit * OWNER_RESERVE_RATIO) return json({ granted: 0, used, reason: 'OWNER_RESERVED' });
-      const granted = Math.max(0, Math.min(Number(body.n) || 0, body.limit - used));
-      if (granted) {
-        await this.ctx.storage.put('owner', { day: today, count: used + granted });
-        if (inv) {
-          inv.usage = inv.usage?.day === today ? { day: today, count: inv.usage.count + granted } : { day: today, count: granted };
-          await this.ctx.storage.put('invites', invites);
-        }
+    if (path === '/owner-take') return this.ownerTake(body, today);
+    if (path === '/public-status') return this.publicStatus(body, today);
+    // ---- 管理会话 ----
+    if (path === '/admin-gate') { // 登录前检查：试错次数超了就直接拒绝，连口令对不对都不判断
+      const now = Date.now();
+      const fails = (await this.storage.get('adminFails')) || { ips: {}, all: [] };
+      const recent = (list, ms) => (list || []).filter((t) => now - t < ms);
+      if (recent(fails.ips[body.ip], ADMIN_IP_WINDOW_MS).length >= ADMIN_FAILS_PER_IP) return json({ error: '登录试错太多了，请 15 分钟后再试' }, 429);
+      if (recent(fails.all, ADMIN_GLOBAL_WINDOW_MS).length >= ADMIN_FAILS_GLOBAL) return json({ error: '站点登录试错太多了，请一小时后再试' }, 429);
+      return json({ ok: true });
+    }
+    if (path === '/admin-fail') {
+      const now = Date.now();
+      const fails = (await this.storage.get('adminFails')) || { ips: {}, all: [] };
+      for (const [ip, list] of Object.entries(fails.ips)) {
+        const recent = list.filter((t) => now - t < ADMIN_IP_WINDOW_MS);
+        if (recent.length) fails.ips[ip] = recent; else delete fails.ips[ip];
       }
-      return json({ granted, used: used + granted });
+      fails.ips[body.ip] = [...(fails.ips[body.ip] || []), now];
+      fails.all = [...fails.all.filter((t) => now - t < ADMIN_GLOBAL_WINDOW_MS), now];
+      await this.storage.put('adminFails', fails);
+      return json({ ok: true });
+    }
+    if (path === '/admin-login') {
+      const sessions = (await this.storage.get('admin')) || {};
+      for (const [hash, until] of Object.entries(sessions)) if (until < Date.now()) delete sessions[hash];
+      sessions[body.hash] = body.expiresAt;
+      await this.storage.put('admin', sessions);
+      await this.log('登录管理页');
+      return json({ ok: true });
+    }
+    if (path === '/admin-check') {
+      const sessions = (await this.storage.get('admin')) || {};
+      return sessions[body.hash] > Date.now() ? json({ ok: true }) : json({ error: '需要站长口令' }, 401);
+    }
+    if (path === '/admin-logout-all') {
+      await this.storage.put('admin', {});
+      await this.log('退出所有管理会话');
+      return json({ ok: true });
+    }
+    if (path === '/admin-log') {
+      await this.log(body.op, body.target);
+      return json({ ok: true });
+    }
+    // ---- 应急开关 ----
+    if (path === '/flags') {
+      const flags = (await this.storage.get('flags')) || {};
+      const names = { publicPaused: '公共额度', creationPaused: '新建行程' };
+      for (const [name, label] of Object.entries(names)) {
+        if (typeof body[name] !== 'boolean' || Boolean(flags[name]) === body[name]) continue;
+        flags[name] = body[name];
+        await this.log(`${body[name] ? '暂停' : '恢复'}${label}`);
+      }
+      await this.storage.put('flags', flags);
+      return json({ flags });
+    }
+    if (path === '/trip-block') {
+      const trips = (await this.storage.get('trips')) || [];
+      const trip = trips.find((t) => t.id === body.id);
+      if (!trip) return json({ error: '这个行程不在最近使用公共额度的名单里' }, 404);
+      trip.blocked = Boolean(body.blocked);
+      await this.storage.put('trips', trips);
+      await this.log(trip.blocked ? '停用行程的公共额度' : '恢复行程的公共额度', trip.id);
+      return json({ trip });
     }
     // ---- 邀请码 ----
     if (path === '/invite-use') {
-      const invites = (await this.ctx.storage.get('invites')) || {};
+      const invites = (await this.storage.get('invites')) || {};
       const inv = invites[String(body.code).toLowerCase()];
-      if (!inv) return json({ error: '口令或邀请码不对' }, 401);
+      if (!inv) return json({ error: '邀请码不对' }, 401);
       if (!inv.active) return json({ error: '这个邀请码已停用' }, 403);
       if (inv.expiresAt && Date.now() > inv.expiresAt) return json({ error: '这个邀请码已过期' }, 403);
       if (inv.trips.length >= inv.maxTrips) return json({ error: `这个邀请码最多能建 ${inv.maxTrips} 个行程，已经用完了` }, 403);
       inv.trips.push(body.tripId);
-      await this.ctx.storage.put('invites', invites);
+      await this.storage.put('invites', invites);
       return json({ invite: inv.code, tripLimit: inv.tripDailyLimit || null });
     }
     if (path === '/invite-create') {
-      const invites = (await this.ctx.storage.get('invites')) || {};
+      const invites = (await this.storage.get('invites')) || {};
       const code = randomId(8);
       invites[code] = {
         code, note: String(body.note || '').slice(0, 60), maxTrips: Math.max(1, Math.min(Number(body.maxTrips) || 3, 1000)),
@@ -738,29 +981,113 @@ export class Usage {
         expiresAt: Number(body.days) > 0 ? Date.now() + Number(body.days) * 86400e3 : null,
         active: true, createdAt: Date.now(), trips: [], usage: null,
       };
-      await this.ctx.storage.put('invites', invites);
+      await this.storage.put('invites', invites);
+      await this.log('新建邀请码', code);
       return json({ invite: invites[code] });
     }
     if (path === '/invite-update') {
-      const invites = (await this.ctx.storage.get('invites')) || {};
+      const invites = (await this.storage.get('invites')) || {};
       const inv = invites[body.code];
       if (!inv) return json({ error: '没有这个邀请码' }, 404);
       inv.active = Boolean(body.active);
-      await this.ctx.storage.put('invites', invites);
+      await this.storage.put('invites', invites);
+      await this.log(inv.active ? '启用邀请码' : '停用邀请码', inv.code);
       return json({ invite: inv });
     }
+    if (path === '/invite-disable-all') {
+      const invites = (await this.storage.get('invites')) || {};
+      const on = Object.values(invites).filter((inv) => inv.active);
+      for (const inv of on) inv.active = false;
+      await this.storage.put('invites', invites);
+      await this.log('停用所有邀请码', `${on.length} 个`);
+      return json({ disabled: on.length });
+    }
     if (path === '/stats') {
-      const owner = (await this.ctx.storage.get('owner')) || {};
-      const create = (await this.ctx.storage.get('create')) || {};
-      const invites = Object.values((await this.ctx.storage.get('invites')) || {})
+      const create = (await this.storage.get('create')) || {};
+      const daily = await this.loadDaily(today);
+      const { today: used, month } = this.usageOf(daily, today);
+      const invites = Object.values((await this.storage.get('invites')) || {})
         .map((inv) => ({ ...inv, usedToday: inv.usage?.day === today ? inv.usage.count : 0 }))
         .sort((a, b) => b.createdAt - a.createdAt);
+      const trips = [...((await this.storage.get('trips')) || [])].reverse() // 最近用过的在前；今天没用就显示 0
+        .map((t) => ({ ...t, usedToday: t.lastDay === today ? t.usedToday : 0 }));
+      const days = Array.from({ length: DAILY_SHOW_DAYS }, (_, i) => {
+        const day = beijingDay(Date.now() - i * DAY_MS);
+        return { day, lbs: daily[day]?.lbs || 0, search: daily[day]?.search || 0 };
+      });
       return json({
-        ownerUsedToday: owner.day === today ? owner.count : 0, ownerLimit: body.ownerLimit,
-        createdToday: create.day === today ? create.total : 0, invites,
+        ownerUsedToday: used.lbs + used.search, ownerLimit: body.ownerLimit,
+        createdToday: create.day === today ? create.total : 0, invites, trips,
+        flags: (await this.storage.get('flags')) || {}, ops: (await this.storage.get('ops')) || [],
+        quota: { today: used, month, budgets: body.budgets, days },
       });
     }
     return json({ error: 'not found' }, 404);
+  }
+
+  // 站长 Key 按类别领取调用次数。顺序：应急开关 → 行程是否被停用 → 邀请码 → 八成预留 → 每日总上限和每月预算
+  async ownerTake(body, today) {
+    const flags = (await this.storage.get('flags')) || {};
+    const daily = await this.loadDaily(today);
+    const { today: used, month } = this.usageOf(daily, today);
+    const total = used.lbs + used.search;
+    const refuse = (reason) => json({
+      granted: { lbs: 0, search: 0 }, reasons: { lbs: reason, search: reason }, used: total,
+    });
+    if (flags.publicPaused) return refuse('PUBLIC_PAUSED');
+    const trips = (await this.storage.get('trips')) || [];
+    if (body.tripId && trips.find((t) => t.id === body.tripId)?.blocked) return refuse('TRIP_BLOCKED');
+    const invites = (await this.storage.get('invites')) || {};
+    const inv = body.invite ? invites[body.invite] : null;
+    if (body.invite && (!inv || !inv.active)) return refuse('INVITE_DISABLED');
+    if (body.fresh && total >= body.limit * OWNER_RESERVE_RATIO) return refuse('OWNER_RESERVED');
+    let room = Math.max(0, body.limit - total); // 全站今天还剩多少
+    const granted = {}, reasons = {};
+    for (const cls of QUOTA_CLASSES) {
+      const want = Math.max(0, Number(body.want?.[cls]) || 0);
+      const left = Math.max(0, body.budgets[cls] - month[cls]); // 这一类本月预算还剩多少
+      granted[cls] = Math.min(want, left, room);
+      if (granted[cls] < want) reasons[cls] = left <= room ? 'MONTHLY_BUDGET' : 'OWNER_DAILY_LIMIT';
+      room -= granted[cls];
+    }
+    const sum = granted.lbs + granted.search;
+    if (sum) {
+      daily[today] = { lbs: used.lbs + granted.lbs, search: used.search + granted.search };
+      await this.saveDaily(daily);
+      if (inv) {
+        inv.usage = inv.usage?.day === today ? { day: today, count: inv.usage.count + sum } : { day: today, count: sum };
+        await this.storage.put('invites', invites);
+      }
+      if (body.tripId) await this.touchTrip(trips, body, today, sum);
+    }
+    return json({ granted, reasons, used: total + sum });
+  }
+
+  // 记下最近用过公共额度的行程：只记 id、新建时间、邀请码、最后使用日、今天用量，不记名称和内容
+  async touchTrip(trips, body, today, count) {
+    let i = trips.findIndex((t) => t.id === body.tripId);
+    const trip = i >= 0 ? trips.splice(i, 1)[0] : { id: body.tripId, createdAt: body.createdAt || null, invite: body.invite || null, blocked: false };
+    trip.usedToday = trip.lastDay === today ? trip.usedToday + count : count;
+    trip.lastDay = today;
+    trips.push(trip); // 最近用过的放最后
+    while (trips.length > TRACKED_TRIPS_LIMIT) { // 满了先挤掉最久没用的，被停用的尽量留着
+      i = trips.findIndex((t) => !t.blocked);
+      trips.splice(i >= 0 ? i : 0, 1);
+    }
+    await this.storage.put('trips', trips);
+  }
+
+  // 公开状态：粗粒度的百分比，不含具体次数、行程、邀请码
+  async publicStatus({ ownerLimit, budgets }, today) {
+    const flags = (await this.storage.get('flags')) || {};
+    const { today: used, month } = this.usageOf(await this.loadDaily(today), today);
+    const total = used.lbs + used.search;
+    const pct = (n, of) => Math.min(100, Math.round((100 * n) / of));
+    let level = 'ok';
+    if (total >= ownerLimit * 0.8) level = 'tight';
+    if (total >= ownerLimit || month.lbs >= budgets.lbs) level = 'out';
+    if (flags.publicPaused) level = 'paused';
+    return json({ public: { level, usedPct: pct(total, ownerLimit), searchMonthPct: pct(month.search, budgets.search) }, creating: !flags.creationPaused });
   }
 }
 
@@ -772,6 +1099,7 @@ export default {
     const { pathname } = url;
     try {
       if (pathname === '/api/env') return json({ mode: 'online', ownerKey: Boolean(env.ACCESS_CODE && env.AMAP_KEY) });
+      if (pathname === '/api/status' && request.method === 'GET') return await publicStatus(env, url);
       if (pathname === '/api/trips' && request.method === 'POST') return await createTrip(request, env);
       if (pathname.startsWith('/api/admin/')) return await adminApi(request, env, url);
       const trip = pathname.match(/^\/api\/t\/([a-z2-9]+)(\/.*)$/);

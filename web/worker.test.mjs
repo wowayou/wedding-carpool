@@ -5,7 +5,7 @@ import { beforeEach, test } from 'node:test';
 import worker, { ConfigRoom, Usage } from './worker.js';
 
 const OWN_KEY = 'a'.repeat(32);
-let env, upstream, rooms, sockets;
+let env, upstream, rooms, sockets, sharedInvite;
 
 function memoryStorage() {
   const map = new Map();
@@ -36,6 +36,7 @@ function fakeSocket() {
 beforeEach(() => {
   const kv = new Map();
   rooms = new Map();
+  sharedInvite = null;
   sockets = [fakeSocket(), fakeSocket()];
   const usage = new Usage({ storage: memoryStorage() });
   env = {
@@ -74,7 +75,15 @@ const call = (path, { method = 'GET', body, cookie, ip = '1.1.1.1', form } = {})
   headers: { 'cf-connecting-ip': ip, ...(cookie ? { cookie } : {}), ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
 }), env);
 
-async function newTrip(body = { name: '测试行程', code: 'open-sesame' }) {
+// 站长口令不能当邀请码：用公共额度的测试行程都用一个管理页发的邀请码来建
+async function ownerInvite() {
+  sharedInvite ||= (await createInvite(await adminCookie(), { maxTrips: 1000 })).code;
+  return sharedInvite;
+}
+
+async function newTrip(body = {}) {
+  body = { name: '测试行程', ...body };
+  if (!body.amapKey && !body.code) body.code = await ownerInvite();
   const res = await call('/api/trips', { method: 'POST', body });
   assert.equal(res.status, 200, await res.clone().text());
   const trip = await res.json();
@@ -89,6 +98,8 @@ const save = (t, body) => call(`${t.base}/config`, { method: 'POST', cookie: t.c
 
 test('新建行程：口令、自带 Key、什么都不填', async () => {
   assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'guess' } })).status, 401);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'open-sesame' } })).status, 401); // 站长口令不是邀请码
+  assert.equal(upstream.length, 0);
   assert.equal((await call('/api/trips', { method: 'POST', body: {} })).status, 400);
   assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: 'short' } })).status, 400);
   globalThis.nextAmapReply = { status: '0', info: 'INVALID_USER_KEY' };
@@ -102,9 +113,10 @@ test('新建行程：口令、自带 Key、什么都不填', async () => {
 });
 
 test('同一 IP 每天新建次数有上限', async () => {
-  for (let i = 0; i < 10; i++) assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'open-sesame' } })).status, 200);
-  assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'open-sesame' } })).status, 429);
-  assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'open-sesame' }, ip: '2.2.2.2' })).status, 200);
+  const code = await ownerInvite();
+  for (let i = 0; i < 10; i++) assert.equal((await call('/api/trips', { method: 'POST', body: { code } })).status, 200);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { code } })).status, 429);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { code }, ip: '2.2.2.2' })).status, 200);
 });
 
 test('没有编辑链接不能访问行程，换行程的 Cookie 也不行', async () => {
@@ -385,7 +397,6 @@ test('删除行程：数据和方案页都清掉，之后链接失效', async ()
 });
 
 async function adminCookie() {
-  assert.equal((await call('/api/admin/login', { method: 'POST', body: { code: 'nope' } })).status, 401);
   const res = await call('/api/admin/login', { method: 'POST', body: { code: 'open-sesame' } });
   assert.match(res.headers.get('set-cookie'), /Path=\/api\/admin; HttpOnly; Secure; SameSite=Strict/);
   return res.headers.get('set-cookie').split(';')[0];
@@ -439,8 +450,8 @@ test('邀请码的每日上限、停用后不能再用公共额度', async () =>
 
 test('公共额度用过八成后，当天还没用过的行程暂停分配，已经在算的继续', async () => {
   env.OWNER_DAILY_LIMIT = '10';
-  const running = await newTrip({ name: '在算的', code: 'open-sesame' });
-  const later = await newTrip({ name: '后来的', code: 'open-sesame' });
+  const running = await newTrip({ name: '在算的' });
+  const later = await newTrip({ name: '后来的' });
   const batch = (t, n, tag) => call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie,
     body: { requests: Array.from({ length: n }, (_, i) => ({ path: '/v3/distance', query: `${tag}=${i}` })) } }).then((r) => r.json());
   await batch(running, 8, 'r'); // 用到 80%
@@ -461,4 +472,389 @@ test('页面路由：首页、行程编辑页', async () => {
   assert.equal(await (await call('/')).text(), 'asset:/');
   assert.equal(await (await call('/t/abcdefghij')).text(), 'asset:/edit');
   assert.deepEqual(await (await call('/api/env')).json(), { mode: 'online', ownerKey: true });
+});
+
+// ---------- v3.1：编辑口令、管理会话、应急开关、按类别的额度、公开状态 ----------
+
+// 失败路径里 Worker 会故意拖慢（防猜口令）；要连试很多次的测试里把等待跳过
+async function withoutDelay(fn) {
+  const real = globalThis.setTimeout;
+  globalThis.setTimeout = (f) => real(f, 0);
+  try { return await fn(); } finally { globalThis.setTimeout = real; }
+}
+const setEditCode = (t, code, cookie = t.cookie, clientId = 'c0') => call(`${t.base}/edit-code`, { method: 'POST', cookie, body: { code, client_id: clientId } });
+const session = (t, code) => call(`${t.base}/session`, { method: 'POST', body: { key: t.key, code } });
+const cookiesOf = (res) => res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+
+test('编辑口令：设置后新设备要输口令，其他在线连接被请出，错误和缺失都拒绝', async () => {
+  const t = await newTrip();
+  sockets.forEach((ws, i) => ws.serializeAttachment({ clientId: `c${i}`, name: `人${i}` }));
+  assert.equal((await setEditCode(t, 'abc')).status, 400); // 太短
+  assert.equal((await setEditCode(t, 'x'.repeat(21))).status, 400); // 太长
+  assert.equal((await call(`${t.base}/edit-code`, { method: 'POST', body: { code: 'secret1' } })).status, 401); // 没有会话
+  assert.deepEqual(sockets.map((ws) => ws.closed), [null, null]);
+  const set = await setEditCode(t, 'secret1');
+  assert.equal(set.status, 200);
+  assert.deepEqual(sockets.map((ws) => ws.closed), [null, 4003]); // 发起人不断开
+  assert.match(set.headers.get('set-cookie'), new RegExp(`^tc_${t.id}=[0-9a-f]{64}; Path=/api/t/${t.id}; HttpOnly; Secure; SameSite=Lax`));
+  const mine = `${t.cookie}; ${set.headers.get('set-cookie').split(';')[0]}`;
+  assert.equal((await call(`${t.base}/config`, { cookie: mine })).status, 200);
+  assert.equal((await (await call(`${t.base}/config`, { cookie: mine })).json()).editCode, true);
+  // 另一台设备只有编辑密钥的 Cookie：所有需要鉴权的路径都进不去，包括实时连接
+  for (const path of ['/config', '/history', '/amap/v3/distance?a=1']) {
+    const res = await call(`${t.base}${path}`, { cookie: t.cookie });
+    assert.equal(res.status, 401, path);
+    assert.equal((await res.json()).info, 'EDIT_CODE_REQUIRED');
+  }
+  assert.equal((await call(`${t.base}/sync`, { cookie: t.cookie })).status, 401);
+  assert.equal((await call(`${t.base}/delete`, { method: 'POST', cookie: t.cookie })).status, 401);
+  assert.equal(upstream.length, 0);
+  // 客户端自己带内部请求头没用
+  const forged = await worker.fetch(new Request(`https://carpool.test${t.base}/config`, { headers: { cookie: t.cookie, 'x-trip-code': 'x' } }), env);
+  assert.equal(forged.status, 401);
+  // 换会话：没带、带错、带对
+  const none = await session(t);
+  assert.deepEqual([none.status, (await none.json()).info], [401, 'EDIT_CODE_REQUIRED']);
+  const wrong = await withoutDelay(() => session(t, 'secret2'));
+  assert.deepEqual([wrong.status, (await wrong.json()).info], [401, 'EDIT_CODE_WRONG']);
+  assert.equal(wrong.headers.get('set-cookie'), null);
+  const ok = await session(t, ' secret1 ');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.getSetCookie().length, 2);
+  assert.equal((await call(`${t.base}/config`, { cookie: cookiesOf(ok) })).status, 200);
+  assert.equal(sockets[0].closed, null);
+  // 换口令：之前的 Cookie 失效；重置编辑链接不影响口令
+  const renewed = await setEditCode(t, 'secret3', cookiesOf(ok));
+  assert.equal((await call(`${t.base}/config`, { cookie: cookiesOf(ok) })).status, 401);
+  const rotated = await call(`${t.base}/rotate-key`, { method: 'POST', cookie: `${t.cookie}; ${renewed.headers.get('set-cookie').split(';')[0]}`, body: { clientId: 'c0' } });
+  const next = await rotated.json();
+  const again = await call(`${t.base}/session`, { method: 'POST', body: { key: next.key } });
+  assert.equal((await again.json()).info, 'EDIT_CODE_REQUIRED');
+  assert.equal((await call(`${t.base}/session`, { method: 'POST', body: { key: next.key, code: 'secret3' } })).status, 200);
+});
+
+test('编辑口令：清除后只凭编辑链接就能打开，不再断开其他人', async () => {
+  const t = await newTrip();
+  sockets.forEach((ws, i) => ws.serializeAttachment({ clientId: `c${i}` }));
+  const mine = `${t.cookie}; ${(await setEditCode(t, 'secret1')).headers.get('set-cookie').split(';')[0]}`;
+  sockets.forEach((ws) => { ws.closed = null; });
+  const cleared = await setEditCode(t, '', mine);
+  assert.equal(cleared.status, 200);
+  assert.match(cleared.headers.get('set-cookie'), /Max-Age=0/);
+  assert.deepEqual(sockets.map((ws) => ws.closed), [null, null]);
+  assert.equal((await call(`${t.base}/config`, { cookie: t.cookie })).status, 200);
+  assert.equal((await session(t)).status, 200);
+  assert.equal((await (await call(`${t.base}/config`, { cookie: t.cookie })).json()).editCode, false);
+});
+
+test('编辑口令：每个行程每小时最多试错 10 次，下个小时恢复', async () => {
+  const t = await newTrip();
+  await setEditCode(t, 'secret1');
+  await withoutDelay(async () => {
+    for (let i = 0; i < 10; i++) assert.equal((await session(t, `bad${i}`)).status, 401);
+    const blocked = await session(t, 'secret1'); // 超限后连对的也不收
+    assert.equal(blocked.status, 429);
+    assert.equal((await blocked.json()).info, 'TOO_MANY_TRIES');
+    const realNow = Date.now;
+    Date.now = () => realNow() + 3600e3;
+    try { assert.equal((await session(t, 'secret1')).status, 200); } finally { Date.now = realNow; }
+  });
+  const other = await newTrip(); // 别的行程不受影响
+  await setEditCode(other, 'secret1');
+  assert.equal((await session(other, 'secret1')).status, 200);
+});
+
+test('编辑口令：没有编辑密钥的人试口令不计次数，也问不出口令是否存在', async () => {
+  const t = await newTrip();
+  await setEditCode(t, 'secret1');
+  const res = await withoutDelay(() => call(`${t.base}/session`, { method: 'POST', body: { key: 'wrong-key', code: 'secret1' } }));
+  assert.equal(res.status, 401);
+  assert.equal((await res.json()).info, 'UNAUTHORIZED');
+  assert.equal((await session(t, 'secret1')).status, 200);
+});
+
+test('管理会话：随机令牌、24 小时过期、退出所有会话（包括自己的）', async () => {
+  const first = await adminCookie(), second = await adminCookie();
+  const token = first.slice('adm='.length);
+  assert.match(token, /^[a-z2-9]{32}$/);
+  assert.notEqual(first, second);
+  const login = await call('/api/admin/login', { method: 'POST', body: { code: 'open-sesame' } });
+  assert.match(login.headers.get('set-cookie'), /Max-Age=86400/);
+  // 老办法（口令的哈希当 Cookie）不再有效
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('admin:open-sesame'));
+  const old = `adm=${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+  assert.equal((await call('/api/admin/stats', { cookie: old })).status, 401);
+  assert.equal((await call('/api/admin/stats', { cookie: 'adm=' })).status, 401);
+  // 过期
+  const realNow = Date.now;
+  Date.now = () => realNow() + 86400e3 + 1000;
+  try { assert.equal((await call('/api/admin/stats', { cookie: first })).status, 401); } finally { Date.now = realNow; }
+  assert.equal((await call('/api/admin/stats', { cookie: first })).status, 200);
+  // 退出所有会话
+  const out = await call('/api/admin/logout-all', { method: 'POST', cookie: first });
+  assert.equal(out.status, 200);
+  assert.match(out.headers.get('set-cookie'), /Max-Age=0/);
+  for (const cookie of [first, second]) assert.equal((await call('/api/admin/stats', { cookie })).status, 401);
+  assert.equal((await call('/api/admin/logout-all', { method: 'POST' })).status, 401);
+  const fresh = await adminCookie();
+  const stats = await (await call('/api/admin/stats', { cookie: fresh })).json();
+  assert.ok(stats.ops.some((o) => o.op === '退出所有管理会话'));
+});
+
+test('管理登录限次：同一 IP 15 分钟 5 次，全站每小时 30 次；超限后口令对也不收', async () => {
+  const bad = (ip, code = 'nope') => call('/api/admin/login', { method: 'POST', body: { code }, ip });
+  await withoutDelay(async () => {
+    for (let i = 0; i < 5; i++) assert.equal((await bad('9.9.9.9')).status, 401);
+    const blocked = await bad('9.9.9.9', 'open-sesame');
+    assert.equal(blocked.status, 429);
+    assert.match((await blocked.json()).error, /试错太多/);
+    assert.equal((await bad('8.8.8.8', 'open-sesame')).status, 200); // 别的 IP 不受影响
+    const realNow = Date.now;
+    Date.now = () => realNow() + 16 * 60e3;
+    try { assert.equal((await bad('9.9.9.9', 'open-sesame')).status, 200); } finally { Date.now = realNow; } // 15 分钟后恢复
+    // 全站总数：现有 5 次，再来 25 次凑满 30
+    for (let i = 0; i < 25; i++) assert.equal((await bad(`10.0.0.${i}`)).status, 401);
+    const all = await bad('10.1.1.1', 'open-sesame');
+    assert.equal(all.status, 429);
+    assert.match((await all.json()).error, /站点登录/);
+  });
+});
+
+test('站长口令比较：长度不同、前缀相同、大小写不同都不通过', async () => {
+  const bad = (code) => call('/api/admin/login', { method: 'POST', body: { code } });
+  await withoutDelay(async () => {
+    for (const code of ['open-sesam', 'open-sesame!', '', 'OPEN-SESAME']) assert.equal((await bad(code)).status, 401);
+  });
+  assert.equal((await bad('open-sesame')).status, 200);
+});
+
+test('管理页用公共额度新建行程：要登录，不受单 IP 限制，受全站总数限制', async () => {
+  assert.equal((await call('/api/admin/trips', { method: 'POST', body: { name: '站长的' } })).status, 401);
+  const cookie = await adminCookie();
+  for (let i = 0; i < 12; i++) { // 超过单 IP 每天 10 个
+    const res = await call('/api/admin/trips', { method: 'POST', cookie, body: { name: `站长的${i}` } });
+    assert.equal(res.status, 200);
+    if (i) continue;
+    const trip = await res.json();
+    assert.match(trip.url, /^\/t\/[a-z2-9]{10}#k=[a-z2-9]{24}$/);
+    const s = await call(`/api/t/${trip.id}/session`, { method: 'POST', body: { key: trip.key } });
+    const t = { ...trip, base: `/api/t/${trip.id}`, cookie: s.headers.get('set-cookie').split(';')[0] };
+    const cfg = await (await call(`${t.base}/config`, { cookie: t.cookie })).json();
+    assert.deepEqual([cfg.name, cfg.mode], ['站长的0', 'owner']);
+    assert.equal((await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie })).status, 200); // 用公共额度
+  }
+  const stats = await (await call('/api/admin/stats', { cookie })).json();
+  assert.equal(stats.createdToday, 12);
+  // 全站总数：普通用户新建也算进同一个计数
+  const usage = env.USAGE.get();
+  const saved = await usage.storage.get('create');
+  await usage.storage.put('create', { ...saved, total: 200 });
+  assert.equal((await call('/api/admin/trips', { method: 'POST', cookie, body: {} })).status, 429);
+});
+
+const batchOf = (t, requests) => call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie, body: { requests } }).then((r) => r.json());
+const lbs = (n, tag = 'x') => Array.from({ length: n }, (_, i) => ({ path: '/v3/distance', query: `${tag}=${i}` }));
+const search = (n, tag = 'y') => Array.from({ length: n }, (_, i) => ({ path: '/v5/place/text', query: `${tag}=${i}` }));
+const flags = (cookie, body) => call('/api/admin/flags', { method: 'POST', cookie, body }).then((r) => r.json());
+const adminStats = (cookie) => call('/api/admin/stats', { cookie }).then((r) => r.json());
+
+test('应急开关：暂停公共额度只影响用公共额度的行程，恢复后可用', async () => {
+  const cookie = await adminCookie();
+  const owner = await newTrip(), own = await newTrip({ amapKey: OWN_KEY });
+  assert.deepEqual((await flags(cookie, { publicPaused: true })).flags, { publicPaused: true });
+  upstream = [];
+  const paused = (await batchOf(owner, lbs(2))).results;
+  assert.deepEqual(paused.map((r) => r.info), ['PUBLIC_PAUSED', 'PUBLIC_PAUSED']);
+  assert.match(paused[0].error, /额度/);
+  assert.match(paused[0].error, /自己的高德 Key/);
+  assert.equal(upstream.length, 0);
+  assert.equal((await call(`${owner.base}/amap/v3/distance?q=1`, { cookie: owner.cookie }).then((r) => r.json())).info, 'PUBLIC_PAUSED');
+  assert.deepEqual((await batchOf(own, lbs(1, 'o'))).results.map((r) => r.info), ['OK']); // 自带 Key 不受影响
+  assert.equal((await adminStats(cookie)).quota.today.lbs, 0); // 没有花站长的额度
+  await flags(cookie, { publicPaused: false });
+  assert.deepEqual((await batchOf(owner, lbs(1, 'r'))).results.map((r) => r.info), ['OK']);
+  const stats = await adminStats(cookie);
+  assert.deepEqual(stats.ops.slice(0, 2).map((o) => o.op), ['恢复公共额度', '暂停公共额度']);
+});
+
+test('应急开关：暂停新建行程，邀请码和自带 Key 都拦，管理页新建不拦，恢复后可新建', async () => {
+  const cookie = await adminCookie();
+  const code = await ownerInvite();
+  await flags(cookie, { creationPaused: true });
+  for (const body of [{ code }, { amapKey: OWN_KEY }]) {
+    const res = await call('/api/trips', { method: 'POST', body });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).error, '站点暂停了新建行程');
+  }
+  assert.equal(upstream.length, 0); // 暂停时连验证 Key 的高德请求都不发
+  assert.equal((await call('/api/admin/trips', { method: 'POST', cookie, body: {} })).status, 200);
+  assert.equal((await adminStats(cookie)).invites[0].trips.length, 0); // 被拦的没占邀请码名额
+  await flags(cookie, { creationPaused: false });
+  assert.equal((await call('/api/trips', { method: 'POST', body: { code } })).status, 200);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY } })).status, 200);
+});
+
+test('应急开关：一键停用所有邀请码，已建行程要改用自己的 Key', async () => {
+  const cookie = await adminCookie();
+  const a = await createInvite(cookie, { note: 'a' }), b = await createInvite(cookie, { note: 'b' });
+  const t = await newTrip({ code: a.code });
+  await call(`/api/admin/invites/${b.code}`, { method: 'POST', cookie, body: { active: false } });
+  assert.equal((await call('/api/admin/invites/disable-all', { method: 'POST' })).status, 401);
+  const res = await call('/api/admin/invites/disable-all', { method: 'POST', cookie });
+  assert.equal((await res.json()).disabled, 1);
+  assert.ok((await adminStats(cookie)).invites.every((inv) => !inv.active));
+  assert.equal((await batchOf(t, lbs(1))).results[0].info, 'INVITE_DISABLED');
+  assert.equal((await call('/api/trips', { method: 'POST', body: { code: a.code } })).status, 403);
+});
+
+test('单个行程停用公共额度：只记 id、新建时间、邀请码、最后使用日、今天用量；可以恢复', async () => {
+  const cookie = await adminCookie();
+  const inv = await createInvite(cookie, { note: '给小王', maxTrips: 5 });
+  const a = await newTrip({ name: '秘密行程A', code: inv.code }), b = await newTrip({ name: '行程B' });
+  await save(a, { config: { people: [{ name: '住在某某路的老王' }] }, base_version: 1 });
+  await batchOf(a, lbs(3)); await batchOf(b, lbs(1, 'b'));
+  const { trips } = await adminStats(cookie);
+  assert.deepEqual(trips.map((x) => x.id), [b.id, a.id]); // 最近用过的在前
+  const row = trips.find((x) => x.id === a.id);
+  assert.deepEqual(Object.keys(row).sort(), ['blocked', 'createdAt', 'id', 'invite', 'lastDay', 'usedToday']);
+  assert.deepEqual([row.invite, row.usedToday, row.blocked], [inv.code, 3, false]);
+  assert.doesNotMatch(JSON.stringify(trips), /秘密行程|老王/);
+  assert.equal((await call(`/api/admin/trip-block/${a.id}`, { method: 'POST', body: { blocked: true } })).status, 401);
+  assert.equal((await call('/api/admin/trip-block/abcdefghij', { method: 'POST', cookie, body: { blocked: true } })).status, 404);
+  assert.equal((await call(`/api/admin/trip-block/${a.id}`, { method: 'POST', cookie, body: { blocked: true } })).status, 200);
+  const blocked = (await batchOf(a, lbs(1, 'z'))).results[0];
+  assert.deepEqual([blocked.info, /额度/.test(blocked.error)], ['TRIP_BLOCKED', true]);
+  assert.deepEqual((await batchOf(b, lbs(1, 'bb'))).results.map((r) => r.info), ['OK']); // 别的行程不受影响
+  assert.equal((await call(`${a.base}/config`, { cookie: a.cookie })).status, 200); // 数据照常能看能改
+  await call(`/api/admin/trip-block/${a.id}`, { method: 'POST', cookie, body: { blocked: false } });
+  assert.deepEqual((await batchOf(a, lbs(1, 'zz'))).results.map((r) => r.info), ['OK']);
+  assert.deepEqual((await adminStats(cookie)).ops.slice(0, 2).map((o) => [o.op, o.target]), [['恢复行程的公共额度', a.id], ['停用行程的公共额度', a.id]]);
+});
+
+test('最近用过公共额度的行程最多记 200 个，管理操作最多记 50 条', async () => {
+  const cookie = await adminCookie();
+  const usage = env.USAGE.get();
+  const make = (i) => ({ id: `fill${String(i).padStart(6, 'a')}`, createdAt: 1, invite: null, lastDay: '2026-01-01', usedToday: 1, blocked: false });
+  await usage.storage.put('trips', Array.from({ length: 200 }, (_, i) => make(i)));
+  const t = await newTrip();
+  await batchOf(t, lbs(1));
+  const { trips } = await adminStats(cookie);
+  assert.equal(trips.length, 200);
+  assert.equal(trips[0].id, t.id);
+  for (let i = 0; i < 60; i++) await flags(cookie, { publicPaused: i % 2 === 0 });
+  assert.equal((await adminStats(cookie)).ops.length, 50);
+});
+
+test('额度按类别记：今天和本月分开，月预算用完那一类停下', async () => {
+  env.OWNER_MONTHLY_LBS_BUDGET = '6';
+  env.OWNER_MONTHLY_SEARCH_BUDGET = '2';
+  env.OWNER_DAILY_LIMIT = '100';
+  const cookie = await adminCookie();
+  const t = await newTrip();
+  const first = await batchOf(t, [...lbs(3), ...search(3)]);
+  assert.deepEqual(first.results.map((r) => r.info), ['OK', 'OK', 'OK', 'OK', 'OK', 'MONTHLY_BUDGET']);
+  assert.match(first.results[5].error, /额度/);
+  assert.match(first.results[5].error, /地点搜索/);
+  let stats = await adminStats(cookie);
+  assert.deepEqual([stats.quota.today, stats.quota.month, stats.quota.budgets], [{ lbs: 3, search: 2 }, { lbs: 3, search: 2 }, { lbs: 6, search: 2 }]);
+  assert.equal(stats.ownerUsedToday, 5);
+  assert.equal(stats.quota.days.length, 30);
+  const second = await batchOf(t, [...lbs(5, 'l2'), ...search(1, 's2')]); // 路线类还剩 3 个，搜索类已满
+  assert.deepEqual(second.results.map((r) => r.info), ['OK', 'OK', 'OK', 'MONTHLY_BUDGET', 'MONTHLY_BUDGET', 'MONTHLY_BUDGET']);
+  assert.match(second.results[3].error, /路线和测距/);
+});
+
+test('额度按类别记：隔月清零，只留 35 天', async () => {
+  env.OWNER_DAILY_LIMIT = '1000';
+  const usage = env.USAGE.get();
+  const realNow = Date.now;
+  const day = (offset) => new Date(realNow() + offset * 86400e3 + 8 * 3600e3).toISOString().slice(0, 10);
+  // 手工放几天旧数据：40 天前（应被清掉）、昨天
+  await usage.storage.put('daily', { [day(-40)]: { lbs: 9, search: 9 }, [day(-1)]: { lbs: 4, search: 1 } });
+  const t = await newTrip();
+  await batchOf(t, lbs(1));
+  const stored = await usage.storage.get('daily');
+  assert.deepEqual(Object.keys(stored).sort(), [day(-1), day(0)].sort());
+  const cookie = await adminCookie();
+  const stats = await adminStats(cookie);
+  assert.deepEqual(stats.quota.days.slice(0, 2).map((d) => [d.day, d.lbs, d.search]), [[day(0), 1, 0], [day(-1), 4, 1]]);
+  const sameMonth = day(0).slice(0, 7) === day(-1).slice(0, 7);
+  assert.deepEqual(stats.quota.month, sameMonth ? { lbs: 5, search: 1 } : { lbs: 1, search: 0 });
+  // 40 天后：本月累计只剩新的一天
+  Date.now = () => realNow() + 40 * 86400e3;
+  try {
+    const late = await adminCookie();
+    assert.deepEqual((await adminStats(late)).quota.month, { lbs: 0, search: 0 });
+  } finally { Date.now = realNow; }
+});
+
+test('每日全站上限、八成预留仍按两类合计算', async () => {
+  env.OWNER_DAILY_LIMIT = '5';
+  const t = await newTrip();
+  const res = await batchOf(t, [...lbs(3), ...search(3)]);
+  assert.deepEqual(res.results.map((r) => r.info), ['OK', 'OK', 'OK', 'OK', 'OK', 'OWNER_DAILY_LIMIT']);
+  const later = await newTrip();
+  assert.equal((await batchOf(later, lbs(1, 'later'))).results[0].info, 'OWNER_RESERVED');
+});
+
+const status = (init) => call('/api/status', init);
+
+test('公开额度状态：ok、tight、out（当天用完或路线类月预算用完）、paused', async () => {
+  env.OWNER_DAILY_LIMIT = '10';
+  const cookie = await adminCookie();
+  const res = await status();
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'public, max-age=60');
+  assert.deepEqual(await res.json(), { public: { level: 'ok', usedPct: 0, searchMonthPct: 0 }, creating: true });
+  const t = await newTrip();
+  await batchOf(t, [...lbs(5), ...search(1)]);
+  assert.deepEqual((await (await status()).json()).public, { level: 'ok', usedPct: 60, searchMonthPct: Math.round(100 / 4500) });
+  await batchOf(t, lbs(2, 'more')); // 8/10
+  assert.deepEqual((await (await status()).json()).public, { level: 'tight', usedPct: 80, searchMonthPct: Math.round(100 / 4500) });
+  await batchOf(t, lbs(5, 'rest')); // 满了
+  assert.deepEqual((await (await status()).json()).public.level, 'out');
+  assert.equal((await (await status()).json()).public.usedPct, 100);
+  await flags(cookie, { publicPaused: true, creationPaused: true });
+  assert.deepEqual((await (await status()).json()).creating, false);
+  assert.equal((await (await status()).json()).public.level, 'paused');
+  await flags(cookie, { publicPaused: false, creationPaused: false });
+  // 路线类月预算用完也算 out，哪怕今天全站上限还没到
+  env.OWNER_DAILY_LIMIT = '1000';
+  env.OWNER_MONTHLY_LBS_BUDGET = '9';
+  assert.equal((await (await status()).json()).public.level, 'out');
+  env.OWNER_MONTHLY_LBS_BUDGET = '10';
+  assert.equal((await (await status()).json()).public.level, 'ok');
+});
+
+test('公开额度状态：不需要登录，只有这几个字段，不泄露行程和邀请码；节点缓存 60 秒，管理开关立即清缓存', async () => {
+  const store = new Map();
+  globalThis.caches = { default: {
+    async match(req) { return store.get(req.url)?.clone(); },
+    async put(req, res) { store.set(req.url, res); },
+    async delete(req) { return store.delete(req.url); },
+  } };
+  try {
+    const cookie = await adminCookie();
+    const t = await newTrip();
+    await batchOf(t, lbs(1));
+    const body = await (await status()).json();
+    assert.deepEqual(Object.keys(body).sort(), ['creating', 'public']);
+    assert.deepEqual(Object.keys(body.public).sort(), ['level', 'searchMonthPct', 'usedPct']);
+    assert.doesNotMatch(JSON.stringify(body), new RegExp(`${t.id}|${sharedInvite}`));
+    await batchOf(t, lbs(40, 'many')); // 缓存期内的变化看不到
+    assert.equal((await (await status()).json()).public.usedPct, body.public.usedPct);
+    await flags(cookie, { publicPaused: true }); // 开关会清缓存
+    assert.equal((await (await status()).json()).public.level, 'paused');
+  } finally { delete globalThis.caches; }
+});
+
+test('额度类报错文案都含「额度」，编辑页靠它弹出改用自己的 Key', async () => {
+  const cookie = await adminCookie();
+  const t = await newTrip();
+  await flags(cookie, { publicPaused: true });
+  assert.match((await batchOf(t, lbs(1))).results[0].error, /额度/);
+  await flags(cookie, { publicPaused: false });
+  env.OWNER_MONTHLY_LBS_BUDGET = '1';
+  await batchOf(t, lbs(1, 'a'));
+  assert.match((await batchOf(t, lbs(1, 'b'))).results[0].error, /额度/);
 });
