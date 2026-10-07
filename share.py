@@ -15,6 +15,7 @@ from html import escape
 import carpool
 
 WEEKDAYS = "一二三四五六日"
+BEIJING = dt.timezone(dt.timedelta(hours=8))  # 生成时间统一按北京时间，不依赖运行环境的时区
 BLUR_START_KM = 2.0  # 方案页上，车主路线从出发地多远开始画
 BLUR_HOME_KM = 1.5   # 「到家附近接」的点前后多远不画
 COLORS = ["#c2410c", "#1d4ed8", "#7c3aed", "#0f766e", "#be185d", "#4d7c0f"]
@@ -258,7 +259,7 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
     taxi_people = sum(people[n].party for n in plan.taxi)
     summary = (f"{plan.carried} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
                + (f"，{taxi_people} 人打车" if plan.taxi else "") + ("，含返程" if trip.back and trip.back_plans else ""))
-    stamp = (generated or dt.datetime.now()).strftime("%m-%d %H:%M")
+    stamp = (generated or dt.datetime.now(BEIJING)).strftime("%m-%d %H:%M") + "（北京时间）"
     expire_note = f"<br>这一页会在 {expires.isoformat()} 前后自动删除" if expires else ""
     return _fill(TEMPLATE, dict(
         title=escape(f"{venue.name} 出行方案"),

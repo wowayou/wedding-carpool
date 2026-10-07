@@ -24,6 +24,27 @@
   .made { margin-top: var(--sp-3); word-break: break-all; }
   .c-table .c-btn--link + .c-btn--link { margin-left: var(--sp-2); }
   .c-card .c-table-wrap { border: 0; border-radius: 0; margin: 0; background: none; }
+  /* 流量统计面板 */
+  .tstats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
+  .tstat { border: 1px solid var(--line); border-radius: var(--r-ctl); padding: var(--sp-3); background: var(--surface); }
+  .tstat small { display: block; color: var(--ink-2); font-size: var(--fs-12); }
+  .tstat b { display: block; font-size: var(--fs-22); line-height: 1.3; font-variant-numeric: tabular-nums; }
+  .tstat .rate { color: var(--ink-3); font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+  .spark { display: block; width: 100%; height: 36px; margin-top: 6px; color: var(--accent); }
+  .chart { display: block; width: 100%; height: 150px; color: var(--accent); }
+  .chart text, .spark text { fill: var(--ink-2); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .chart .grid-line { stroke: var(--line); stroke-width: 1; }
+  .chart rect:hover, .spark rect:hover { opacity: .7; }
+  .tgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-4); margin-top: var(--sp-4); }
+  .tgrid h3 { font-size: var(--fs-14); margin-bottom: var(--sp-2); }
+  .rank { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+  .rank td { padding: 4px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .rank td.n { text-align: right; width: 4.5em; font-variant-numeric: tabular-nums; }
+  .rank td.bar { width: 40%; padding: 4px var(--sp-2); }
+  .rank td.bar i { display: block; height: 8px; border-radius: 4px; background: var(--accent); opacity: .75; }
+  .rank td.bar i.ai { background: var(--warn); opacity: 1; }
+  .rank code { word-break: break-all; }
+  .ai-sum { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-2); }
   @media (max-width: 760px) { .grid { grid-template-columns: 1fr 1fr; } .switches, .quota { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -72,6 +93,12 @@
           <tbody id="dayRows"></tbody>
         </table></div>
       </details>
+    </div>
+
+    <div class="c-card" id="traffic">
+      <h2>流量统计（近 30 天，北京时间）</h2>
+      <p class="c-muted">只有按天汇总的次数，没有 IP、完整网址和 Cookie，保留 35 天。页面访问不含爬虫。</p>
+      <div id="trafficBody"></div>
     </div>
 
     <form class="c-card" id="newTrip">
@@ -124,11 +151,39 @@
   </div>
 </div>
 </main>
+<div class="c-toasts" id="toasts" role="status" aria-live="polite"></div>
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const day = (t) => (t ? new Date(t).toLocaleDateString('zh-CN') : '不限');
 const time = (t) => (t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '—');
+// ---------- 轻提示和弹窗：替代原生 alert / confirm（选择器：[data-dialog-ok] 确认，[data-dialog-cancel] 取消） ----------
+function toast(msg, kind = '') {
+  const box = $('#toasts');
+  const el = document.createElement('div');
+  el.className = `c-toast${kind ? ` c-toast--${kind}` : ''}`;
+  el.textContent = msg;
+  box.append(el);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), kind === 'danger' ? 6000 : 3000);
+}
+function confirmDialog(message, { title = '确认一下', okText = '确定', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'c-modal';
+    dlg.innerHTML = `<form method="dialog"><div class="c-modal__body"><h2 class="c-modal__title">${esc(title)}</h2><p class="c-muted" style="margin:0">${esc(message)}</p></div>
+      <div class="c-modal__actions"><button type="button" class="c-btn" data-dialog-cancel>取消</button>
+      <button class="c-btn ${danger ? 'c-btn--danger c-btn--solid' : 'c-btn--primary'}" data-dialog-ok>${esc(okText)}</button></div></form>`;
+    document.body.append(dlg);
+    let done = false;
+    const finish = (ok) => { if (done) return; done = true; dlg.close(); dlg.remove(); resolve(ok); };
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish(false); });
+    dlg.querySelector('[data-dialog-cancel]').addEventListener('click', () => finish(false));
+    dlg.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); finish(true); });
+    dlg.showModal();
+    dlg.querySelector('[data-dialog-cancel]').focus();
+  });
+}
 const pctOf = (n, of) => Math.min(100, Math.round((100 * n) / (of || 1)));
 
 async function api(path, body) {
@@ -142,7 +197,7 @@ async function api(path, body) {
 async function act(fn) {
   try { await fn(); } catch (e) {
     if (e.status === 401) { await load(); return; }
-    alert(e.message);
+    toast(e.message, 'danger');
   }
 }
 
@@ -158,6 +213,78 @@ function renderSwitch(el, title, on, onText, offText, name) {
   el.className = `switch c-card ${on ? 'is-on' : ''}`;
   el.innerHTML = `<div><b>${title}</b> <span class="c-tag ${on ? 'c-tag--danger' : 'c-tag--ok'}">${on ? onText : offText}</span></div>
     <button class="c-btn c-btn--sm ${on ? '' : 'c-btn--danger'}" data-flag="${name}" data-to="${on ? '' : '1'}" style="margin-top:6px">${on ? '恢复' : '暂停'}</button>`;
+}
+
+// ---------- 流量统计面板：SVG 手绘柱状图，不引入图表库 ----------
+const AI_BOTS = { gptbot: 'GPTBot', claudebot: 'ClaudeBot', perplexitybot: 'PerplexityBot', bytespider: 'Bytespider' };
+const BOT_LABELS = { ...AI_BOTS, googlebot: 'Googlebot', bingbot: 'bingbot', baiduspider: 'Baiduspider', other: '其他爬虫' };
+const sum = (days, pick) => days.reduce((n, d) => n + (pick(d) || 0), 0);
+const total = (obj) => Object.values(obj || {}).reduce((n, v) => n + v, 0);
+const shortDay = (d) => d.slice(5);
+// 柱状图：values 从旧到新，days 同序；tall 为大图（带横线和日期）
+function barChart(values, days, { tall = false, label = '' } = {}) {
+  const W = 600, H = tall ? 150 : 36, padL = tall ? 28 : 0, padB = tall ? 16 : 0, padT = tall ? 6 : 2;
+  const max = Math.max(1, ...values), bw = (W - padL) / values.length, ih = H - padB - padT;
+  const bars = values.map((v, i) => {
+    const h = Math.round((v / max) * ih * 10) / 10;
+    return `<rect x="${(padL + i * bw + bw * 0.15).toFixed(1)}" y="${(padT + ih - h).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${Math.max(h, v ? 1 : 0).toFixed(1)}" rx="1.5" fill="currentColor"><title>${esc(days[i])}：${v}</title></rect>`;
+  }).join('');
+  const grid = tall ? `<line class="grid-line" x1="${padL}" x2="${W}" y1="${padT}" y2="${padT}"/><line class="grid-line" x1="${padL}" x2="${W}" y1="${padT + ih}" y2="${padT + ih}"/>
+    <text x="${padL - 4}" y="${padT + 8}" text-anchor="end">${max}</text><text x="${padL - 4}" y="${padT + ih}" text-anchor="end">0</text>
+    <text x="${padL}" y="${H - 3}">${esc(shortDay(days[0]))}</text><text x="${W}" y="${H - 3}" text-anchor="end">${esc(shortDay(days[days.length - 1]))}</text>` : '';
+  return `<svg class="${tall ? 'chart' : 'spark'}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">${grid}${bars}</svg>`;
+}
+// 排行表：[名字, 次数]，AI 爬虫用警示色
+function rankTable(entries, { names = {}, ai = {} } = {}) {
+  const max = Math.max(1, ...entries.map((e) => e[1]));
+  if (!entries.length) return '<p class="c-muted">近 30 天没有记录</p>';
+  return `<table class="rank">${entries.map(([k, n]) => `<tr><td>${ai[k] ? `<span class="c-tag c-tag--warn">${esc(names[k] || k)}</span>` : `<code>${esc(names[k] || k)}</code>`}</td>
+    <td class="bar"><i class="${ai[k] ? 'ai' : ''}" style="width:${Math.max(2, Math.round((100 * n) / max))}%"></i></td><td class="n">${n}</td></tr>`).join('')}</table>`;
+}
+function merge(days, pick) {
+  const out = {};
+  for (const d of days) for (const [k, n] of Object.entries(pick(d) || {})) out[k] = (out[k] || 0) + n;
+  return Object.entries(out).sort((a, b) => b[1] - a[1]);
+}
+function renderTraffic(traffic) {
+  const days = [...(traffic?.days || [])].reverse(); // 旧 → 新
+  if (!days.length) { $('#trafficBody').innerHTML = '<p class="c-muted">还没有统计数据</p>'; return; }
+  const labels = days.map((d) => d.day);
+  const series = {
+    pages: days.map((d) => d.pages || 0),
+    creates: days.map((d) => total(d.creates)),
+    active: days.map((d) => d.active || 0),
+    publishes: days.map((d) => d.publishes || 0),
+    shareViews: days.map((d) => d.shareViews || 0),
+  };
+  const sums = Object.fromEntries(Object.entries(series).map(([k, v]) => [k, v.reduce((a, b) => a + b, 0)]));
+  const rate = (n, of) => (of ? `${Math.round((100 * n) / of)}%` : '—');
+  const funnel = [
+    ['新建行程', 'creates', `其中邀请码 ${sum(days, (d) => d.creates?.invite)}、自带 Key ${sum(days, (d) => d.creates?.own)}、管理页 ${sum(days, (d) => d.creates?.admin)}`],
+    ['当天有计算的行程', 'active', `占新建的 ${rate(sums.active, sums.creates)}（同一行程多天都算，可能超过 100%）`],
+    ['发布方案页', 'publishes', `占有计算行程的 ${rate(sums.publishes, sums.active)}`],
+    ['方案页被打开', 'shareViews', `平均每次发布被打开 ${sums.publishes ? (sums.shareViews / sums.publishes).toFixed(1) : '—'} 次`],
+  ];
+  const bots = merge(days, (d) => d.bots);
+  const aiTotal = bots.filter(([k]) => AI_BOTS[k]).reduce((n, [, v]) => n + v, 0);
+  const botTotal = bots.reduce((n, [, v]) => n + v, 0);
+  const aiRows = Object.keys(AI_BOTS).map((k) => [k, (bots.find(([b]) => b === k) || [k, 0])[1]]);
+  const otherBots = bots.filter(([k]) => !AI_BOTS[k]);
+  $('#trafficBody').innerHTML = `
+    <h3>页面访问</h3>
+    <p class="c-muted" style="margin:0 0 var(--sp-2)">近 30 天共 <b class="c-tnum">${sums.pages}</b> 次（首页、示例、指南、场景页、隐私、关于）</p>
+    ${barChart(series.pages, labels, { tall: true, label: '每天的页面访问次数' })}
+    <h3 style="margin-top:var(--sp-5)">使用漏斗</h3>
+    <div class="tstats">${funnel.map(([name, key, note]) => `<div class="tstat"><small>${name}</small><b>${sums[key]}</b><span class="rate">${esc(note)}</span>${barChart(series[key], labels, { label: `每天的${name}` })}</div>`).join('')}</div>
+    <div class="tgrid">
+      <div><h3>页面访问排行</h3>${rankTable(merge(days, (d) => d.paths))}</div>
+      <div><h3>来源域名排行</h3><p class="c-hint" style="margin:0 0 6px">只记首页访问的外站域名</p>${rankTable(merge(days, (d) => d.refs))}</div>
+      <div><h3>from 参数排行</h3><p class="c-hint" style="margin:0 0 6px">链接里的 ?from=…</p>${rankTable(merge(days, (d) => d.froms))}</div>
+      <div><h3>爬虫</h3>
+        <div class="ai-sum"><span class="c-tag c-tag--warn">AI 爬虫合计 <b class="c-tnum">${aiTotal}</b></span><span class="c-tag">全部爬虫 <b class="c-tnum">${botTotal}</b></span></div>
+        ${rankTable(aiRows, { names: BOT_LABELS, ai: Object.fromEntries(Object.keys(AI_BOTS).map((k) => [k, true])) })}
+        <p class="c-hint" style="margin:var(--sp-3) 0 6px">其他爬虫</p>${rankTable(otherBots, { names: BOT_LABELS })}</div>
+    </div>`;
 }
 
 async function load() {
@@ -179,6 +306,7 @@ async function load() {
       <div><b>地点搜索</b>${meter('今天', quota.today.search)}${meter('本月', quota.month.search, quota.budgets.search)}</div>
     </div>
     <span class="c-muted">每日合计用过 80% 后，当天还没用过公共额度的行程会暂停分配，留给已经在算的行程。每月预算比高德的免费额度留了余量，可以在 wrangler.jsonc 的 vars 里改（OWNER_MONTHLY_LBS_BUDGET、OWNER_MONTHLY_SEARCH_BUDGET）。高德没有查询剩余额度的接口，这里的数字是站点自己的计数，不含自带 Key 的行程。今天新建行程 ${data.createdToday} 个。</span>`;
+  renderTraffic(data.traffic);
   $('#dayRows').innerHTML = quota.days.map((d) => `<tr><td>${esc(d.day)}</td><td>${d.lbs}</td><td>${d.search}</td></tr>`).join('');
   $('#trips').innerHTML = data.trips.map((t) => `<tr class="${t.blocked ? 'is-off' : ''}">
     <td><code>${esc(t.id)}</code></td><td>${esc(time(t.createdAt))}</td><td>${t.invite ? `<code>${esc(t.invite)}</code>` : '—'}</td>
@@ -215,7 +343,7 @@ $('#create').addEventListener('submit', (e) => {
     await navigator.clipboard?.writeText(`${location.origin}/?invite=${invite.code}`).catch(() => {});
     $('#note').value = '';
     await load();
-    alert(`已生成邀请码 ${invite.code}，邀请链接已复制`);
+    toast(`已生成邀请码 ${invite.code}，邀请链接已复制`);
   });
 });
 
@@ -241,8 +369,11 @@ document.addEventListener('click', (e) => {
   if (t.dataset.copy) { navigator.clipboard?.writeText(t.dataset.copy).catch(() => {}); t.textContent = '已复制'; }
   if (t.dataset.toggle) {
     const enable = Boolean(t.dataset.active);
-    if (!enable && !confirm('停用这个邀请码？用它建的行程之后要改用自己的高德 Key 才能继续计算。')) return;
-    act(async () => { await api(`/api/admin/invites/${t.dataset.toggle}`, { active: enable }); await load(); });
+    act(async () => {
+      if (!enable && !await confirmDialog('用它建的行程之后要改用自己的高德 Key 才能继续计算。', { title: '停用这个邀请码？', okText: '停用', danger: true })) return;
+      await api(`/api/admin/invites/${t.dataset.toggle}`, { active: enable });
+      await load();
+    });
   }
   if (t.dataset.flag) {
     const stop = Boolean(t.dataset.to);
@@ -250,24 +381,37 @@ document.addEventListener('click', (e) => {
       publicPaused: '暂停公共额度？所有用站点公共额度的行程会立刻停止计算，提示改用自己的 Key；自带 Key 的行程不受影响。',
       creationPaused: '暂停新建行程？首页新建行程（邀请码和自带 Key）都会被拒绝，已有行程不受影响。',
     };
-    if (stop && !confirm(tips[t.dataset.flag])) return;
-    act(async () => { await api('/api/admin/flags', { [t.dataset.flag]: stop }); await load(); });
+    act(async () => {
+      if (stop && !await confirmDialog(tips[t.dataset.flag], { title: t.dataset.flag === 'publicPaused' ? '暂停公共额度？' : '暂停新建行程？', okText: '暂停', danger: true })) return;
+      await api('/api/admin/flags', { [t.dataset.flag]: stop });
+      await load();
+    });
   }
   if (t.dataset.block) {
     const stop = Boolean(t.dataset.to);
-    if (stop && !confirm(`停用行程 ${t.dataset.block} 的公共额度？它要改用自己的高德 Key 才能继续计算，已有数据不受影响。`)) return;
-    act(async () => { await api(`/api/admin/trip-block/${t.dataset.block}`, { blocked: stop }); await load(); });
+    act(async () => {
+      if (stop && !await confirmDialog('它要改用自己的高德 Key 才能继续计算，已有数据不受影响。', { title: `停用行程 ${t.dataset.block} 的公共额度？`, okText: '停用', danger: true })) return;
+      await api(`/api/admin/trip-block/${t.dataset.block}`, { blocked: stop });
+      await load();
+    });
   }
 });
 
 $('#disableInvites').addEventListener('click', () => {
-  if (!confirm('停用所有邀请码？用它们建的行程要改用自己的高德 Key 才能继续计算，之后可以在列表里逐个启用。')) return;
-  act(async () => { const { disabled } = await api('/api/admin/invites/disable-all', {}); await load(); alert(`已停用 ${disabled} 个邀请码`); });
+  act(async () => {
+    if (!await confirmDialog('用它们建的行程要改用自己的高德 Key 才能继续计算，之后可以在列表里逐个启用。', { title: '停用所有邀请码？', okText: '全部停用', danger: true })) return;
+    const { disabled } = await api('/api/admin/invites/disable-all', {});
+    await load();
+    toast(`已停用 ${disabled} 个邀请码`);
+  });
 });
 
 $('#logoutAll').addEventListener('click', () => {
-  if (!confirm('退出所有管理会话？包括你自己，之后要重新输入站长口令。')) return;
-  act(async () => { await api('/api/admin/logout-all', {}); await load(); });
+  act(async () => {
+    if (!await confirmDialog('包括你自己，之后要重新输入站长口令。', { title: '退出所有管理会话？', okText: '全部退出', danger: true })) return;
+    await api('/api/admin/logout-all', {});
+    await load();
+  });
 });
 
 load().catch((e) => { document.querySelector('.c-container').insertAdjacentHTML('beforeend', `<p class="c-field__error">${esc(e.message)}</p>`); });
