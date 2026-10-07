@@ -9,3 +9,4 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
+.access_code

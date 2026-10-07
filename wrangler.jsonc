@@ -9,7 +9,10 @@
     "run_worker_first": ["/api/*", "/p/*"]
   },
   "kv_namespaces": [
-    { "binding": "DATA", "id": "REPLACE_WITH_KV_ID" }
+    { "binding": "DATA", "id": "dd28befbdf1c41cebb15a5fd2f5db89f" }
+  ],
+  "routes": [
+    { "pattern": "carpool.eigentime.org", "custom_domain": true }
   ],
   "observability": { "enabled": true }
 }
