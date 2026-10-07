@@ -12,3 +12,4 @@ dist/
 .access_code
 .trip_link
 .claude/
+.cache/

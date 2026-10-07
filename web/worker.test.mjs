@@ -2,6 +2,7 @@
 // Worker 的离线测试：内存版 KV / Durable Object + 假的 fetch，不连 Cloudflare 和高德。运行：npm test
 import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
+import pkg from '../package.json' with { type: 'json' };
 import worker, { ConfigRoom, Usage } from './worker.js';
 
 const OWN_KEY = 'a'.repeat(32);
@@ -14,7 +15,8 @@ function memoryStorage() {
     alarm: null,
     async get(k) { return structuredClone(map.get(k)); },
     async put(k, v) { map.set(k, structuredClone(v)); },
-    async delete(k) { return map.delete(k); },
+    async delete(k) { return Array.isArray(k) ? k.filter((x) => map.delete(x)).length : map.delete(k); },
+    async list({ prefix = '' } = {}) { return new Map([...map].filter(([k]) => k.startsWith(prefix)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => [k, structuredClone(v)])); },
     async deleteAll() { map.clear(); },
     async setAlarm(t) { this.alarm = t; },
     async deleteAlarm() { this.alarm = null; },
@@ -36,6 +38,7 @@ function fakeSocket() {
 beforeEach(() => {
   const kv = new Map();
   rooms = new Map();
+  background = [];
   sharedInvite = null;
   sockets = [fakeSocket(), fakeSocket()];
   const usage = new Usage({ storage: memoryStorage() });
@@ -69,11 +72,16 @@ beforeEach(() => {
   };
 });
 
-const call = (path, { method = 'GET', body, cookie, ip = '1.1.1.1', form, origin } = {}) => worker.fetch(new Request(`https://carpool.test${path}`, {
+// 后台任务（ctx.waitUntil）：测试里收集起来，需要时用 settle() 等它们写完
+let background = [];
+const settle = async () => { await Promise.all(background); background = []; };
+const ctx = { waitUntil: (p) => { background.push(p); } };
+
+const call = (path, { method = 'GET', body, cookie, ip = '1.1.1.1', form, origin, headers } = {}) => worker.fetch(new Request(`https://carpool.test${path}`, {
   method,
   body: form ? new URLSearchParams(form) : body && JSON.stringify(body),
-  headers: { 'cf-connecting-ip': ip, ...(origin ? { origin } : {}), ...(cookie ? { cookie } : {}), ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) },
-}), env);
+  headers: { 'cf-connecting-ip': ip, ...(origin ? { origin } : {}), ...(cookie ? { cookie } : {}), ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}), ...headers },
+}), env, ctx);
 
 // 站长口令不能当邀请码：用公共额度的测试行程都用一个管理页发的邀请码来建
 async function ownerInvite() {
@@ -351,7 +359,7 @@ test('数据保留期：出行日期后 60 天和最后编辑后 180 天取较�
   const realNow = Date.now;
   Date.now = () => travel + 61 * day;
   try { await room.alarm(); } finally { Date.now = realNow; }
-  assert.equal((await call(`${t.base}/config`, { cookie: t.cookie })).status, 401);
+  assert.equal((await call(`${t.base}/config`, { cookie: t.cookie })).status, 404);
   assert.equal([...env.DATA.kv.keys()].filter((k) => k.startsWith('page:')).length, 0);
   assert.equal(sockets[0].sent.at(-1).type, 'deleted');
 });
@@ -392,7 +400,9 @@ test('删除行程：数据和方案页都清掉，之后链接失效', async ()
   assert.equal((await call(`${t.base}/delete`, { method: 'POST' })).status, 401);
   assert.equal((await call(`${t.base}/delete`, { method: 'POST', cookie: t.cookie })).status, 200);
   assert.equal(sockets[0].sent.at(-1).type, 'deleted');
-  assert.equal((await call(`${t.base}/config`, { cookie: t.cookie })).status, 401);
+  const gone = await call(`${t.base}/config`, { cookie: t.cookie });
+  assert.equal(gone.status, 404);
+  assert.equal((await gone.json()).info, 'TRIP_GONE'); // 和密钥不对（UNAUTHORIZED）区分开
   assert.equal((await call(url)).status, 404);
 });
 
@@ -471,7 +481,7 @@ test('WebSocket 只接受本站来源', async () => {
 test('页面路由：首页、行程编辑页', async () => {
   assert.equal(await (await call('/')).text(), 'asset:/');
   assert.equal(await (await call('/t/abcdefghij')).text(), 'asset:/edit');
-  assert.deepEqual(await (await call('/api/env')).json(), { mode: 'online', ownerKey: true });
+  assert.deepEqual(await (await call('/api/env')).json(), { mode: 'online', ownerKey: true, version: pkg.version });
 });
 
 // ---------- v3.1：编辑口令、管理会话、应急开关、按类别的额度、公开状态 ----------
@@ -935,4 +945,141 @@ test('500 错误不泄露内部信息，4xx 的提示原样返回', async () => 
   const bad = await call('/api/trips', { method: 'POST', body: { amapKey: 'short' } });
   assert.equal(bad.status, 400);
   assert.notEqual((await bad.json()).error, '服务器出错了，请稍后再试');
+});
+
+// ---------- v3.2：服务端汇总统计、404 页面、TRIP_GONE、版本号 ----------
+
+const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
+const HTML = { accept: 'text/html,application/xhtml+xml', 'user-agent': BROWSER_UA };
+const adminTraffic = async (cookie) => (await (await call('/api/admin/stats', { cookie })).json()).traffic;
+const todayStats = async () => (await adminTraffic(await adminCookie())).days[0];
+
+test('统计：页面访问、爬虫、来源各自计数；爬虫不算页面访问', async () => {
+  for (const path of ['/', '/demo', '/guide', '/guide/station', '/for/wedding', '/privacy', '/about', '/guide/']) await call(path, { headers: HTML });
+  await call('/', { headers: { ...HTML, referer: 'https://www.zhihu.com/question/1?x=secret' } });
+  await call('/?from=XHS-note', { headers: { ...HTML, referer: 'https://carpool.test/guide' } }); // 站内来源不记
+  await call('/?from=bad%20value!', { headers: HTML });
+  await call('/', { headers: { accept: '*/*', 'user-agent': BROWSER_UA } }); // Accept 不含 html：不算
+  await call('/', { method: 'POST', headers: HTML }); // 不是 GET：不算
+  await call('/t/abcdefghij', { headers: HTML }); // 编辑页不算页面访问
+  await call('/', { headers: { accept: 'text/html', 'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' } });
+  await call('/guide', { headers: { accept: '*/*', 'user-agent': 'Mozilla/5.0; compatible; GPTBot/1.1' } });
+  await call('/about', { headers: { accept: '*/*', 'user-agent': 'python-requests/2.31' } });
+  await call('/about', { headers: { accept: '*/*' } }); // 没有 UA：其他爬虫
+  await settle();
+  const day = await todayStats();
+  assert.equal(day.pages, 11);
+  assert.equal(day.paths['/'], 4);
+  assert.equal(day.paths['/guide'], 2); // /guide 和 /guide/ 归到一起
+  assert.deepEqual(day.bots, { googlebot: 1, gptbot: 1, other: 2 });
+  assert.deepEqual(day.refs, { 'zhihu.com': 1 }); // 只有域名，没有路径和参数
+  assert.deepEqual(day.froms, { 'xhs-note': 1 });
+  assert.ok(!JSON.stringify(day).includes('secret') && !JSON.stringify(day).includes('1.1.1.1'));
+});
+
+test('统计：新建行程按来源分、发布方案页、方案页被打开、当天有计算的行程数', async () => {
+  await newTrip({ amapKey: OWN_KEY });
+  const t = await newTrip(); // 邀请码
+  await call('/api/admin/trips', { method: 'POST', cookie: await adminCookie(), body: { name: '管理页建的' } });
+  await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie });
+  await call(`${t.base}/amap/v3/distance?a=2`, { cookie: t.cookie }); // 同一天第二次：不重复计
+  const { url } = (await publish(t, '<!doctype html>方案')).share;
+  await call(url, { headers: HTML });
+  await call(url, { headers: { 'user-agent': 'Googlebot/2.1' } }); // 爬虫打开不算
+  await settle();
+  const day = await todayStats();
+  assert.deepEqual(day.creates, { invite: 1, own: 1, admin: 1 });
+  assert.equal(day.active, 1);
+  assert.equal(day.publishes, 1);
+  assert.equal(day.shareViews, 1);
+});
+
+test('统计：不存在的页面不计数', async () => {
+  env.ASSETS = { fetch: async () => new Response('nope', { status: 404 }) };
+  await call('/guide/nothing', { headers: HTML });
+  await settle();
+  assert.equal((await todayStats()).pages, 0);
+});
+
+test('统计：来源域名、from 每天每类最多 50 个不同值，其余计入「其他」', async () => {
+  for (let i = 0; i < 55; i++) await call(`/?from=s${i}`, { headers: { ...HTML, referer: `https://site${i}.example.com/` } });
+  await call('/?from=s3', { headers: HTML }); // 已记录的值照常累加
+  await settle();
+  const day = await todayStats();
+  assert.equal(Object.keys(day.refs).length, 51);
+  assert.equal(day.refs['其他'], 5);
+  assert.equal(Object.keys(day.froms).length, 51);
+  assert.equal(day.froms.s3, 2);
+  assert.equal(day.froms['其他'], 5);
+});
+
+test('统计：只留 35 天，新的一天写入时清掉更早的；接口返回近 30 天', async () => {
+  const storage = env.USAGE.get().storage;
+  const dayOf = (n) => new Date(Date.now() + 8 * 3600e3 - n * 86400e3).toISOString().slice(0, 10);
+  await storage.put(`st:${dayOf(34)}`, { pages: 7, paths: {}, bots: {}, refs: {}, froms: {}, creates: { invite: 0, own: 0, admin: 0 }, active: 0, publishes: 0, shareViews: 0 });
+  await storage.put(`st:${dayOf(36)}`, { pages: 9 });
+  await storage.put(`st:${dayOf(100)}`, { pages: 9 });
+  await call('/', { headers: HTML });
+  await settle();
+  const keys = [...(await storage.list({ prefix: 'st:' })).keys()];
+  assert.deepEqual(keys, [`st:${dayOf(34)}`, `st:${dayOf(0)}`]);
+  const { days } = await adminTraffic(await adminCookie());
+  assert.equal(days.length, 30);
+  assert.equal(days[0].pages, 1);
+  assert.equal(days[1].pages, 0); // 没有记录的天补零
+});
+
+test('统计：页面响应不等计数写完，计数出错也不影响页面', async () => {
+  let started = false;
+  env.USAGE = { idFromName: (n) => n, get: () => ({ fetch: () => { started = true; return new Promise(() => {}); } }) }; // 永远不返回
+  const res = await call('/guide', { headers: HTML });
+  assert.equal(await res.text(), 'asset:/guide');
+  assert.ok(started);
+  assert.equal(background.length, 1); // 交给 waitUntil 了
+  env.USAGE = { idFromName: (n) => n, get: () => ({ fetch: async () => { throw new Error('坏了'); } }) };
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(await (await call('/about', { headers: HTML })).text(), 'asset:/about');
+    await background[1]; // 写失败被吞掉，不抛出
+  } finally { console.error = realError; }
+});
+
+test('方案页不存在：返回 404 的 HTML 页面，说明原因，给首页入口，引用 /design.css', async () => {
+  const res = await call('/p/nopenopeno');
+  assert.equal(res.status, 404);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  assert.equal(res.headers.get('x-robots-tag'), 'noindex');
+  const html = await res.text();
+  assert.match(html, /href="\/design\.css"/);
+  assert.match(html, /已经停止分享/);
+  assert.match(html, /<a class="c-btn[^"]*" href="\/">回到首页/);
+});
+
+test('口令页：引用 /design.css，表单和字段不变', async () => {
+  const t = await newTrip();
+  const { url } = (await publish(t, '<!doctype html>方案内容')).share;
+  await shareAction(t, { action: 'code', code: '2468' });
+  const html = await (await call(url)).text();
+  assert.match(html, /href="\/design\.css"/);
+  assert.match(html, new RegExp(`<form class="c-card" method="post" action="${url}">`));
+  assert.match(html, /name="code"/);
+});
+
+test('行程已删除或到期：接口返回 TRIP_GONE，和密钥不对（UNAUTHORIZED）区分', async () => {
+  const t = await newTrip();
+  const wrong = await call(`${t.base}/session`, { method: 'POST', body: { key: 'wrong' } });
+  assert.equal(wrong.status, 401);
+  assert.equal((await wrong.json()).info, 'UNAUTHORIZED');
+  await call(`${t.base}/delete`, { method: 'POST', cookie: t.cookie });
+  const session = await call(`${t.base}/session`, { method: 'POST', body: { key: t.key } });
+  assert.equal(session.status, 404);
+  assert.equal((await session.json()).info, 'TRIP_GONE');
+  assert.equal((await (await call('/api/t/abcdefghij/session', { method: 'POST', body: { key: 'x' } })).json()).info, 'TRIP_GONE'); // 从没建过的 id 一样
+});
+
+test('/api/env 返回版本号（取自 package.json）', async () => {
+  const res = await (await call('/api/env')).json();
+  assert.match(res.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(res.version, pkg.version);
 });

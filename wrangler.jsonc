@@ -6,7 +6,10 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/p/*", "/t/*"]
+    // 不存在的静态路径返回 dist/404.html（状态码 404）
+    "not_found_handling": "404-page",
+    // 先走 Worker 的路径：接口、方案页、编辑页，以及要做页面访问计数的页面（计数后由 Worker 转给静态文件）
+    "run_worker_first": ["/api/*", "/p/*", "/t/*", "/", "/demo", "/guide", "/guide/*", "/for/*", "/privacy", "/about"]
   },
   "durable_objects": {
     "bindings": [

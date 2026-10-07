@@ -2,6 +2,7 @@
 // 把网页版要用的静态文件收集到 dist/：界面、计算线程、Python 代码（和本地版是同一份）。
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { vendor } from './vendor.mjs';
 
 rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist/py', { recursive: true });
@@ -19,6 +20,9 @@ for (const name of ['robots.txt', 'sitemap.xml', 'llms.txt']) cpSync(`web/${name
 for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py']) cpSync(name, `dist/py/${name}`);
 cpSync('web/_headers', 'dist/_headers'); // 静态文件的安全响应头；Worker 生成的响应在 worker.js 里加同一组
 
+// 编辑页的前端依赖改为自己托管：下载并校验到 dist/vendor/，把 dist/edit.html、dist/pyworker.js 里的 CDN 地址换成 /vendor/…（见 web/vendor.mjs）
+vendor();
+
 // ---------- 构建时给每个页面生成 CSP ----------
 // 内嵌脚本按内容的 sha256 放行（不用 'unsafe-inline'），改了脚本重新构建即可，不用手工更新哈希。
 // 只改 dist/ 里的产物，源文件不动。CSP 放在 <meta> 里，紧跟 <meta charset>、在任何脚本之前。
@@ -29,20 +33,16 @@ const BASE = {
   'img-src': ["'self'", 'data:'], 'style-src': ["'self'", "'unsafe-inline'"], 'connect-src': ["'self'"],
   'font-src': ["'self'"], 'manifest-src': ["'self'"],
 };
-const PYODIDE = 'https://cdn.jsdelivr.net/pyodide/';
 const LEAFLET = { 'script-src': [CDNJS], 'style-src': [CDNJS], 'img-src': [CDNJS, 'https://*.is.autonavi.com'] };
 const PAGES = {
   'index.html': {},
   'admin.html': {},
   'privacy.html': { noScript: true }, // 没有脚本
   'demo.html': LEAFLET,
-  // 编辑页：Leaflet、marked（cdnjs）；计算线程是同源的模块 Worker，它从 jsDelivr 加载 Pyodide（脚本、wasm、标准库）。
-  // 实测 Chromium 里这个 Worker 受创建它的页面的 CSP 约束，Worker 里 import 的脚本由 worker-src 管（不是 script-src），
-  // 所以 worker-src 和 connect-src 都要放行 jsDelivr 的 Pyodide 路径。script-src 里放行同一路径和 wasm-unsafe-eval
-  // 是给 Firefox、Safari 保险（它们对 Worker 内脚本和 wasm 的判断可能不同，这两个浏览器没有实测）
+  // 编辑页：Leaflet、marked、Pyodide 都是自己托管的同源文件（见 web/vendor.mjs），不放行任何 CDN，只放行高德瓦片图片。
+  // 计算线程是同源的模块 Worker：Worker 里 import 的脚本由 worker-src 管（Chromium 实测），wasm 编译要 script-src 里的 'wasm-unsafe-eval'
   'edit.html': {
-    ...LEAFLET, 'worker-src': ["'self'", PYODIDE],
-    'script-src': [CDNJS, PYODIDE, "'wasm-unsafe-eval'"], 'connect-src': [PYODIDE],
+    'worker-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'img-src': ['https://*.is.autonavi.com'],
   },
 
 };

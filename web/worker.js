@@ -9,6 +9,8 @@
 //          只防程序出错时无限调用）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）、
 //          OWNER_MONTHLY_LBS_BUDGET / OWNER_MONTHLY_SEARCH_BUDGET（站长 Key 每月的路线测距类、搜索类预算）
 
+import pkg from '../package.json' with { type: 'json' }; // 版本号：/api/env 返回，页脚和更新记录也用它
+
 // 只放行计算用到的高德接口
 const AMAP_PATHS = new Set([
   '/v3/geocode/geo', '/v3/geocode/regeo', '/v5/place/text', '/v5/place/around', '/v5/place/polygon',
@@ -26,6 +28,26 @@ const DEFAULT_OWNER_DAILY_LIMIT = 4000;
 const DEFAULT_OWNER_MONTHLY_BUDGET = { lbs: 140000, search: 4500 };
 const DAILY_KEEP_DAYS = 35; // 每天的用量只保留这么久（月累计要用到整个自然月）
 const DAILY_SHOW_DAYS = 30; // 管理页显示近多少天
+// 流量统计（只记按天汇总的次数，不记 IP、完整 URL，不用 Cookie）
+const STATS_PREFIX = 'st:'; // 每天一条记录：st:YYYY-MM-DD
+const STATS_KEEP_DAYS = 35;
+const STATS_SHOW_DAYS = 30;
+const STATS_VALUE_CAP = 50; // 来源域名、from 参数、页面路径，每天每类最多记这么多个不同值，其余计入「其他」
+const STATS_OTHER = '其他';
+// 爬虫按 UA 归类，从上到下第一条命中的算；要增减爬虫改这张表（最后一类「other」兜底，不用动）
+const BOT_RULES = [
+  ['googlebot', /googlebot|googleother|google-inspectiontool|storebot-google|adsbot-google|apis-google/i],
+  ['bingbot', /bingbot|msnbot|bingpreview/i],
+  ['baiduspider', /baiduspider/i],
+  ['bytespider', /bytespider/i],
+  ['gptbot', /gptbot|chatgpt-user|oai-searchbot/i],
+  ['claudebot', /claudebot|claude-web|claude-user|claude-searchbot|anthropic-ai/i],
+  ['perplexitybot', /perplexitybot|perplexity-user/i],
+  ['other', /bot\b|crawl|spider|slurp|scrapy|headlesschrome|python-requests|python-urllib|aiohttp|curl\/|wget\/|go-http-client|java\/|okhttp|libwww|node-fetch|axios|facebookexternalhit|embedly|linkpreview/i],
+];
+const BOT_NAMES = new Set(BOT_RULES.map(([name]) => name));
+// 页面访问只统计这些路径（/guide/*、/for/* 只算存在的页面，见 route）
+const PAGE_PATH_RE = /^\/(?:|demo|guide(?:\/[a-z0-9-]+)?|for\/[a-z0-9-]+|privacy|about)$/;
 const CREATE_PER_IP_PER_DAY = 10;
 // 数据保留期：出行日期后 60 天、最后一次编辑后 180 天，取较晚的那个；到期由行程实例的定时任务删除
 const RETAIN_AFTER_TRAVEL_MS = 60 * 86400e3;
@@ -114,6 +136,52 @@ const internal = (path, body, auth) => new Request(`https://internal${path}`, {
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
+// ---------- 流量统计：写入 Usage 实例，不拖慢响应 ----------
+
+// 后台写一条统计事件：用 ctx.waitUntil，页面响应不等它；写失败只记日志，不影响页面
+function track(env, ctx, event) {
+  const job = Promise.resolve().then(() => usageOf(env).fetch(internal('/hit', event))).catch((err) => console.error('统计写入失败', err));
+  ctx?.waitUntil?.(job);
+}
+
+function botOf(request) {
+  const ua = request.headers.get('user-agent') || '';
+  if (!ua) return 'other'; // 不带 UA 的不是正常浏览器
+  return BOT_RULES.find(([, re]) => re.test(ua))?.[0] || null;
+}
+
+// 外站来源的域名（不记完整地址）；站内跳转、没有 Referer、解析不了都返回 null
+function referrerHost(request, url) {
+  try {
+    const host = new URL(request.headers.get('referer') || '').hostname.toLowerCase().replace(/^www\./, '');
+    const own = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (host === own || host.endsWith(`.${own}`) || !/^[a-z0-9.-]{1,60}$/.test(host)) return null;
+    return host;
+  } catch { return null; }
+}
+
+// 页面访问：只算 GET 且文件存在（200）的页面；爬虫单独计，不算页面访问；人要求 Accept 含 html
+// 来源（Referer 域名、?from=）只在首页记
+async function servePage(request, env, url, ctx) {
+  const res = await env.ASSETS.fetch(request);
+  if (request.method !== 'GET' || res.status !== 200) return res;
+  const bot = botOf(request);
+  if (bot) {
+    track(env, ctx, { kind: 'bot', bot });
+  } else if (/html/i.test(request.headers.get('accept') || '')) {
+    const path = url.pathname.length > 1 ? url.pathname.replace(/\/$/, '') : '/';
+    const event = { kind: 'page', path };
+    if (path === '/') {
+      const from = (url.searchParams.get('from') || '').toLowerCase();
+      if (/^[a-z0-9-]{1,24}$/.test(from)) event.from = from;
+      const ref = referrerHost(request, url);
+      if (ref) event.ref = ref;
+    }
+    track(env, ctx, event);
+  }
+  return res;
+}
+
 // ---------- 新建行程 ----------
 
 // 用一次真实调用确认 Key 可用；配额或频率问题不算 Key 无效。返回错误说明，可用时返回空
@@ -131,7 +199,7 @@ async function amapKeyProblem(amapKey) {
 
 const tripNameOf = (body) => String(body.name || '').trim().slice(0, 60) || '未命名行程';
 
-async function createTrip(request, env) {
+async function createTrip(request, env, ctx) {
   const body = await readJson(request, 4096);
   const name = tripNameOf(body);
   let mode, amapKey = null;
@@ -160,17 +228,19 @@ async function createTrip(request, env) {
     ({ invite, tripLimit } = await res.json());
   }
   await roomOf(env, id).fetch(internal('/init', { id, name, mode, amapKey, invite, tripLimit, keyHash: await sha256(key) }));
+  track(env, ctx, { kind: 'create', source: code ? 'invite' : 'own' });
   return json({ id, key, url: `/t/${id}#k=${key}` });
 }
 
 // 站长在管理页用公共额度新建行程：仍算进全站每天新建总数，不受单 IP 限制，也不受「暂停新建」影响
-async function adminCreateTrip(request, env) {
+async function adminCreateTrip(request, env, ctx) {
   const name = tripNameOf(await readJson(request, 1024));
   const gate = await usageOf(env).fetch(internal('/create', { ip: null, admin: true }));
   if (!gate.ok) return gate;
   const id = randomId(10), key = randomId(24);
   await roomOf(env, id).fetch(internal('/init', { id, name, mode: 'owner', amapKey: null, invite: null, tripLimit: null, keyHash: await sha256(key) }));
   await usageOf(env).fetch(internal('/admin-log', { op: '用公共额度新建行程', target: id }));
+  track(env, ctx, { kind: 'create', source: 'admin' });
   return json({ id, key, url: `/t/${id}#k=${key}` });
 }
 
@@ -178,7 +248,7 @@ async function adminCreateTrip(request, env) {
 
 const statusCacheKey = (url) => new Request(`${url.origin}/api/status`);
 
-async function adminApi(request, env, url) {
+async function adminApi(request, env, url, ctx) {
   const sub = url.pathname.slice('/api/admin'.length);
   if (!env.ACCESS_CODE) return json({ error: '这个站点没有设置站长口令' }, 404);
   const usage = usageOf(env);
@@ -212,7 +282,7 @@ async function adminApi(request, env, url) {
     const res = await usage.fetch(internal('/admin-logout-all', {}));
     return json(await res.json(), 200, { 'set-cookie': cookie('', 0) });
   }
-  if (sub === '/trips' && post) return adminCreateTrip(request, env);
+  if (sub === '/trips' && post) return adminCreateTrip(request, env, ctx);
   if (sub === '/invites' && post) return usage.fetch(internal('/invite-create', await readJson(request, 2048)));
   if (sub === '/invites/disable-all' && post) return usage.fetch(internal('/invite-disable-all', {}));
   if (sub === '/flags' && post) {
@@ -249,14 +319,14 @@ async function publicStatus(env, url) {
 
 const tripCookie = (name, id, value, secure, maxAge = 7776000) => `${name}_${id}=${value}; Path=/api/t/${id}; HttpOnly;${secure} SameSite=Lax; Max-Age=${maxAge}`;
 
-async function tripApi(request, env, url, id, sub) {
+async function tripApi(request, env, url, id, sub, ctx) {
   const room = roomOf(env, id);
   const secure = url.protocol === 'https:' ? ' Secure;' : '';
   if (sub === '/session' && request.method === 'POST') {
     // 用编辑链接里的密钥（设了编辑口令的还要口令）换 Cookie，只对这个行程路径生效（WebSocket 也会带上）
     const { key = '', code = '' } = await readJson(request, 1024);
     const res = await room.fetch(internal('/auth', { code: String(code) }, { key: String(key) }));
-    if (!res.ok) { await sleep(500); return res; } // 拖慢猜密钥和口令
+    if (!res.ok) { if (res.status !== 404) await sleep(500); return res; } // 拖慢猜密钥和口令（行程已不存在的不用拖）
     const { editCodeHash, ...info } = await res.json();
     const out = json(info, 200, { 'set-cookie': tripCookie('tk', id, key, secure) });
     if (editCodeHash) out.headers.append('set-cookie', tripCookie('tc', id, editCodeHash, secure));
@@ -269,7 +339,7 @@ async function tripApi(request, env, url, id, sub) {
     return json({ error: '只接受本站发起的连接' }, 403); // 防止其他网站借用户的 Cookie 建立同步连接
   }
   if (sub === '/amap-batch' || sub.startsWith('/amap/')) return tripAmap(request, env, url, room, auth, sub);
-  if (sub === '/page' && request.method === 'POST') return publishPage(request, env, url, room, auth);
+  if (sub === '/page' && request.method === 'POST') return publishPage(request, env, url, room, auth, ctx);
   if (sub === '/share' && request.method === 'POST') return shareSettings(request, env, room, auth);
   if (sub === '/rotate-key' && request.method === 'POST') return rotateKey(request, env, url, room, auth, id);
   if (sub === '/edit-code' && request.method === 'POST') return editCodeSettings(request, room, secure, auth, id);
@@ -303,13 +373,14 @@ const pageOptions = (share) => ({
   expiration: Math.floor((share.deadline + 86400e3) / 1000),
 });
 
-async function publishPage(request, env, url, room, auth) {
+async function publishPage(request, env, url, room, auth, ctx) {
   const { html } = await readJson(request, MAX_PAGE_BYTES);
   if (typeof html !== 'string' || !html.startsWith('<!doctype html>')) return json({ error: '方案页内容不对' }, 400);
   const res = await room.fetch(internal('/published', {}, auth)); // 先鉴权并记下发布时间
   if (!res.ok) return res;
   const share = await res.json();
   await env.DATA.put(`page:${share.shareId}`, html, pageOptions(share));
+  track(env, ctx, { kind: 'publish' });
   return json({ share: share.public });
 }
 
@@ -353,17 +424,36 @@ async function editCodeSettings(request, room, secure, auth, id) {
   });
 }
 
+// Worker 自己生成的简单页面（口令页、方案页 404）：引用 /design.css（构建时由 web/design.css 生成），类名用 c- 前缀。
+// design.css 不存在或加载失败时，页面自带的这段最小样式兜底，保证能看；兜底放在 <link> 前面，design.css 的同名规则会覆盖它
+const FALLBACK_CSS = `:root{color-scheme:light dark;--bg:#f7f4ee;--surface:#fff;--line:#e5ddd0;--line-strong:#cfc4b3;--ink:#221e1a;--ink-2:#5a5148;--accent:#b4442c;--on-accent:#fff;--danger:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#161412;--surface:#1f1c19;--line:#35302a;--line-strong:#4a443c;--ink:#efe9e1;--ink-2:#bdb4a8;--accent:#e47a5f;--on-accent:#1a0f0b;--danger:#f87171}}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif}
+.wc-box{width:min(420px,88vw)}.c-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:24px}
+h1{font-size:18px;line-height:1.3;margin:0 0 8px}p,li{color:var(--ink-2);font-size:14px}ul{padding-left:1.2em;margin:8px 0 16px}
+.c-input{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--ink)}
+.c-btn{display:inline-block;box-sizing:border-box;font:inherit;padding:8px 16px;border:0;border-radius:8px;background:var(--accent);color:var(--on-accent);text-decoration:none;cursor:pointer}
+.c-btn-block{width:100%;margin-top:12px;text-align:center}.c-field-error{color:var(--danger);min-height:1.4em;margin:6px 0 0;font-size:14px}`;
+
+function simplePage(title, body, status) {
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>${title}</title>
+<style>${FALLBACK_CSS}</style><link rel="stylesheet" href="/design.css"></head>
+<body><main class="wc-box">${body}</main></body></html>`;
+  return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
+}
+
+// 方案页不存在：可能还没发布、已停止分享、换了新链接，或行程已删除、到期
+function sharePageGone() {
+  return simplePage('找不到这个方案页', `<div class="c-card"><h1>找不到这个方案页</h1>
+<p>可能的原因：</p><ul><li>链接没复制完整，或有错字</li><li>发起人还没有发布方案页</li><li>发起人已经停止分享，或换了新的链接</li><li>行程已经删除或到期，方案页跟着自动删除了</li></ul>
+<p>可以问一下发给你链接的人要最新的链接。</p><a class="c-btn c-btn-primary c-btn-block" href="/">回到首页</a></div>`, 404);
+}
+
 // 方案页：有访问口令的先要口令；口令对了发一个只对这个方案页路径有效的 Cookie
 function codePage(id, message, status) {
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>输入访问口令</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#faf7f2;font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#24201c}
-form{background:#fff;border:1px solid #ebe4da;border-radius:14px;padding:22px;width:min(320px,88vw)}h1{font-size:18px;margin:0 0 6px}
-p{color:#7a7168;font-size:13px;margin:0 0 12px}input{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid #ebe4da;border-radius:8px}
-button{margin-top:10px;width:100%;font:inherit;padding:8px;border:0;border-radius:8px;background:#b4442c;color:#fff}.err{color:#b91c1c;min-height:1.4em;margin:6px 0 0}</style></head>
-<body><form method="post" action="/p/${id}"><h1>这个出行方案设了访问口令</h1><p>口令由发起人设置，问一下发给你链接的人。</p>
-<input name="code" autocomplete="off" autofocus required><div class="err">${message}</div><button>查看方案</button></form></body></html>`;
-  return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
+  return simplePage('输入访问口令', `<form class="c-card" method="post" action="/p/${id}"><h1>这个出行方案设了访问口令</h1><p>口令由发起人设置，问一下发给你链接的人。</p>
+<input class="c-input" name="code" autocomplete="off" autofocus required><div class="c-field-error err">${message}</div><button class="c-btn c-btn-primary c-btn-block">查看方案</button></form>`, status);
 }
 
 // 方案页的 HTML 是编辑者的浏览器生成后上传的，不能当作本站的可信代码：放进沙箱（独立的匿名来源），
@@ -377,10 +467,10 @@ const SHARE_CSP = [
   "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "frame-ancestors 'none'",
 ].join('; ');
 
-async function sharePage(request, env, url, id) {
+async function sharePage(request, env, url, id, ctx) {
   const { value: html, metadata } = await env.DATA.getWithMetadata(`page:${id}`);
   if (html === null || html === undefined) {
-    return new Response('方案页不存在：可能还没发布、已停止分享，或者换了新链接', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    return sharePageGone();
   }
   const codeHash = metadata?.codeHash;
   if (codeHash && request.method === 'POST') {
@@ -398,6 +488,7 @@ async function sharePage(request, env, url, id) {
     } });
   }
   if (codeHash && getCookie(request, `pc_${id}`) !== codeHash) return codePage(id, '', 401);
+  if (request.method === 'GET' && !botOf(request)) track(env, ctx, { kind: 'shareView' }); // 方案页被打开
   return new Response(html, {
     headers: {
       'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache', 'x-robots-tag': 'noindex',
@@ -558,7 +649,10 @@ export class ConfigRoom {
     const path = url.pathname;
     if (path === '/init') return this.init(await request.json());
     const meta = await this.storage.get('meta');
-    if (!meta || meta.keyHash !== (await sha256(request.headers.get('x-trip-key') || ''))) {
+    if (!meta) { // 行程已删除或到期：和「密钥不对」分开，让编辑页能提示。行程 id 是 10 位随机串，说出「存在与否」不会帮人猜到什么
+      return json({ error: '这个行程已经删除或到期', status: '0', info: 'TRIP_GONE' }, 404);
+    }
+    if (meta.keyHash !== (await sha256(request.headers.get('x-trip-key') || ''))) {
       return json({ error: '编辑链接无效或已失效', status: '0', info: 'UNAUTHORIZED' }, 401);
     }
     if (path !== '/auth' && meta.editCodeHash && request.headers.get('x-trip-code') !== meta.editCodeHash) {
@@ -835,6 +929,19 @@ export class ConfigRoom {
   }
 }
 
+const emptyStatsDay = () => ({
+  pages: 0, paths: {}, bots: {}, refs: {}, froms: {},
+  creates: { invite: 0, own: 0, admin: 0 }, active: 0, publishes: 0, shareViews: 0,
+});
+
+// 给「名字 → 次数」的表加一次；这张表里最多 STATS_VALUE_CAP 个不同的名字，超出的和不合规的计入「其他」
+function bumpName(map, name) {
+  const valid = typeof name === 'string' && /^[a-z0-9./-]{1,60}$/.test(name);
+  const known = Object.keys(map).filter((k) => k !== STATS_OTHER).length;
+  const key = valid && (Object.hasOwn(map, name) || known < STATS_VALUE_CAP) ? name : STATS_OTHER;
+  map[key] = (map[key] || 0) + 1;
+}
+
 // ---------- 全站计数：新建行程的频率、站长 Key 的用量、邀请码、管理会话和应急开关 ----------
 
 export class Usage {
@@ -895,6 +1002,7 @@ export class Usage {
       await this.storage.put('attempts', attempts);
       return attempts.counts[body.id] > SHARE_ATTEMPTS_PER_HOUR ? json({ error: 'too many' }, 429) : json({ ok: true });
     }
+    if (path === '/hit') return this.hit(body, today);
     if (path === '/owner-take') return this.ownerTake(body, today);
     if (path === '/public-status') return this.publicStatus(body, today);
     // ---- 管理会话 ----
@@ -1020,9 +1128,57 @@ export class Usage {
         createdToday: create.day === today ? create.total : 0, invites, trips,
         flags: (await this.storage.get('flags')) || {}, ops: (await this.storage.get('ops')) || [],
         quota: { today: used, month, budgets: body.budgets, days },
+        traffic: await this.traffic(today),
       });
     }
     return json({ error: 'not found' }, 404);
+  }
+
+  // ---- 流量统计：每天一条 st:YYYY-MM-DD，只有次数；新的一天写入第一条时顺便清掉超过 STATS_KEEP_DAYS 天的 ----
+
+  async statsBump(today, update) {
+    const key = STATS_PREFIX + today;
+    let day = await this.storage.get(key);
+    if (!day) {
+      day = emptyStatsDay();
+      const oldest = beijingDay(Date.now() - (STATS_KEEP_DAYS - 1) * DAY_MS);
+      const old = [...(await this.storage.list({ prefix: STATS_PREFIX })).keys()].filter((k) => k < STATS_PREFIX + oldest);
+      for (let i = 0; i < old.length; i += 100) await this.storage.delete(old.slice(i, i + 100));
+    }
+    update(day);
+    await this.storage.put(key, day);
+  }
+
+  // Worker 在后台发来的事件：page（页面访问）、bot（爬虫）、create（新建行程）、publish（发布方案页）、shareView（方案页被打开）
+  async hit(body, today) {
+    await this.statsBump(today, (d) => {
+      if (body.kind === 'page') {
+        d.pages += 1;
+        bumpName(d.paths, body.path);
+        if (body.ref) bumpName(d.refs, body.ref);
+        if (body.from) bumpName(d.froms, body.from);
+      } else if (body.kind === 'bot') {
+        const name = BOT_NAMES.has(body.bot) ? body.bot : 'other';
+        d.bots[name] = (d.bots[name] || 0) + 1;
+      } else if (body.kind === 'create' && body.source in d.creates) {
+        d.creates[body.source] += 1;
+      } else if (body.kind === 'publish') {
+        d.publishes += 1;
+      } else if (body.kind === 'shareView') {
+        d.shareViews += 1;
+      }
+    });
+    return json({ ok: true });
+  }
+
+  // 近 STATS_SHOW_DAYS 天的统计，新的在前，没有记录的天补零
+  async traffic(today) {
+    const saved = await this.storage.list({ prefix: STATS_PREFIX });
+    const days = Array.from({ length: STATS_SHOW_DAYS }, (_, i) => {
+      const day = beijingDay(Date.now() - i * DAY_MS);
+      return { day, ...(saved.get(STATS_PREFIX + day) || emptyStatsDay()) };
+    });
+    return { days };
   }
 
   // 站长 Key 按类别领取调用次数。顺序：应急开关 → 行程是否被停用 → 邀请码 → 八成预留 → 每日总上限和每月预算
@@ -1058,7 +1214,11 @@ export class Usage {
         inv.usage = inv.usage?.day === today ? { day: today, count: inv.usage.count + sum } : { day: today, count: sum };
         await this.storage.put('invites', invites);
       }
-      if (body.tripId) await this.touchTrip(trips, body, today, sum);
+      if (body.tripId) {
+        // 当天有计算的行程数：这个行程当天第一次领到额度时计一次
+        if (trips.find((t) => t.id === body.tripId)?.lastDay !== today) await this.statsBump(today, (d) => { d.active += 1; });
+        await this.touchTrip(trips, body, today, sum);
+      }
     }
     return json({ granted, reasons, used: total + sum });
   }
@@ -1120,28 +1280,29 @@ function crossSiteMutation(request, url) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const isEditPage = /^\/t\/[a-z2-9]{10}\/?$/.test(url.pathname);
-    return withSecurityHeaders(await route(request, env, url), isEditPage ? { 'content-security-policy': "frame-ancestors 'none'" } : {});
+    return withSecurityHeaders(await route(request, env, url, ctx), isEditPage ? { 'content-security-policy': "frame-ancestors 'none'" } : {});
   },
 };
 
-async function route(request, env, url) {
+async function route(request, env, url, ctx) {
   const { pathname } = url;
   try {
     if (crossSiteMutation(request, url)) return json({ error: '只接受本站发起的请求' }, 403);
-    if (pathname === '/api/env') return json({ mode: 'online', ownerKey: Boolean(env.ACCESS_CODE && env.AMAP_KEY) });
+    if (pathname === '/api/env') return json({ mode: 'online', ownerKey: Boolean(env.ACCESS_CODE && env.AMAP_KEY), version: pkg.version });
     if (pathname === '/api/status' && request.method === 'GET') return await publicStatus(env, url);
-    if (pathname === '/api/trips' && request.method === 'POST') return await createTrip(request, env);
-    if (pathname.startsWith('/api/admin/')) return await adminApi(request, env, url);
+    if (pathname === '/api/trips' && request.method === 'POST') return await createTrip(request, env, ctx);
+    if (pathname.startsWith('/api/admin/')) return await adminApi(request, env, url, ctx);
     const trip = pathname.match(/^\/api\/t\/([a-z2-9]+)(\/.*)$/);
-    if (trip) return ID_RE.test(trip[1]) ? await tripApi(request, env, url, trip[1], trip[2]) : json({ error: '行程不存在' }, 404);
+    if (trip) return ID_RE.test(trip[1]) ? await tripApi(request, env, url, trip[1], trip[2], ctx) : json({ error: '行程不存在' }, 404);
     if (pathname.startsWith('/api/')) return json({ error: 'not found' }, 404);
     const page = pathname.match(/^\/p\/([a-z2-9]{10,12})$/);
     // 方案页：链接本身是访问凭证，可另设口令。10 位是方案页 id，12 位是 v1 单独发布的旧链接
-    if (page) return await sharePage(request, env, url, page[1]);
+    if (page) return await sharePage(request, env, url, page[1], ctx);
     if (/^\/t\/[a-z2-9]{10}\/?$/.test(pathname)) return env.ASSETS.fetch(new Request(new URL('/edit', url)));
+    if (PAGE_PATH_RE.test(pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname)) return await servePage(request, env, url, ctx); // 页面访问计数
     return env.ASSETS.fetch(request);
   } catch (err) {
     // 4xx 是我们自己抛的、写给用户看的提示；其余不把内部错误原文交给客户端
