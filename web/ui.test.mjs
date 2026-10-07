@@ -81,3 +81,20 @@ test('输入校验：车次、日期、时间', () => {
   assert.equal(f.trainProblem('G7351 08:35', false, true), null); // 填了分钟数，只有一个时刻也行
   assert.equal(f.trainProblem('G7351 08:35', false, false).soft, true); // 只有一个时刻：提示但不拦
 });
+
+// 失焦（change）不能重建整张表单：重建会换掉输入框，用户正按下的那次点击落到旧元素上，点击和输入就丢了
+test('表单 change 监听里不重建表单，只调用 refreshDerived', () => {
+  const code = scripts(ui).at(-1);
+  const m = /\$\('#form'\)\.addEventListener\('change'[\s\S]*?\n\}\);\n/.exec(code);
+  assert.ok(m, '找不到表单的 change 监听');
+  assert.doesNotMatch(m[0].replace(/\/\/.*$/gm, ''), /rerenderKeepingFocus\(\)/, 'change 里不能整张表单重绘');
+  assert.match(m[0], /refreshDerived\(\)/);
+  const r = /function renameStation[\s\S]*?\n\}\n/.exec(code); // 改车站名也是原地更新
+  assert.ok(r && !/rerenderKeepingFocus|renderForm/.test(r[0]), '改车站名不能重绘表单');
+  assert.match(code, /function refreshDerived\(\)/);
+});
+
+test('12306 链接始终渲染，由 refreshDerived 更新 href', () => {
+  assert.match(ui, /data-link12306="\$\{i\}"/);
+  assert.match(ui, /a\.href = href/);
+});

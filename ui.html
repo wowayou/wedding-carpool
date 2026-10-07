@@ -648,29 +648,23 @@ function personCard(p, i) {
   const backTrains = p.return_trains || {};
   const backPart = !backOn ? '' : `<div class="rail">
       <div class="sub">返程：各站坐哪趟车回去，如 <code>G1234 20:30→23:50</code>（第一个时刻是发车时间，用来判断赶不赶得上）。都留空表示返程不坐火车或另行安排。</div>
-      ${stations.map((s) => {
-        const href = link12306(p, s.name || '', true);
-        return `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
+      ${stations.map((s) => `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
           <input class="c-input span2" data-backtrain="${i}" data-station="${esc(s.name)}" value="${esc(backTrains[s.name])}" placeholder="车次 发车→到达" aria-label="${esc(s.name)}返程车次">
-          ${href ? `<a class="c-btn c-btn--sm" href="${esc(href)}" target="_blank" rel="noopener" title="在 12306 查从 ${esc(s.name)} 回去的车次">查</a>` : '<span></span>'}</div>`;
-      }).join('')}
+          ${railLinkHtml(p, i, s.name || '', true)}</div>`).join('')}
     </div>`;
   const riderPart = `
     <div class="row">${field('同行人数（含自己）', base + '.party', { type: 'number', placeholder: '1', min: 1 })}
       <label class="toggle" style="flex:2"><input type="checkbox" data-home="${i}" ${p.pickup_at_home === false ? '' : 'checked'}> 顺路的话，车主可以到家附近接</label></div>
     <div class="rail">
       <div class="sub">能去的站填 12306 查到的车次和时刻，如 <code>G1234 08:00→11:30</code>，会自动算用时并对齐接人时间；也可以只填分钟数（含去车站和候车）。都留空表示不去这个站。点「查」打开已填好出发地和日期的 12306。</div>
-      ${stations.length ? stations.map((s) => {
-        const href = link12306(p, s.name || '');
-        return `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
+      ${stations.length ? stations.map((s) => `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
           <input class="c-input" data-train="${i}" data-station="${esc(s.name)}" value="${esc(trains[s.name])}" placeholder="车次 发车→到站" aria-label="${esc(s.name)}车次">
           <input class="c-input" type="number" min="0" inputmode="numeric" data-rail="${i}" data-station="${esc(s.name)}" value="${esc(rails[s.name])}" placeholder="分钟" aria-label="${esc(s.name)}用时（分钟）">
-          ${href ? `<a class="c-btn c-btn--sm" href="${esc(href)}" target="_blank" rel="noopener" title="在 12306 查 ${esc(p.name)} 到 ${esc(s.name)} 的车次">查</a>` : '<span></span>'}</div>`;
-      }).join('') : '<div class="muted">先在上面添加候选车站</div>'}
+          ${railLinkHtml(p, i, s.name || '', false)}</div>`).join('') : '<div class="muted">先在上面添加候选车站</div>'}
       ${Object.keys(rails).length || Object.keys(trains).length ? '' : '<div class="hint">全部留空时改用高德估算：不含火车换乘，可能很不准。</div>'}
     </div>${backPart}`;
   const driverPart = `<div class="row">${field('空座', base + '.car_seats', { type: 'number', min: 1 })}
-    ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', min: 0, placeholder: '默认 ' + (cfg.options?.max_detour_min ?? 30) })}</div>
+    ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', min: 0, placeholder: detourHint() })}</div>
     ${!backOn ? '' : `<div class="row"><label class="toggle" style="flex:2"><input type="checkbox" data-backdrive="${i}" ${p.return_drives === false ? '' : 'checked'}> 返程也开车，可以顺路送人</label>
       ${p.return_drives === false ? '' : field('返程最多绕路', base + '.return_max_detour_min', { type: 'number', min: 0, placeholder: '同去程' })}</div>`}`;
   return `<div class="card c-card ${drives ? 'c-card--drive driver' : 'c-card--ride rider'}">
@@ -681,6 +675,41 @@ function personCard(p, i) {
     ${drives ? driverPart : riderPart}
     <label class="f"><span>备注</span><textarea class="c-textarea" rows="2" data-bind="${base}.note" style="min-height:64px">${esc(p.note)}</textarea></label>
   </div>`;
+}
+
+// 12306 查询链接的 <a>：始终渲染，没有可用地址时只是看不见（占位不变）。href、标题由 refreshDerived() 原地更新
+function railLinkHtml(p, i, stationName, back) {
+  return `<a class="c-btn c-btn--sm" data-link12306="${i}" data-station="${esc(stationName)}"${back ? ' data-back' : ''} target="_blank" rel="noopener">查</a>`;
+}
+const detourHint = () => '默认 ' + (cfg.options?.max_detour_min ?? 30);
+const returnDatePlaceholder = () => cfg.options?.travel_date || 'YYYY-MM-DD';
+
+// 字段失焦（change）时只更新由字段值推出来的内容，不重建表单。
+// 重建会换掉所有输入框：用户按下鼠标时正好触发失焦，那一下点击会落在被换掉的元素上，点击和输入就丢了。
+// 范围：12306 链接的地址和标题、「默认 N」「返程日期」这类占位文字、步骤条、校验提示。（保留期提示只随行程数据变，过期方案提示在每次输入时由 markDirty 更新。）
+// 结构变化（加删成员或车站、开车、返程开关、导入、恢复历史、远端合并）才整体重绘 renderForm()。
+function refreshDerived() {
+  for (const a of document.querySelectorAll('#form a[data-link12306]')) {
+    const p = cfg.people[Number(a.dataset.link12306)];
+    const back = a.hasAttribute('data-back');
+    const href = p ? link12306(p, a.dataset.station, back) : '';
+    if (href) {
+      a.href = href;
+      a.title = back ? `在 12306 查从 ${a.dataset.station} 回去的车次` : `在 12306 查 ${p.name || ''} 到 ${a.dataset.station} 的车次`;
+      a.style.visibility = '';
+    } else {
+      a.removeAttribute('href');
+      a.removeAttribute('title');
+      a.style.visibility = 'hidden';
+    }
+  }
+  for (const el of document.querySelectorAll('#form [data-bind$=".max_detour_min"]')) {
+    if (/^people\.\d+\.max_detour_min$/.test(el.dataset.bind)) el.placeholder = detourHint();
+  }
+  const back = document.querySelector('#form [data-bind="return.date"]');
+  if (back) back.placeholder = returnDatePlaceholder();
+  renderSteps();
+  decorateProblems();
 }
 
 function renderForm() {
@@ -701,7 +730,7 @@ function renderForm() {
       <label class="toggle"><input type="checkbox" data-return-toggle ${cfg.return?.enabled ? 'checked' : ''}> 也规划返程：散场后谁顺路把谁送到车站</label>
       ${cfg.return?.enabled ? `<div class="row">${field('散场后几点出发', 'return.depart_time', { placeholder: '20:30' })}
         ${field('发车前多久到站（分钟）', 'return.security_min', { type: 'number', min: 0, placeholder: '40' })}
-        ${field('返程日期', 'return.date', { placeholder: cfg.options?.travel_date || 'YYYY-MM-DD' })}</div>
+        ${field('返程日期', 'return.date', { placeholder: returnDatePlaceholder() })}</div>
       <div class="muted">不开车的人在自己的卡片里填返程车次；车主可以设返程是否开车送人。</div>` : ''}
     </section>
     <section id="sec-options"><h2>选项</h2>
@@ -713,9 +742,8 @@ function renderForm() {
         ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number', min: 0, placeholder: '45' })}</div>
     </section>`;
   markPeers();
-  renderSteps();
+  refreshDerived();
   schedulePreview();
-  decorateProblems();
 }
 
 // 重画表单但保持正在输入的那一格的焦点和光标
@@ -830,8 +858,20 @@ function renameStation(i, input) {
       }
     }
   }
+  // 原地改：名字相关的 data 属性、标签和无障碍文字，不重建表单
+  input.dataset.old = newName;
+  for (const el of document.querySelectorAll('#form [data-station]')) {
+    if (el.dataset.station !== oldName) continue;
+    el.dataset.station = newName;
+    const label = el.getAttribute('aria-label');
+    if (label && label.startsWith(oldName)) el.setAttribute('aria-label', newName + label.slice(oldName.length));
+    if (!newName && 'value' in el && !el.matches('input[data-station-name]')) el.value = ''; // 站名清空后，这一站的车次、用时已被删掉
+    const row = el.closest('.rail-row');
+    const name = row && row.firstElementChild;
+    if (name && name.tagName === 'SPAN') { name.textContent = newName; name.title = newName; }
+  }
   markDirty();
-  rerenderKeepingFocus();
+  refreshDerived();
 }
 
 function toggleCar(i, on) {
@@ -1807,7 +1847,7 @@ $('#form').addEventListener('change', (e) => {
     if (t.checked) delete p.pickup_at_home; else p.pickup_at_home = false;
     markDirty();
   } else if (t.dataset.bind && /^(options\.|return\.date$|people\.\d+\.(name|from)$)/.test(t.dataset.bind)) {
-    rerenderKeepingFocus(); // 刷新默认值提示、12306 链接
+    refreshDerived(); // 默认值提示、12306 链接、步骤条、校验提示：只更新受影响的部分，不重建表单（否则会吞掉紧接着的点击）
   }
 });
 
@@ -1924,7 +1964,7 @@ window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); 
 (async () => {
   initMap();
   renderEmptyPlan();
-  load12306().then((data) => { rail12306.data = data; if (cfg) rerenderKeepingFocus(); });
+  load12306().then((data) => { rail12306.data = data; if (cfg) refreshDerived(); });
   mode = (await api('/api/env').catch(() => ({ mode: 'local' }))).mode;
   document.body.classList.toggle('online', mode === 'online');
   $('#sharebtn').textContent = mode === 'online' ? '发布方案页' : '生成方案页';
