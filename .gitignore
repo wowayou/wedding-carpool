@@ -11,3 +11,4 @@ dist/
 .dev.vars
 .access_code
 .trip_link
+.claude/
