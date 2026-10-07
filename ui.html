@@ -98,7 +98,7 @@
 <div class="app">
   <aside class="side">
     <header class="bar">
-      <h1>婚礼拼车规划<small id="file"></small></h1>
+      <h1>婚礼拼车规划<small id="file"></small><small id="sync"></small></h1>
       <button class="btn" id="save">保存</button>
       <button class="btn primary" id="plan">计算方案</button>
     </header>
@@ -202,7 +202,141 @@ function toast(msg) {
   t._timer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
-function markDirty() { dirty = true; $('#save').textContent = '保存*'; }
+function markDirty() {
+  dirty = true;
+  $('#save').textContent = '保存*';
+  if (mode === 'online') scheduleSync();
+}
+
+// ---- 在线版实时同步：改动自动保存，别人的改动通过 WebSocket 推过来 ----
+// synced：上次和服务器一致时的配置，冲突时用它做三方合并；version：服务器上的版本号
+let synced = null, version = null, syncTimer = null, syncing = null, socket = null, retryDelay = 1000;
+const clientId = Math.random().toString(36).slice(2);
+const clone = (x) => structuredClone(x);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
+
+// 三方合并：只有我改了用我的，只有对方改了用对方的；都改了就往下逐项合并，同一处都改了以我为准
+function merge3(base, mine, theirs) {
+  if (same(mine, base)) return clone(theirs);
+  if (same(theirs, base) || same(mine, theirs)) return clone(mine);
+  if (isPlain(base) && isPlain(mine) && isPlain(theirs)) {
+    const out = {};
+    for (const k of new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(theirs)])) {
+      const v = merge3(base[k], mine[k], theirs[k]);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  if ([base, mine, theirs].every(Array.isArray) && mine.length >= base.length && theirs.length >= base.length) {
+    // 没人删东西：原有的逐条合并，两边新加的都接在后面
+    const n = base.length;
+    return [...base.map((_, i) => merge3(base[i], mine[i], theirs[i])), ...clone(mine.slice(n)), ...clone(theirs.slice(n))];
+  }
+  return clone(mine);
+}
+
+function setSync(text) { $('#sync').textContent = text ? ` · ${text}` : ''; }
+
+function scheduleSync() {
+  clearTimeout(syncTimer);
+  setSync('待同步');
+  syncTimer = setTimeout(() => save(true).catch((e) => setSync('同步失败：' + e.message)), 800);
+}
+
+// 重画表单但保持正在输入的那一格的焦点和光标
+function rerenderKeepingFocus() {
+  const el = document.activeElement;
+  const attrs = ['bind', 'rail', 'train', 'station', 'stationName', 'search'];
+  const sel = el && el.closest && el.closest('#form')
+    ? Object.entries(el.dataset).filter(([k]) => attrs.includes(k))
+      .map(([k, v]) => `[data-${k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}="${CSS.escape(v)}"]`).join('')
+    : '';
+  const pos = sel && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
+  renderForm();
+  const again = sel && document.querySelector(`#form ${el.tagName.toLowerCase()}${sel}`);
+  if (again) {
+    again.focus();
+    try { if (pos) again.setSelectionRange(...pos); } catch { /* 数字框不支持选区 */ }
+  }
+}
+
+async function syncSave() {
+  clearTimeout(syncTimer);
+  while (syncing) await syncing; // 一次只发一个保存
+  if (!dirty) return;
+  syncing = (async () => {
+    setSync('同步中…');
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const snapshot = clone(cfg);
+      const res = await fetch('/api/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: snapshot, base_version: version, client_id: clientId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) { // 别人先存了：合并后重试
+        cfg = merge3(synced, cfg, data.config);
+        synced = clone(data.config);
+        version = data.version;
+        rerenderKeepingFocus();
+        toast('别人刚改过配置，已合并');
+        continue;
+      }
+      if (res.status === 401) showLogin();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      version = data.version;
+      synced = snapshot;
+      if (same(cfg, snapshot)) { dirty = false; $('#save').textContent = '保存'; }
+      setSync(onlineText());
+      return;
+    }
+    throw new Error('冲突太多，请刷新页面');
+  })();
+  try { await syncing; } finally { syncing = null; }
+  if (dirty) scheduleSync(); // 保存过程中又有新改动
+}
+
+let online = 0;
+function onlineText() { return socket && socket.readyState === 1 ? `实时同步 · ${online} 人在线` : '同步已断开，重连中…'; }
+
+function applyRemote(msg) {
+  if (msg.client_id === clientId || (version !== null && msg.version <= version)) return;
+  if (dirty || syncing) { // 我这边有没存的改动：合并进来，再存一次
+    cfg = merge3(synced, cfg, msg.config);
+    synced = clone(msg.config);
+    version = msg.version;
+    rerenderKeepingFocus();
+    scheduleSync();
+    return;
+  }
+  cfg = clone(msg.config);
+  synced = clone(msg.config);
+  version = msg.version;
+  rerenderKeepingFocus();
+  toast('别人更新了配置，已同步');
+}
+
+function connectSync() {
+  if (socket && socket.readyState <= 1) return;
+  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sync`);
+  socket.onopen = () => { retryDelay = 1000; setSync(onlineText()); };
+  socket.onmessage = async (e) => {
+    if (e.data === 'pong') return;
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'presence') { online = msg.online; setSync(onlineText()); }
+    if (msg.type === 'config') applyRemote(msg);
+    if (msg.type === 'hello' && version !== null && msg.version !== version) {
+      // 断线期间别人改过：没有本地改动就重新载入，有的话下次保存会走合并
+      if (dirty) scheduleSync(); else await loadConfig(true);
+    }
+  };
+  socket.onclose = () => {
+    setSync(onlineText());
+    setTimeout(connectSync, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 15000);
+  };
+}
+setInterval(() => { if (socket && socket.readyState === 1) socket.send('ping'); }, 25000);
 
 // ---- 读写 cfg 里的路径，如 "people.2.car_seats" ----
 function getPath(path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg); }
@@ -381,6 +515,11 @@ function validate() {
 }
 
 async function save(quiet) {
+  if (mode === 'online') {
+    await syncSave();
+    if (!quiet) toast('已同步');
+    return;
+  }
   await api('/api/config', { config: cfg });
   dirty = false;
   $('#save').textContent = '保存';
@@ -546,12 +685,15 @@ $('#sharebtn').addEventListener('click', async () => {
 });
 window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); });
 
-async function loadConfig() {
+async function loadConfig(keepFocus) {
   try {
     const data = await api('/api/config');
     cfg = data.config;
+    synced = clone(cfg);
+    version = data.version ?? null;
     $('#file').textContent = data.file;
-    renderForm();
+    if (keepFocus) rerenderKeepingFocus(); else renderForm();
+    if (mode === 'online') connectSync();
   } catch (e) {
     $('#form').innerHTML = `<div class="warn" style="margin:16px">读取配置失败：${esc(e.message)}</div>`;
   }

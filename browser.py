@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+import urllib.parse
 
 import carpool
 import service
@@ -35,7 +36,43 @@ class BrowserAmap(carpool.Amap):
             raise ConnectionError(str(e)) from e
         return json.loads(text)
 
+    def prefetch(self, queries: list[tuple[str, dict]]) -> None:
+        """把一组请求一次发给 Worker 并发去取，结果放进缓存；之后逐个调用直接命中。
 
+        取失败的不缓存，留给逐个调用按原来的重试逻辑处理；配额用完则立即停下。
+        """
+        todo, seen = [], set()
+        for path, params in queries:
+            query = urllib.parse.urlencode(params)
+            key = f"{path}?{query}"
+            if key not in self.cache and key not in seen:
+                seen.add(key)
+                todo.append((key, path, query))
+        for i in range(0, len(todo), BATCH_LIMIT):
+            chunk = todo[i:i + BATCH_LIMIT]
+            try:
+                results = self._post_json("/api/amap-batch", {"requests": [{"path": p, "query": q} for _, p, q in chunk]})["results"]
+            except (ConnectionError, KeyError, ValueError):
+                return  # 预取只是加速，失败了就逐个请求
+            for (key, _, _), data in zip(chunk, results):
+                carpool.check_quota(str(data.get("info")))
+                if str(data.get("status")) == "1":
+                    self.cache[key] = data
+
+    def _post_json(self, url: str, payload: dict) -> dict:
+        from js import XMLHttpRequest  # 同步 POST；pyodide.http.open_url 只支持 GET
+
+        xhr = XMLHttpRequest.new()
+        xhr.open("POST", url, False)
+        xhr.setRequestHeader("Content-Type", "application/json")
+        try:
+            xhr.send(json.dumps(payload))
+        except Exception as e:  # noqa: BLE001
+            raise ConnectionError(str(e)) from e
+        return json.loads(xhr.responseText)
+
+
+BATCH_LIMIT = 40  # Worker 免费套餐单次请求最多 50 个子请求
 amap: carpool.Amap = BrowserAmap("", pause=0.35)
 _last: dict | None = None
 

@@ -8,11 +8,19 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*", "/p/*"]
   },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "ConfigRoom" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ConfigRoom"] }
+  ],
   "kv_namespaces": [
     { "binding": "DATA", "id": "dd28befbdf1c41cebb15a5fd2f5db89f" }
   ],
   "routes": [
     { "pattern": "carpool.eigentime.org", "custom_domain": true }
   ],
+  // 在离 AWS 香港最近的节点运行：Worker 主要时间花在调高德上，放在美国每次要跨太平洋
+  "placement": { "region": "aws:ap-east-1" },
   "observability": { "enabled": true }
 }

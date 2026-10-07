@@ -6,7 +6,7 @@
     "build": "node web/build.mjs",
     "dev": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
-    "test": "node --test web/worker.test.mjs && python3 -m unittest test_carpool.py"
+    "test": "node --test web/worker.test.mjs web/merge.test.mjs && python3 -m unittest test_carpool.py"
   },
   "devDependencies": {
     "wrangler": "^4.148.0"

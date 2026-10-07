@@ -371,6 +371,30 @@ class BrowserBridgeTest(unittest.TestCase):
         self.assertIn("people", self.call("plan", config=config([]))["error"])
         self.assertIn("未知操作", self.call("nope")["error"])
 
+    def test_prefetch_fills_cache_then_get_hits_it(self):
+        amap = browser.BrowserAmap("", pause=0)
+        q1 = amap.geocode_query("杭州东站")
+        q2 = amap.distance_query([Place("a", 1, 2)], Place("b", 3, 4))
+        replies = {"results": [{"status": "1", "geocodes": []}, {"status": "0", "info": "ENGINE_RESPONSE_DATA_ERROR"}]}
+        with mock.patch.object(amap, "_post_json", return_value=replies) as post:
+            amap.prefetch([q1, q2, q1])  # 重复的只发一次
+        self.assertEqual(len(post.call_args[0][1]["requests"]), 2)
+        with mock.patch.object(amap, "_fetch", side_effect=AssertionError("不该再请求")):
+            self.assertIsNone(amap.geocode("杭州东站"))
+        self.assertNotIn(f"{q2[0]}?{carpool.urllib.parse.urlencode(q2[1])}", amap.cache)  # 失败的留给逐个请求
+
+    def test_prefetch_stops_on_quota(self):
+        amap = browser.BrowserAmap("", pause=0)
+        reply = {"results": [{"status": "0", "info": "USER_DAILY_QUERY_OVER_LIMIT", "infocode": "10044"}]}
+        with mock.patch.object(amap, "_post_json", return_value=reply), self.assertRaises(carpool.QuotaError):
+            amap.prefetch([amap.geocode_query("某地")])
+
+    def test_prefetch_network_failure_is_silent(self):
+        amap = browser.BrowserAmap("", pause=0)
+        with mock.patch.object(amap, "_post_json", side_effect=ConnectionError("断网")):
+            amap.prefetch([amap.geocode_query("某地")])
+        self.assertEqual(amap.cache, {})
+
     def test_browser_urls_go_through_proxy_without_key(self):
         self.assertEqual(browser.BrowserAmap("secret")._url("/v3/distance", "a=1"), "/api/amap/v3/distance?a=1")
 

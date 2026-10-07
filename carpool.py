@@ -51,6 +51,12 @@ class QuotaError(AmapError):
 QUOTA_INFOS = ("DAILY_QUERY_OVER_LIMIT", "QUOTA_PLAN_RUN_OUT", "SERVICE_EXPIRED")
 
 
+def check_quota(info: str) -> None:
+    if any(q in info for q in QUOTA_INFOS):
+        raise QuotaError(f"高德配额已用完（{info}），已停止计算，没有继续调用。"
+                         "额度一般次日恢复；要买额度会产生费用，请自己在高德控制台决定")
+
+
 @dataclass
 class Place:
     name: str
@@ -108,15 +114,33 @@ class Amap:
             if str(data.get("status")) == "1":
                 break
             info = str(data.get("info"))
-            if any(q in info for q in QUOTA_INFOS):
-                raise QuotaError(f"高德配额已用完（{info}），已停止计算，没有继续调用。"
-                                 "额度一般次日恢复；要买额度会产生费用，请自己在高德控制台决定")
+            check_quota(info)
             if ("QPS" in info or "TOO_FREQUENT" in info) and attempt < RETRIES:  # 频率超限，等一下再试
                 time.sleep(backoff)
                 continue
             raise AmapError(f"{path}：{info}（infocode {data.get('infocode')}）")
         self.cache[cache_key] = data
         return data
+
+    # 各类请求的参数：接口方法和批量预取（prefetch）共用，保证缓存键一致
+    def geocode_query(self, address: str, city: str | None = None) -> tuple[str, dict]:
+        return "/v3/geocode/geo", {"address": address, **({"city": city} if city else {})}
+
+    def station_query(self, name: str, city: str | None = None) -> tuple[str, dict]:
+        return "/v5/place/text", {"keywords": name, "types": STATION_TYPE, "page_size": 10,
+                                  **({"region": city} if city else {})}
+
+    def distance_query(self, origins: list[Place], dest: Place) -> tuple[str, dict]:
+        return "/v3/distance", {"origins": "|".join(p.loc for p in origins), "destination": dest.loc, "type": 1}
+
+    def driving_query(self, places: list[Place]) -> tuple[str, dict]:
+        params = {"origin": places[0].loc, "destination": places[-1].loc, "extensions": "base"}
+        if len(places) > 2:
+            params["waypoints"] = ";".join(p.loc for p in places[1:-1])
+        return "/v3/direction/driving", params
+
+    def prefetch(self, queries: list[tuple[str, dict]]) -> None:
+        """批量预取一组请求放进缓存。本地直连高德够快，不需要；网页版里改成一次发给 Worker 并发请求。"""
 
     # 下面两个方法在网页版里被替换：请求改发到 Worker 的 /api/amap 代理，Key 不进浏览器
     def _url(self, path: str, query: str) -> str:
@@ -140,18 +164,16 @@ class Amap:
 
     def drive_path(self, places: list[Place], max_points: int = 600) -> list[list[float]]:
         """按顺序经过各点的驾车路线，返回 [[lat, lng], ...]，给地图画线用。"""
-        params = {"origin": places[0].loc, "destination": places[-1].loc, "extensions": "base"}
-        if len(places) > 2:
-            params["waypoints"] = ";".join(p.loc for p in places[1:-1])
-        path = self._get("/v3/direction/driving", **params)["route"]["paths"][0]
+        api, params = self.driving_query(places)
+        path = self._get(api, **params)["route"]["paths"][0]
         pts = [[float(y), float(x)] for step in path["steps"]
                for x, y in (pair.split(",") for pair in step["polyline"].split(";"))]
         stride = max(1, len(pts) // max_points)
         return pts[::stride] + ([pts[-1]] if pts and (len(pts) - 1) % stride else [])
 
     def geocode(self, address: str, city: str | None = None) -> Place | None:
-        params = {"address": address, **({"city": city} if city else {})}
-        hits = self._get("/v3/geocode/geo", **params).get("geocodes") or []
+        path, params = self.geocode_query(address, city)
+        hits = self._get(path, **params).get("geocodes") or []
         if not hits:
             return None
         g = hits[0]
@@ -160,9 +182,8 @@ class Amap:
                      _text(g.get("citycode")))
 
     def find_station(self, name: str, city: str | None = None) -> Place | None:
-        params = {"keywords": name, "types": STATION_TYPE, "page_size": 10,
-                  **({"region": city} if city else {})}
-        pois = self._get("/v5/place/text", **params).get("pois") or []
+        path, params = self.station_query(name, city)
+        pois = self._get(path, **params).get("pois") or []
         if not pois:
             return None
         poi = next((p for p in pois if p.get("name") == name), pois[0])
@@ -191,8 +212,8 @@ class Amap:
         out: list[float | None] = []
         for i in range(0, len(origins), 100):  # 距离测量一次最多 100 个起点
             chunk = origins[i:i + 100]
-            data = self._get("/v3/distance", origins="|".join(p.loc for p in chunk),
-                             destination=dest.loc, type=1)
+            path, params = self.distance_query(chunk, dest)
+            data = self._get(path, **params)
             mins: list[float | None] = [None] * len(chunk)
             for r in data.get("results") or []:
                 if str(r.get("duration", "")).isdigit():
@@ -279,6 +300,12 @@ class Trip:
     exit_buffer: float = 15  # 列车到站后出站、走到接人点的分钟数
 
 
+def prefetch(amap, build) -> None:
+    """客户端支持批量预取时，先把接下来要用的一组请求一次取回（网页版跨洋调用慢，靠它省时间）。"""
+    if hasattr(amap, "prefetch"):
+        amap.prefetch(build())
+
+
 def resolve(amap, label: str, query: str, item: dict, station: bool = False) -> Place:
     if item.get("location"):
         return Place(label, *parse_loc(item["location"]), "配置里直接给的坐标")
@@ -299,6 +326,11 @@ def load_trip(cfg: dict, amap) -> Trip:
     opt = cfg.get("options", {})
     default_detour = float(opt.get("max_detour_min", 30))
     v = cfg["venue"]
+    prefetch(amap, lambda: [
+        *([amap.geocode_query(v.get("address") or v.get("name", ""), v.get("city"))] if not v.get("location") else []),
+        *(amap.geocode_query(p.get("from", ""), p.get("city")) for p in cfg.get("people", []) if not p.get("location")),
+        *(amap.station_query(s["name"], s.get("city")) for s in cfg.get("stations") or [] if not s.get("location")),
+    ])
     venue = resolve(amap, v.get("name", "婚礼场地"), v.get("address") or v.get("name", ""), v)
 
     people = []
@@ -404,8 +436,9 @@ def build_matrix(amap, pts: dict[str, Place], skip: set[str]) -> dict[tuple[str,
     dests = [k for k in pts if not k.startswith("car:") and k not in skip]
     print(f"正在向高德查询行车时间（约 {len(dests)} 次请求）…", file=sys.stderr)
     T: dict[tuple[str, str], float] = {}
-    for d in dests:
-        srcs = [o for o in origins if o != d]
+    plan = [(d, [o for o in origins if o != d]) for d in dests]
+    prefetch(amap, lambda: [amap.distance_query([pts[o] for o in srcs], pts[d]) for d, srcs in plan if len(srcs) <= 100])
+    for d, srcs in plan:
         for o, m in zip(srcs, amap.drive_minutes([pts[o] for o in srcs], pts[d])):
             if m is not None:
                 T[(o, d)] = m

@@ -17,12 +17,13 @@ def _path(amap, places: list[carpool.Place]) -> list | None:
 def compute(cfg: dict, amap) -> dict:
     """算方案，并取车主路线的真实行车轨迹：接人后的路线，以及不接人时的直达路线（用来对比绕路）。"""
     trip, pts, T, plans = carpool.plan_trip(cfg, amap)
-    paths: dict[tuple, list | None] = {}
+    places: dict[tuple, list[carpool.Place]] = {}
     for plan in plans:
         for r in plan.routes:
             for key in ((r.driver, r.stops), (r.driver, ())):
-                if key not in paths:
-                    paths[key] = _path(amap, [pts[i] for i in (f"car:{key[0]}", *key[1], "venue")])
+                places.setdefault(key, [pts[i] for i in (f"car:{key[0]}", *key[1], "venue")])
+    carpool.prefetch(amap, lambda: [amap.driving_query(ps) for ps in places.values()])
+    paths = {key: _path(amap, ps) for key, ps in places.items()}
     return {"trip": trip, "pts": pts, "T": T, "plans": plans, "paths": paths}
 
 
