@@ -231,6 +231,16 @@ test('方案页：用自己的 id（不是行程 id），重新发布覆盖；v1
   assert.equal((await call(`${t.base}/page`, { method: 'POST', body: { html: '<!doctype html>' } })).status, 401);
 });
 
+test('方案页放进沙箱：不和本站同源，不能发请求、不能提交表单', async () => {
+  const t = await newTrip();
+  const { url } = (await publish(t, '<!doctype html><script>localStorage.x</script>')).share;
+  const csp = (await call(url)).headers.get('content-security-policy');
+  assert.match(csp, /^sandbox allow-scripts /);
+  assert.doesNotMatch(csp, /allow-same-origin|allow-forms/);
+  assert.match(csp, /connect-src 'none'/);
+  assert.match(csp, /form-action 'none'/);
+});
+
 test('v3 之前发布过方案页的行程：沿用 /p/<行程 id>，重新发布更新同一个链接', async () => {
   const t = await newTrip();
   const storage = rooms.get(t.id).storage;

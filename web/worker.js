@@ -261,6 +261,17 @@ button{margin-top:10px;width:100%;font:inherit;padding:8px;border:0;border-radiu
   return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
 }
 
+// 方案页的 HTML 是编辑者的浏览器生成后上传的，不能当作本站的可信代码：放进沙箱（独立的匿名来源），
+// 读不到本站的 localStorage（里面有编辑链接）和 Cookie；只放行地图要用的脚本、样式和瓦片，不能发请求、不能提交表单
+const SHARE_CSP = [
+  'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-top-navigation-by-user-activation',
+  "default-src 'none'",
+  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com",
+  "style-src 'unsafe-inline' https://cdnjs.cloudflare.com",
+  'img-src data: https://cdnjs.cloudflare.com https://*.is.autonavi.com',
+  "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "frame-ancestors 'none'",
+].join('; ');
+
 async function sharePage(request, env, url, id) {
   const { value: html, metadata } = await env.DATA.getWithMetadata(`page:${id}`);
   if (html === null || html === undefined) {
@@ -283,7 +294,10 @@ async function sharePage(request, env, url, id) {
   }
   if (codeHash && getCookie(request, `pc_${id}`) !== codeHash) return codePage(id, '', 401);
   return new Response(html, {
-    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache', 'x-robots-tag': 'noindex' },
+    headers: {
+      'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache', 'x-robots-tag': 'noindex',
+      'content-security-policy': SHARE_CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin',
+    },
   });
 }
 
