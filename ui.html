@@ -214,6 +214,19 @@ let peers = [];
 const candidates = {};
 const me = { clientId: Math.random().toString(36).slice(2), name: store.get('carpool_name', '') };
 
+// 报告是 Markdown，里面有成员名字等用户输入：HTML 一律当文本输出，链接只放行 http(s)，不渲染图片，防止脚本注入
+marked.use({
+  renderer: {
+    html(token) { return esc(typeof token === 'string' ? token : token.text); },
+    link(href, title, text) {
+      const h = typeof href === 'object' ? href.href : href;
+      const t = typeof href === 'object' ? href.text : text;
+      return /^https?:\/\//i.test(h || '') ? `<a href="${esc(h)}">${t}</a>` : esc(t);
+    },
+    image(href, title, text) { return esc(typeof href === 'object' ? href.text : text); },
+  },
+});
+
 // ---------- 通用 ----------
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };

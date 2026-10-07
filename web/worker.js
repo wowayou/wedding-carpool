@@ -136,6 +136,9 @@ async function tripApi(request, env, url, id, sub) {
   }
   const key = getCookie(request, `tk_${id}`);
   if (!key) return json({ error: '需要用编辑链接打开', status: '0', info: 'UNAUTHORIZED' }, 401);
+  if (request.headers.get('upgrade') === 'websocket' && request.headers.get('origin') !== url.origin) {
+    return json({ error: '只接受本站发起的连接' }, 403); // 防止其他网站借用户的 Cookie 建立同步连接
+  }
   if (sub === '/amap-batch' || sub.startsWith('/amap/')) return tripAmap(request, env, url, room, key, sub);
   if (sub === '/page' && request.method === 'POST') return publishPage(request, env, url, room, key, id);
   if (sub === '/key' && request.method === 'POST') { // 改用自己的高德 Key：公共额度用完时可以接着算

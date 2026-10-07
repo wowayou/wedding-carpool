@@ -233,6 +233,14 @@ test('删除行程：数据和方案页都清掉，之后链接失效', async ()
   assert.equal((await call(`/p/${t.id}`)).status, 404);
 });
 
+test('WebSocket 只接受本站来源', async () => {
+  const t = await newTrip();
+  const ws = (origin) => worker.fetch(new Request(`https://carpool.test${t.base}/sync`, {
+    headers: { cookie: t.cookie, upgrade: 'websocket', origin },
+  }), env);
+  assert.equal((await ws('https://evil.example')).status, 403);
+});
+
 test('页面路由：首页、行程编辑页', async () => {
   assert.equal(await (await call('/')).text(), 'asset:/');
   assert.equal(await (await call('/t/abcdefghij')).text(), 'asset:/edit');
