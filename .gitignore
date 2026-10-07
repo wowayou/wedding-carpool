@@ -1,0 +1,11 @@
+# 含真实地址和坐标，别提交
+trip.toml
+*-report.md
+__pycache__/
+.amap_key
+*.bak
+*-plan.html
+node_modules/
+dist/
+.wrangler/
+.dev.vars

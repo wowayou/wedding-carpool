@@ -1,0 +1,51 @@
+# 婚礼拼车配置示例：复制成 trip.toml 再改成你们的真实信息
+#   cp trip.example.toml trip.toml
+# 地址写得越具体越准（到区县、小区或酒店名）；解析不准时可直接写 location = "经度,纬度"（高德坐标）
+
+[venue]
+name = "婚礼场地"
+address = "安徽省黄山市黟县宏村镇"   # 换成婚礼酒店的完整地址
+
+[options]
+max_detour_min = 30       # 车主默认最多愿意为接人多绕几分钟
+max_stops = 2             # 每辆车最多停几次接人
+travel_date = "2026-10-17"  # 出发日期，用来估算不开车的人坐公共交通（含火车）到各站要多久
+travel_time = "08:00"       # 出发时间
+# estimate_rail = false     # 不想估算公共交通时关掉（少调用接口）
+station_cost_min = 60     # 既没填 rail_min、也没估算出公共交通方案时，把「坐车去站」估成多少分钟
+discover_radius_km = 120  # 没写候选站时，自动搜索场地周围多大范围内的火车站
+discover_limit = 10       # 自动搜索最多保留几个站
+
+# 候选高铁站：不写就自动搜索；第一次跑完看报告里的「候选站对比」，再把合适的站写进来
+# [[stations]]
+# name = "黄山北站"
+# [[stations]]
+# name = "黟县东站"
+
+# 每位舍友一段 [[people]]
+# car_seats：开车就写空座数（不算司机和已经坐满的家人）；不开车就不写这一行
+
+[[people]]
+name = "老王"
+from = "浙江省杭州市西湖区"
+car_seats = 3
+
+[[people]]
+name = "老张"
+from = "江苏省南京市鼓楼区"
+car_seats = 2
+max_detour_min = 20       # 单独覆盖默认绕路上限
+
+[[people]]
+name = "我"
+from = "上海市浦东新区"
+# pickup_at_home = false  # 默认允许车主到家附近接；住得远、不可能顺路时可以关掉，少查几次
+
+[[people]]
+name = "小陈"
+from = "湖北省武汉市洪山区"
+# 可选，推荐填 trains：
+# trains = { "黄山北站" = "G1234 武汉08:00→黄山北12:10" }  # 12306 查的车次和时刻：自动算用时，并倒推车主几点出发
+# rail_min = { "黟县东站" = 270 }                         # 只知道大概要多久时填分钟数（含去车站和候车）
+# stations = ["黄山北站"]                                  # 只考虑这些站
+# 填了 trains 或 rail_min，就只考虑填了的站

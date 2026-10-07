@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wedding-carpool",
+  "main": "web/worker.js",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/p/*"]
+  },
+  "kv_namespaces": [
+    { "binding": "DATA", "id": "REPLACE_WITH_KV_ID" }
+  ],
+  "observability": { "enabled": true }
+}
