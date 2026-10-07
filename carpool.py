@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""婚礼拼车规划：用高德真实行车时间，算哪个高铁站最顺路、谁搭谁的车。
+"""拼车出行规划：多人从不同城市去同一个地方，用高德真实行车时间算哪个高铁站最顺路、谁搭谁的车。
 
     export AMAP_KEY=你的高德Web服务Key     # 或把 Key 存进同目录的 .amap_key
     python3 carpool.py trip.toml          # 报告同时打印并写到 trip-report.md
@@ -48,13 +48,14 @@ class QuotaError(AmapError):
 
 
 # 配额类错误：日调用量超限（含账号维度、海外）、额度用完、服务到期
-QUOTA_INFOS = ("DAILY_QUERY_OVER_LIMIT", "QUOTA_PLAN_RUN_OUT", "SERVICE_EXPIRED")
+# 网页版还有两种：单个行程每天的上限、站长 Key 全站每天的上限
+QUOTA_INFOS = ("DAILY_QUERY_OVER_LIMIT", "QUOTA_PLAN_RUN_OUT", "SERVICE_EXPIRED", "TRIP_DAILY_LIMIT", "OWNER_DAILY_LIMIT")
 
 
-def check_quota(info: str) -> None:
+def check_quota(info: str, detail: str = "") -> None:
     if any(q in info for q in QUOTA_INFOS):
-        raise QuotaError(f"高德配额已用完（{info}），已停止计算，没有继续调用。"
-                         "额度一般次日恢复；要买额度会产生费用，请自己在高德控制台决定")
+        raise QuotaError(detail or (f"高德配额已用完（{info}），已停止计算，没有继续调用。"
+                                    "额度一般次日恢复；要买额度会产生费用，请自己在高德控制台决定"))
 
 
 @dataclass
@@ -64,6 +65,7 @@ class Place:
     lat: float
     note: str = ""  # 解析结果，供人工核对
     citycode: str = ""  # 高德城市编码，公交跨城规划要用
+    city: str = ""  # 城市名，拼 12306 查询链接要用
 
     @property
     def loc(self) -> str:
@@ -114,7 +116,7 @@ class Amap:
             if str(data.get("status")) == "1":
                 break
             info = str(data.get("info"))
-            check_quota(info)
+            check_quota(info, _text(data.get("error")))
             if ("QPS" in info or "TOO_FREQUENT" in info) and attempt < RETRIES:  # 频率超限，等一下再试
                 time.sleep(backoff)
                 continue
@@ -132,6 +134,15 @@ class Amap:
 
     def distance_query(self, origins: list[Place], dest: Place) -> tuple[str, dict]:
         return "/v3/distance", {"origins": "|".join(p.loc for p in origins), "destination": dest.loc, "type": 1}
+
+    def around_query(self, center: Place, radius_km: float) -> tuple[str, dict]:
+        return "/v5/place/around", {"location": center.loc, "types": STATION_TYPE, "sortrule": "distance",
+                                    "radius": min(int(radius_km * 1000), 50000), "page_size": 25}
+
+    def stations_around(self, center: Place, radius_km: float) -> list[dict]:
+        """一个点周围的火车站 POI（一页，按距离排序）。"""
+        path, params = self.around_query(center, radius_km)
+        return self._get(path, **params).get("pois") or []
 
     def driving_query(self, places: list[Place]) -> tuple[str, dict]:
         params = {"origin": places[0].loc, "destination": places[-1].loc, "extensions": "base"}
@@ -154,12 +165,12 @@ class Amap:
         """给界面用的地点搜索：高德 POI 候选，加一条地址解析结果兜底。"""
         params = {"keywords": keywords, "page_size": 10, **({"region": city} if city else {}),
                   **({"types": types} if types else {})}
-        out = [{"name": p.get("name"), "location": p.get("location"),
+        out = [{"name": p.get("name"), "location": p.get("location"), "city": _text(p.get("cityname")),
                 "detail": f"{p.get('pname') or ''}{p.get('cityname') or ''}{p.get('adname') or ''} {_text(p.get('address'))}"}
                for p in self._get("/v5/place/text", **params).get("pois") or []]
         place = self.geocode(keywords, city)
         if place:
-            out.append({"name": keywords, "location": place.loc, "detail": f"地址解析：{place.note}"})
+            out.append({"name": keywords, "location": place.loc, "city": place.city, "detail": f"地址解析：{place.note}"})
         return out
 
     def drive_path(self, places: list[Place], max_points: int = 600) -> list[list[float]]:
@@ -179,7 +190,7 @@ class Amap:
         g = hits[0]
         return Place(address, *parse_loc(g["location"]),
                      f"{g.get('formatted_address') or ''}（精度：{g.get('level') or '?'}）",
-                     _text(g.get("citycode")))
+                     _text(g.get("citycode")), _text(g.get("city")) or _text(g.get("province")))
 
     def find_station(self, name: str, city: str | None = None) -> Place | None:
         path, params = self.station_query(name, city)
@@ -189,7 +200,7 @@ class Amap:
         poi = next((p for p in pois if p.get("name") == name), pois[0])
         return Place(name, *parse_loc(poi["location"]),
                      f"{poi.get('name')}（{poi.get('cityname', '')}{poi.get('adname', '')}）",
-                     _text(poi.get("citycode")))
+                     _text(poi.get("citycode")), _text(poi.get("cityname")))
 
     def stations_near(self, center: Place, radius_km: float, max_pages: int = 8) -> list[dict]:
         # 周边搜索最大 50km 且按距离排序，保证近处的站不漏；矩形搜索补上更远的站
@@ -258,7 +269,7 @@ def pick_stations(pois: list[dict], venue: Place, radius_km: float, limit: int) 
         seen.add(name)
         place = Place(name, *parse_loc(poi["location"]),
                       f"{poi.get('cityname') or ''}{poi.get('adname') or ''}（自动发现）",
-                      _text(poi.get("citycode")))
+                      _text(poi.get("citycode")), _text(poi.get("cityname")))
         if km_between(place, venue) <= radius_km:
             out.append(place)
     out.sort(key=lambda p: km_between(p, venue))
@@ -298,6 +309,7 @@ class Trip:
     travel_date: str = ""  # 公交估算用的出发日期 YYYY-M-D
     travel_time: str = "08:00"
     exit_buffer: float = 15  # 列车到站后出站、走到接人点的分钟数
+    resolved: list[dict] = field(default_factory=list)  # 这次按文字定位到的坐标，写回配置后下次就不用再查
 
 
 def prefetch(amap, build) -> None:
@@ -306,9 +318,10 @@ def prefetch(amap, build) -> None:
         amap.prefetch(build())
 
 
-def resolve(amap, label: str, query: str, item: dict, station: bool = False) -> Place:
+def resolve(amap, label: str, query: str, item: dict, station: bool = False,
+            record: list | None = None, path: str = "") -> Place:
     if item.get("location"):
-        return Place(label, *parse_loc(item["location"]), "配置里直接给的坐标")
+        return Place(label, *parse_loc(item["location"]), "配置里直接给的坐标", city=str(item.get("city") or ""))
     if station:
         # 站名不能退回地址解析：「清河西站」会被解析成辽宁铁岭清河区
         place = amap.find_station(query, item.get("city"))
@@ -319,26 +332,30 @@ def resolve(amap, label: str, query: str, item: dict, station: bool = False) -> 
     if place is None:
         raise SystemExit(f"找不到地点：{query}。换个更具体的写法，或直接填 location = \"经度,纬度\"")
     place.name = label
+    if record is not None:
+        record.append({"path": path, "location": place.loc, "city": place.city, "note": place.note})
     return place
 
 
-def load_trip(cfg: dict, amap) -> Trip:
+def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
+    """解析目的地和每个人的出发地；按文字定位到的结果记进 record。"""
     opt = cfg.get("options", {})
     default_detour = float(opt.get("max_detour_min", 30))
-    v = cfg["venue"]
+    v = cfg.get("venue") or {}
     prefetch(amap, lambda: [
         *([amap.geocode_query(v.get("address") or v.get("name", ""), v.get("city"))] if not v.get("location") else []),
         *(amap.geocode_query(p.get("from", ""), p.get("city")) for p in cfg.get("people", []) if not p.get("location")),
         *(amap.station_query(s["name"], s.get("city")) for s in cfg.get("stations") or [] if not s.get("location")),
     ])
-    venue = resolve(amap, v.get("name", "婚礼场地"), v.get("address") or v.get("name", ""), v)
-
+    if not (v.get("location") or v.get("address") or v.get("name")):
+        raise SystemExit("还没填目的地")
+    venue = resolve(amap, v.get("name") or "目的地", v.get("address") or v.get("name", ""), v, record=record, path="venue")
     people = []
-    for p in cfg.get("people", []):
+    for i, p in enumerate(cfg.get("people", [])):
         seats = p.get("car_seats")
         people.append(Person(
             name=p["name"],
-            home=resolve(amap, f"{p['name']}出发地", p.get("from", ""), p),
+            home=resolve(amap, f"{p['name']}出发地", p.get("from", ""), p, record=record, path=f"people.{i}"),
             seats=None if seats is None else int(seats),
             max_detour=float(p.get("max_detour_min", default_detour)),
             pickup_at_home=bool(p.get("pickup_at_home", True)),
@@ -353,15 +370,23 @@ def load_trip(cfg: dict, amap) -> Trip:
             times = train_times(text)
             if st not in person.rail_min and len(times) >= 2:
                 person.rail_min[st] = (times[-1] - times[0]) % 1440 + access
+    return venue, people
+
+
+def load_trip(cfg: dict, amap) -> Trip:
+    opt = cfg.get("options", {})
+    resolved: list[dict] = []
+    venue, people = load_places(cfg, amap, resolved)
     if not people:
         raise SystemExit("配置里至少要有一个 [[people]]")
 
     radius = float(opt.get("discover_radius_km", 120))
     if cfg.get("stations"):
-        stations = [resolve(amap, s["name"], s["name"], s, station=True) for s in cfg["stations"]]
+        stations = [resolve(amap, s["name"], s["name"], s, station=True, record=resolved, path=f"stations.{i}")
+                    for i, s in enumerate(cfg["stations"])]
         discovered = False
     else:
-        print(f"配置里没写候选站，自动搜索场地 {radius:.0f} km 内的火车站…", file=sys.stderr)
+        print(f"配置里没写候选站，自动搜索目的地 {radius:.0f} km 内的火车站…", file=sys.stderr)
         stations = pick_stations(amap.stations_near(venue, radius), venue, radius,
                                  int(opt.get("discover_limit", 10)))
         discovered = True
@@ -378,7 +403,7 @@ def load_trip(cfg: dict, amap) -> Trip:
                 float(opt.get("station_cost_min", 60)), discovered, warnings,
                 estimate_rail=bool(opt.get("estimate_rail", True)),
                 travel_date=f"{y}-{m}-{d}", travel_time=str(opt.get("travel_time", "08:00")),
-                exit_buffer=float(opt.get("exit_buffer_min", 15)))
+                exit_buffer=float(opt.get("exit_buffer_min", 15)), resolved=resolved)
 
 
 def train_times(text: str) -> list[int]:
@@ -431,7 +456,7 @@ def points_of(trip: Trip) -> dict[str, Place]:
 
 
 def build_matrix(amap, pts: dict[str, Place], skip: set[str]) -> dict[tuple[str, str], float]:
-    """行车分钟数 T[(起点, 终点)]。起点含车主出发地，终点含场地，接人点两者都是。"""
+    """行车分钟数 T[(起点, 终点)]。起点含车主出发地，终点含目的地，接人点两者都是。"""
     origins = [k for k in pts if k != "venue" and k not in skip]
     dests = [k for k in pts if not k.startswith("car:") and k not in skip]
     print(f"正在向高德查询行车时间（约 {len(dests)} 次请求）…", file=sys.stderr)
@@ -498,7 +523,7 @@ def car_routes(driver: Person, pickups: list[str], T, max_stops: int) -> list[Ro
     start = f"car:{driver.name}"
     direct = T.get((start, "venue"), INF)
     if direct == INF:
-        raise SystemExit(f"高德没算出 {driver.name} 到场地的驾车路线，检查出发地是否写对")
+        raise SystemExit(f"高德没算出 {driver.name} 到目的地的驾车路线，检查出发地是否写对")
     best: dict[frozenset, Route] = {}
     if driver.seats:
         for k in range(1, max_stops + 1):
@@ -676,7 +701,7 @@ def route_schedule(route: Route, ready: dict[tuple[str, str], float], T) -> dict
 
 
 def taxi_schedule(plan: Plan, trip: Trip, T) -> dict[str, dict]:
-    """打车组：站点 → 汇合时刻（最晚到站的人出站后）和到场地时刻。"""
+    """打车组：站点 → 汇合时刻（最晚到站的人出站后）和到目的地时刻。"""
     people = {p.name: p for p in trip.people}
     out: dict[str, dict] = {}
     for name, stop in plan.taxi.items():
@@ -696,7 +721,7 @@ def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
     lines = []
     for r in plan.routes:
         if not r.stops:
-            lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：直接开到场地，"
+            lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：直接开到目的地，"
                          f"约 {fmt_min(r.minutes)}，不接人。")
             continue
         sched = route_schedule(r, ready, T)
@@ -707,17 +732,17 @@ def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
             legs.append(f"{stop_label(s, pts)}{at}（接 {who}）")
         if sched:
             timing = (f"建议 **{clock(sched['depart'])} 出发** → {' → '.join(legs)} → "
-                      f"约 {clock(sched['times']['venue'])} 到场地；")
+                      f"约 {clock(sched['times']['venue'])} 到目的地；")
         else:
             first = T.get((f"car:{r.driver}", r.stops[0]), INF)
-            timing = f"出发 → {' → '.join(legs)} → 场地；出发后约 {fmt_min(first)} 到第一个接人点；"
+            timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(first)} 到第一个接人点；"
         lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{timing}"
                      f"全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。{route_links(r, pts)}")
     for s, group in taxi_schedule(plan, trip, T).items():
-        timing = (f"约 {clock(group['ready'])} 在站汇合，{clock(group['arrive'])} 左右到场地"
+        timing = (f"约 {clock(group['ready'])} 在站汇合，{clock(group['arrive'])} 左右到目的地"
                   if group["ready"] is not None else f"车程约 {fmt_min(T.get((s, 'venue'), INF))}")
         lines.append(f"- **打车/包车组**：{'、'.join(group['names'])} 坐高铁到 **{pts[s].name}**，"
-                     f"一起打车到场地，{timing}。[导航]({nav_url(pts[s], pts['venue'])})")
+                     f"一起打车到目的地，{timing}。[导航]({nav_url(pts[s], pts['venue'])})")
     for name in plan.stranded:
         lines.append(f"- **{name}**：没有可用的候选站，需要单独安排。")
     return lines
@@ -739,7 +764,7 @@ def station_table(trip: Trip, pts: dict[str, Place], T) -> list[str]:
         rows.append(((-len(ok), min(ok, default=INF), T.get((sid, "venue"), INF)),
                      [s.name, fmt_min(T.get((sid, "venue"), INF)), *cells]))
     rows.sort(key=lambda r: r[0])
-    head = ["候选站", "站→场地车程", *[f"{d.name}绕路" for d in drivers]]
+    head = ["候选站", "站→目的地车程", *[f"{d.name}绕路" for d in drivers]]
     out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     out += ["| " + " | ".join(cells) + " |" for _, cells in rows]
     return out
@@ -767,7 +792,7 @@ def rail_section(trip: Trip) -> list[str]:
 
 
 def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
-    L = [f"# 婚礼拼车方案：{trip.venue.name}", ""]
+    L = [f"# 拼车方案：{trip.venue.name}", ""]
     if trip.warnings:
         L += ["> ⚠️ " + w for w in trip.warnings] + [""]
     if not plans:
@@ -861,7 +886,7 @@ def dump_toml(cfg: dict, header: str = "") -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="用高德行车时间规划婚礼拼车和高铁站接驳")
+    ap = argparse.ArgumentParser(description="用高德行车时间规划拼车和高铁站接驳")
     ap.add_argument("config", help="行程配置（TOML），格式见 trip.example.toml")
     ap.add_argument("-o", "--out", help="报告路径，默认 <配置名>-report.md")
     ap.add_argument("--key", default=default_key(),

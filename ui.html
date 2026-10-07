@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>婚礼拼车规划</title>
+<title>拼车出行规划</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {
     --bg: #f5f4f0; --panel: #fff; --ink: #1f2328; --muted: #6b7280; --line: #e4e1da;
     --accent: #c2410c; --accent-soft: #fff1e8; --danger: #b91c1c; --warn-bg: #fff7e6; --warn-ink: #92400e;
-    --chip: #f3f1ec; --radius: 10px;
+    --ok: #15803d; --chip: #f3f1ec; --radius: 10px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -17,21 +17,31 @@
   button { font: inherit; cursor: pointer; }
   input, textarea { font: inherit; color: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
   input:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
-  .app { display: grid; grid-template-columns: minmax(360px, 460px) 1fr; height: 100vh; }
+  a { color: var(--accent); }
+  .app { display: grid; grid-template-columns: minmax(360px, 470px) 1fr; height: 100vh; }
   .side { overflow: auto; background: var(--panel); border-right: 1px solid var(--line); }
   .main { display: flex; flex-direction: column; min-width: 0; height: 100vh; }
-  header.bar { position: sticky; top: 0; z-index: 10; display: flex; gap: 8px; align-items: center; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  header.bar h1 { margin: 0; font-size: 16px; flex: 1; }
-  header.bar small { color: var(--muted); font-weight: normal; margin-left: 6px; }
-  .btn { padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
+  header.bar { position: sticky; top: 0; z-index: 10; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bar-top { display: flex; gap: 8px; align-items: center; }
+  .bar-top h1 { margin: 0; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-sub { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--muted); min-height: 22px; }
+  .peers { display: flex; gap: 4px; flex-wrap: wrap; }
+  .peer-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 2px; border-radius: 999px; background: var(--chip); font-size: 12px; color: var(--ink); }
+  .peer-chip i { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-style: normal; font-size: 11px; }
+  .btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; white-space: nowrap; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn:disabled { opacity: .55; cursor: progress; }
   .ghost { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); white-space: nowrap; }
   .link { border: 0; background: none; color: var(--accent); padding: 0 2px; }
   .link.danger { color: var(--danger); }
-  section { padding: 14px 16px; border-bottom: 1px solid var(--line); }
-  section > h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .04em; display: flex; justify-content: space-between; align-items: center; }
-  .f { display: block; margin-bottom: 8px; }
+  .steps { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: #fcfbf8; }
+  .step { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+  .step b { color: var(--ink); font-weight: 600; }
+  .step.done { border-color: #bbf7d0; background: #f0fdf4; }
+  .step.todo { border-color: #fed7aa; background: var(--accent-soft); }
+  section { padding: 14px 16px; border-bottom: 1px solid var(--line); scroll-margin-top: 110px; }
+  section > h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .04em; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .f { display: block; margin-bottom: 8px; position: relative; }
   .f > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
   .row { display: flex; gap: 8px; align-items: flex-end; }
   .row > .f { flex: 1; }
@@ -39,14 +49,15 @@
   .place > .f { flex: 1; }
   .place .ghost { margin-bottom: 8px; }
   .loc { font-size: 12px; color: var(--muted); margin: -4px 0 8px; }
+  .loc.missing { color: var(--warn-ink); }
   .muted { color: var(--muted); }
   .cands:empty { display: none; }
-  .cands { border: 1px solid var(--line); border-radius: 8px; margin: -2px 0 10px; max-height: 220px; overflow: auto; }
+  .cands { border: 1px solid var(--line); border-radius: 8px; margin: -2px 0 10px; max-height: 240px; overflow: auto; }
   .cands button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: #fff; padding: 6px 10px; }
   .cands button:hover { background: var(--accent-soft); }
   .cands small { display: block; color: var(--muted); }
   .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; }
-  .card.driver { border-left: 4px solid #15803d; }
+  .card.driver { border-left: 4px solid var(--ok); }
   .card.rider { border-left: 4px solid #d97706; }
   .card .head { align-items: center; }
   .toggle { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; margin-bottom: 8px; }
@@ -55,13 +66,16 @@
   .rail .sub, .rail .hint, .rail .muted { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   .rail .hint { color: var(--warn-ink); margin: 2px 0 0; }
   .rail code { background: #fff; padding: 0 4px; border-radius: 4px; }
-  .rail-row { display: grid; grid-template-columns: 74px 1fr 62px; gap: 6px; align-items: center; margin-bottom: 6px; }
-  .rail-row span { font-size: 12px; }
+  .rail-row { display: grid; grid-template-columns: 70px 1fr 58px 30px; gap: 6px; align-items: center; margin-bottom: 6px; position: relative; }
+  .rail-row span { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rail-row input { padding: 4px 6px; }
-  .station { display: grid; grid-template-columns: 1fr 88px auto auto; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .rail-row a { font-size: 12px; text-align: center; }
+  .station { display: grid; grid-template-columns: 1fr 84px auto auto; gap: 6px; align-items: center; margin-bottom: 8px; position: relative; }
   .station .loc, .station .cands { grid-column: 1 / -1; margin: 0; }
   .adders { display: flex; gap: 8px; }
-  #map { flex: 0 0 55%; min-height: 280px; }
+  .peer-on { outline: 2px solid var(--peer, #7c3aed) !important; outline-offset: 1px; }
+  .peer-tag { position: absolute; right: 4px; top: -8px; z-index: 2; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px; color: #fff; background: var(--peer, #7c3aed); pointer-events: none; }
+  #map { flex: 0 0 52%; min-height: 260px; }
   .results { flex: 1; overflow: auto; padding: 12px 20px 40px; }
   .tabbar { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
   .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -69,28 +83,44 @@
   .tab small { display: block; color: var(--muted); }
   .tab.on { border-color: var(--accent); background: var(--accent-soft); }
   .warn { background: var(--warn-bg); color: var(--warn-ink); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; font-size: 13px; }
-  .empty { color: var(--muted); padding: 24px 0; }
+  .empty { color: var(--muted); padding: 20px 0; line-height: 1.8; }
   #report h1 { font-size: 18px; } #report h2 { font-size: 15px; margin-top: 22px; }
   #report table { border-collapse: collapse; font-size: 13px; margin: 8px 0; }
   #report th, #report td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
   #report blockquote { margin: 8px 0; padding: 6px 10px; background: var(--warn-bg); color: var(--warn-ink); border-radius: 6px; }
-  #report a { color: var(--accent); }
   .legend { background: rgba(255,255,255,.92); padding: 6px 10px; border-radius: 8px; font-size: 12px; line-height: 1.7; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
   .leaflet-tooltip.lbl { font-size: 12px; padding: 1px 6px; }
-  .login { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(31,35,40,.45); }
-  .login[hidden] { display: none; }
-  .login form { background: #fff; border-radius: 12px; padding: 22px; width: min(340px, 90vw); box-shadow: 0 10px 30px rgba(0,0,0,.2); }
-  .login h2 { margin: 0 0 6px; font-size: 17px; }
-  .login p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
-  .login .err { color: var(--danger); min-height: 1.5em; margin: 6px 0 0; }
-  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1f2328; color: #fff; padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 2000; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); z-index: 1500; background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,.15); display: flex; flex-direction: column; }
+  .drawer[hidden] { display: none; }
+  .drawer header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .drawer header h2 { margin: 0; font-size: 15px; }
+  .drawer .body { overflow: auto; padding: 12px 16px; flex: 1; }
+  .hist { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .hist .meta { font-size: 12px; color: var(--muted); }
+  .hist .notes { margin: 2px 0; }
+  .hist .diff { font-size: 12px; background: var(--chip); border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
+  .sug { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .sug input { width: auto; margin-top: 3px; }
+  .sug small { display: block; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; align-items: center; margin-bottom: 12px; font-size: 13px; }
+  .kv input { font-size: 12px; }
+  .conflicts { position: fixed; left: 16px; bottom: 16px; z-index: 1800; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+  .conflict { background: #fff; border: 1px solid #fecaca; border-left: 4px solid var(--danger); border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); font-size: 13px; }
+  .conflict .acts { margin-top: 6px; display: flex; gap: 10px; }
+  .overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(31,35,40,.45); }
+  .overlay[hidden] { display: none; }
+  .overlay form, .overlay .box { background: #fff; border-radius: 12px; padding: 22px; width: min(360px, 90vw); box-shadow: 0 10px 30px rgba(0,0,0,.2); }
+  .overlay h2 { margin: 0 0 6px; font-size: 17px; }
+  .overlay p { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1f2328; color: #fff; padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 2000; max-width: 90vw; }
   .toast.show { opacity: .95; }
+  .online-only { display: none; } body.online .online-only { display: revert; } body.online .local-only { display: none; }
   @media (max-width: 900px) {
     .app { grid-template-columns: 1fr; height: auto; }
     .main { height: auto; }
     .side { border-right: 0; }
-    #map { flex: none; height: 60vh; }
+    #map { flex: none; height: 50vh; }
   }
 </style>
 </head>
@@ -98,61 +128,660 @@
 <div class="app">
   <aside class="side">
     <header class="bar">
-      <h1>婚礼拼车规划<small id="file"></small><small id="sync"></small></h1>
-      <button class="btn" id="save">保存</button>
-      <button class="btn primary" id="plan">计算方案</button>
+      <div class="bar-top">
+        <h1 id="title">拼车出行规划</h1>
+        <button class="btn online-only" id="historyBtn" title="查看和恢复历史版本">历史</button>
+        <button class="btn" id="menuBtn" title="分享、导入导出">更多</button>
+        <button class="btn local-only" id="save">保存</button>
+        <button class="btn primary" id="plan">计算方案</button>
+      </div>
+      <div class="bar-sub"><span id="status"></span><span class="peers" id="peers"></span></div>
     </header>
+    <nav class="steps" id="steps"></nav>
     <div id="form"><div class="empty" style="padding:16px">加载中…</div></div>
   </aside>
   <main class="main">
     <div id="map"></div>
     <div class="results">
+      <div class="warn" id="stale" hidden>配置改过了，下面的方案可能已经过期，重新点一下「计算方案」。</div>
       <div class="tabbar"><div class="tabs" id="tabs"></div>
-        <button class="btn primary" id="sharebtn" hidden title="把当前选中的方案生成一页行程，可以发给舍友">生成方案页</button></div>
+        <button class="btn primary" id="sharebtn" hidden>发布方案页</button></div>
       <div id="warn"></div>
-      <div id="report"><div class="empty">填好左边的信息，点「计算方案」。计算一次大约 10 秒。</div></div>
+      <div id="report"><div class="empty">
+        按左边顶部的步骤填：目的地 → 成员（谁开车、从哪出发）→ 候选车站 → 不开车的人到各站的车次 → 计算方案。<br>
+        填好的地点会马上出现在地图上；算出方案后可以发布一页方案，发给大家。
+      </div></div>
     </div>
   </main>
 </div>
+
+<aside class="drawer" id="drawer" hidden>
+  <header><h2 id="drawerTitle"></h2><button class="link" data-close-drawer>关闭</button></header>
+  <div class="body" id="drawerBody"></div>
+</aside>
+<div class="conflicts" id="conflicts"></div>
 <div class="toast" id="toast"></div>
-<div class="login" id="login" hidden>
-  <form id="loginform">
-    <h2>输入口令</h2>
-    <p>在线版需要口令才能编辑和计算，防止高德接口被滥用。方案页链接不需要口令。</p>
-    <input id="code" type="password" autocomplete="current-password" placeholder="口令" required>
-    <div class="err" id="loginerr"></div>
-    <button class="btn primary" style="width:100%;margin-top:8px">进入</button>
+<div class="overlay" id="nameBox" hidden>
+  <form id="nameForm">
+    <h2>你是谁？</h2>
+    <p>一起编辑的人会看到你的名字：谁在线、谁改了什么。</p>
+    <input id="nameInput" maxlength="20" placeholder="比如 老王" required>
+    <button class="btn primary" style="width:100%;margin-top:10px">进入</button>
   </form>
 </div>
+<div class="overlay" id="denied" hidden>
+  <div class="box"><h2>打不开这个行程</h2><p id="deniedText"></p><a class="btn primary" href="/">回首页</a></div>
+</div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script>
+// 拼车出行规划的编辑器。本地版（python3 ui.py）和在线版（Cloudflare Worker，/t/<行程>）共用这个页面：
+// 本地版由 ui.py 计算、手动保存；在线版在浏览器里用 Pyodide 计算，多人实时同步，有历史版本。
 const COLORS = ['#c2410c', '#1d4ed8', '#7c3aed', '#0f766e', '#be185d', '#4d7c0f'];
+const PEER_COLORS = ['#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#2563eb'];
 const POINT_STYLE = { venue: '#dc2626', st: '#2563eb', car: '#15803d', home: '#d97706' };
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-let cfg = null, result = null, active = 0, dirty = false, map, layer;
+const clone = (x) => (x === undefined ? undefined : structuredClone(x));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
+const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 隐私模式 */ } } };
+
+let mode = 'local', API = '/api', tripId = null, trip = {};
+let cfg = null, result = null, resultHash = null, active = 0, dirty = false, map, planLayer, previewLayer, fitted = false;
+let peers = [];
 const candidates = {};
+const me = { clientId: Math.random().toString(36).slice(2), name: store.get('carpool_name', '') };
 
-let mode = 'local'; // 'local'：本机 ui.py 计算；'online'：Cloudflare Worker + 浏览器里的 Pyodide 计算
-
+// ---------- 通用 ----------
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-  const res = await fetch(path, opts);
+  let res;
+  try { res = await fetch(path, opts); } catch { throw new Error('网络连不上，稍后再试'); }
   const data = await res.json().catch(() => ({ error: res.statusText }));
-  if (res.status === 401 && mode === 'online' && path !== '/api/login') showLogin();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (res.status === 401 && mode === 'online') deny(data.error || '编辑链接无效或已失效');
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
   return data;
 }
 
-// ---- 在线版：计算在 Web Worker 里的 Pyodide 中进行（web/pyworker.js） ----
+function toast(msg, ms = 2600) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function fmtMin(m) { return m >= 60 ? `${Math.floor(m / 60)}小时${String(m % 60).padStart(2, '0')}分` : `${m}分钟`; }
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts), now = Date.now();
+  if (now - ts < 60e3) return '刚刚';
+  if (now - ts < 3600e3) return `${Math.floor((now - ts) / 60e3)} 分钟前`;
+  return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+const parseLoc = (loc) => { const [lng, lat] = String(loc || '').split(',').map(Number); return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null; };
+const peerColor = (id) => PEER_COLORS[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % PEER_COLORS.length];
+
+function deny(text) {
+  $('#deniedText').textContent = `${text}。编辑链接只发给一起规划的人；如果你是发起人，可以在首页「我打开过的行程」里找到它。`;
+  $('#denied').hidden = false;
+}
+
+// ---------- 配置路径 ----------
+function getPath(path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg); }
+function setPath(path, value) {
+  const keys = path.split('.');
+  const last = keys.pop();
+  const obj = keys.reduce((o, k) => (o[k] ??= {}), cfg);
+  if (value === '' || value === undefined || Number.isNaN(value)) delete obj[last];
+  else obj[last] = value;
+}
+
+// 表单元素对应的配置路径，用来标出「谁在编辑哪一格」
+function pathOf(el) {
+  if (!el || !el.dataset) return null;
+  if (el.dataset.bind) return el.dataset.bind;
+  if (el.dataset.stationName !== undefined) return `stations.${el.dataset.stationName}.name`;
+  if (el.dataset.rail !== undefined) return `people.${el.dataset.rail}.rail_min.${el.dataset.station}`;
+  if (el.dataset.train !== undefined) return `people.${el.dataset.train}.trains.${el.dataset.station}`;
+  return null;
+}
+function elementOf(path) {
+  const byBind = document.querySelector(`#form [data-bind="${CSS.escape(path)}"]`);
+  if (byBind) return byBind;
+  const k = path.split('.');
+  if (k[0] === 'stations' && k[2] === 'name') return document.querySelector(`#form [data-station-name="${k[1]}"]`);
+  if (k[0] === 'people' && (k[2] === 'rail_min' || k[2] === 'trains')) {
+    const attr = k[2] === 'rail_min' ? 'rail' : 'train';
+    return document.querySelector(`#form [data-${attr}="${k[1]}"][data-station="${CSS.escape(k.slice(3).join('.'))}"]`);
+  }
+  return null;
+}
+
+// 给人看的字段名，用在冲突提示和改动摘要里
+function labelOf(path) {
+  const k = path.split('.');
+  if (path === 'people') return '成员列表';
+  if (path === 'stations') return '候选站列表';
+  if (k[0] === 'venue') return { name: '目的地名称', address: '目的地地址', location: '目的地坐标' }[k[1]] || '目的地';
+  if (k[0] === 'options') {
+    return '选项「' + ({ max_detour_min: '默认最多绕路', max_stops: '每车最多停几次', travel_date: '出发日期', travel_time: '出发时间',
+      exit_buffer_min: '下车到上车', station_access_min: '去车站+候车' }[k[1]] || k[1]) + '」';
+  }
+  if (k[0] === 'stations') return `候选站「${cfg?.stations?.[k[1]]?.name || Number(k[1]) + 1}」`;
+  if (k[0] === 'people') {
+    const who = cfg?.people?.[k[1]]?.name || `第 ${Number(k[1]) + 1} 位成员`;
+    if (k[2] === 'trains') return `${who}到${k.slice(3).join('.')}的车次`;
+    if (k[2] === 'rail_min') return `${who}到${k.slice(3).join('.')}的用时`;
+    return `${who}的` + ({ name: '名字', from: '出发地', car_seats: '空座', max_detour_min: '最多绕路', note: '备注',
+      pickup_at_home: '到家附近接', location: '坐标', city: '城市' }[k[2]] || k[2] || '信息');
+  }
+  return path;
+}
+function showValue(v) {
+  if (v === undefined || v === null || v === '') return '（空）';
+  if (Array.isArray(v)) return v.map((x) => x?.name ?? '').filter(Boolean).join('、') || `${v.length} 项`;
+  if (isPlain(v)) return v.name || '（一组设置）';
+  return String(v);
+}
+
+// ---------- 改动摘要（写进历史版本） ----------
+function describeChanges(a, b) {
+  if (!a || !b) return '';
+  const out = [];
+  if (!same(a.venue, b.venue)) out.push('改了目的地');
+  if (!same(a.options, b.options)) out.push('改了选项');
+  const names = (list) => (list || []).map((x) => x.name || '');
+  const sa = names(a.stations), sb = names(b.stations);
+  const added = sb.filter((n) => !sa.includes(n)), removed = sa.filter((n) => !sb.includes(n));
+  if (added.length) out.push('加了车站 ' + added.join('、'));
+  if (removed.length) out.push('删了车站 ' + removed.join('、'));
+  const pa = new Map((a.people || []).map((p) => [p.name, p])), pb = new Map((b.people || []).map((p) => [p.name, p]));
+  for (const [n] of pb) if (!pa.has(n)) out.push(`加了${n ? '成员 ' + n : '一位成员'}`);
+  for (const [n] of pa) if (!pb.has(n)) out.push(`删了${n ? '成员 ' + n : '一位成员'}`);
+  for (const [n, p] of pb) if (pa.has(n) && !same(pa.get(n), p)) out.push(`改了 ${n || '成员'}`);
+  if (!out.length && !same(a, b)) out.push('小改动');
+  return out.slice(0, 4).join('；') + (out.length > 4 ? ' 等' : '');
+}
+
+// ---------- 三方合并：只有我改了用我的，只有对方改了用对方的；同一处都改了以我为准，并记下冲突 ----------
+function merge3(base, mine, theirs, path = '', conflicts = null) {
+  if (same(mine, base)) return clone(theirs);
+  if (same(theirs, base) || same(mine, theirs)) return clone(mine);
+  if (isPlain(base) && isPlain(mine) && isPlain(theirs)) {
+    const out = {};
+    for (const k of new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(theirs)])) {
+      const v = merge3(base[k], mine[k], theirs[k], path ? `${path}.${k}` : k, conflicts);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  if ([base, mine, theirs].every(Array.isArray) && mine.length >= base.length && theirs.length >= base.length) {
+    // 没人删东西：原有的逐条合并，两边新加的都接在后面
+    const n = base.length;
+    return [...base.map((_, i) => merge3(base[i], mine[i], theirs[i], `${path}.${i}`, conflicts)),
+      ...clone(mine.slice(n)), ...clone(theirs.slice(n))];
+  }
+  if (conflicts) conflicts.push({ path, mine: clone(mine), theirs: clone(theirs) });
+  return clone(mine);
+}
+
+// ---------- 表单 ----------
+function field(label, path, { type = 'text', placeholder = '' } = {}) {
+  return `<label class="f"><span>${esc(label)}</span><input data-bind="${path}" data-type="${type}"
+    type="${type === 'number' ? 'number' : 'text'}" value="${esc(getPath(path))}" placeholder="${esc(placeholder)}"></label>`;
+}
+
+function locLine(base) {
+  const loc = getPath(base + '.location');
+  return loc
+    ? `<div class="loc">已定位 ${esc(loc)}${getPath(base + '.city') ? ' · ' + esc(getPath(base + '.city')) : ''} <button class="link" data-clearloc="${base}">清除</button></div>`
+    : `<div class="loc missing">还没定位：点「搜索」选一个；不选的话，计算时会按文字自动定位并记下来</div>`;
+}
+
+function placeField(label, base, textKey, placeholder) {
+  return `<div class="place">${field(label, `${base}.${textKey}`, { placeholder })}
+    <button class="ghost" data-search="${base}" data-text="${textKey}">搜索</button></div>
+    ${locLine(base)}<div class="cands" data-cands="${base}"></div>`;
+}
+
+function stationRow(s, i) {
+  return `<div class="station">
+    <input data-station-name="${i}" data-old="${esc(s.name)}" value="${esc(s.name)}" placeholder="站名，如 杭州东站">
+    <input data-bind="stations.${i}.city" value="${esc(s.city)}" placeholder="城市">
+    <button class="ghost" data-search="stations.${i}" data-text="name">搜索</button>
+    <button class="link danger" data-del="stations.${i}">删除</button>
+    ${s.location ? `<div class="loc">已定位 ${esc(s.location)} <button class="link" data-clearloc="stations.${i}">清除</button></div>` : ''}
+    <div class="cands" data-cands="stations.${i}"></div>
+  </div>`;
+}
+
+// ---- 12306 查询链接：用站名表在本地拼出来，不发请求 ----
+let rail12306 = null;
+async function load12306() {
+  if (!rail12306) rail12306 = fetch('/stations12306.json').then((r) => r.json()).catch(() => ({ stations: {}, cities: {} }));
+  return rail12306;
+}
+function originCity(p, data) {
+  const text = `${p.city || ''} ${p.from || ''}`;
+  let best = '';
+  for (const city of Object.keys(data.cities)) if (city.length > best.length && text.includes(city)) best = city;
+  return best;
+}
+function link12306(p, stationName) {
+  if (!rail12306 || !rail12306.data) return '';
+  const data = rail12306.data;
+  const to = stationName.replace(/站$/, '');
+  const city = originCity(p, data);
+  const date = cfg.options?.travel_date || new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  const fs = city ? `${encodeURIComponent(city)},${data.cities[city]}` : '';
+  const ts = data.stations[to] ? `${encodeURIComponent(to)},${data.stations[to]}` : '';
+  return `https://kyfw.12306.cn/otn/leftTicket/init?linktypeid=dc&fs=${fs}&ts=${ts}&date=${encodeURIComponent(date)}&flag=N,N,Y`;
+}
+
+function personCard(p, i) {
+  const base = `people.${i}`;
+  const drives = p.car_seats !== undefined;
+  const stations = cfg.stations || [];
+  const rails = p.rail_min || {};
+  const trains = p.trains || {};
+  const riderPart = `
+    <label class="toggle"><input type="checkbox" data-home="${i}" ${p.pickup_at_home === false ? '' : 'checked'}> 顺路的话，车主可以到家附近接</label>
+    <div class="rail">
+      <div class="sub">能去的站填 12306 查到的车次和时刻，如 <code>G1234 08:00→11:30</code>，会自动算用时并对齐接人时间；也可以只填分钟数（含去车站和候车）。都留空表示不去这个站。点「查」打开已填好出发地和日期的 12306。</div>
+      ${stations.length ? stations.map((s) => {
+        const href = link12306(p, s.name || '');
+        return `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
+          <input data-train="${i}" data-station="${esc(s.name)}" value="${esc(trains[s.name])}" placeholder="车次 发车→到站">
+          <input type="number" min="0" data-rail="${i}" data-station="${esc(s.name)}" value="${esc(rails[s.name])}" placeholder="分钟">
+          ${href ? `<a href="${esc(href)}" target="_blank" rel="noopener" title="在 12306 查 ${esc(p.name)} 到 ${esc(s.name)} 的车次">查</a>` : '<span></span>'}</div>`;
+      }).join('') : '<div class="muted">先在上面添加候选车站</div>'}
+      ${Object.keys(rails).length || Object.keys(trains).length ? '' : '<div class="hint">全部留空时改用高德估算：不含火车换乘，可能很不准。</div>'}
+    </div>`;
+  const driverPart = `<div class="row">${field('空座', base + '.car_seats', { type: 'number' })}
+    ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', placeholder: '默认 ' + (cfg.options?.max_detour_min ?? 30) })}</div>`;
+  return `<div class="card ${drives ? 'driver' : 'rider'}">
+    <div class="row head">${field('名字', base + '.name', { placeholder: '比如 老王' })}
+      <label class="toggle"><input type="checkbox" data-car="${i}" ${drives ? 'checked' : ''}> 开车</label>
+      <button class="link danger" data-del="people.${i}">删除</button></div>
+    ${placeField('出发地', base, 'from', '如 浙江省杭州市西湖区某某小区')}
+    ${drives ? driverPart : riderPart}
+    <label class="f"><span>备注</span><textarea rows="2" data-bind="${base}.note">${esc(p.note)}</textarea></label>
+  </div>`;
+}
+
+function renderForm() {
+  cfg.venue ??= {}; cfg.options ??= {}; cfg.stations ??= []; cfg.people ??= [];
+  $('#form').innerHTML = `
+    <section id="sec-venue"><h2>① 目的地</h2>
+      ${field('名称', 'venue.name', { placeholder: '如 某某大酒店' })}
+      ${placeField('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准')}
+    </section>
+    <section id="sec-people"><h2>② 成员 <span class="adders"><button class="link" data-add="driver">+ 开车的</button><button class="link" data-add="rider">+ 不开车的</button></span></h2>
+      ${cfg.people.map(personCard).join('') || '<div class="muted">先加几位成员：开车的填空座，不开车的之后填车次。</div>'}
+    </section>
+    <section id="sec-stations"><h2>③ 候选车站 <span class="adders"><button class="link" data-suggest>推荐车站</button><button class="link" data-add="station">+ 手动添加</button></span></h2>
+      ${cfg.stations.map(stationRow).join('') || '<div class="muted">点「推荐车站」：在目的地周边、车主出发地附近和沿途找火车站，按顺路程度排好。</div>'}
+    </section>
+    <section id="sec-options"><h2>选项</h2>
+      <div class="row">${field('默认最多绕路（分钟）', 'options.max_detour_min', { type: 'number', placeholder: '30' })}
+        ${field('每车最多停几次', 'options.max_stops', { type: 'number', placeholder: '2' })}</div>
+      <div class="row">${field('出发日期', 'options.travel_date', { placeholder: 'YYYY-MM-DD' })}
+        ${field('出发时间', 'options.travel_time', { placeholder: '08:00' })}</div>
+      <div class="row">${field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number', placeholder: '15' })}
+        ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number', placeholder: '45' })}</div>
+    </section>`;
+  markPeers();
+  renderSteps();
+  schedulePreview();
+}
+
+// 重画表单但保持正在输入的那一格的焦点和光标
+function rerenderKeepingFocus() {
+  const el = document.activeElement;
+  const path = el && el.closest && el.closest('#form') ? pathOf(el) : null;
+  const pos = path && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
+  renderForm();
+  const again = path && elementOf(path);
+  if (again) {
+    again.focus();
+    try { if (pos) again.setSelectionRange(...pos); } catch { /* 数字框不支持选区 */ }
+  }
+}
+
+// ---------- 进度 ----------
+function renderSteps() {
+  const people = cfg.people || [], riders = people.filter((p) => p.car_seats === undefined);
+  const located = (x) => Boolean(x && x.location);
+  const venueOk = located(cfg.venue);
+  const unlocated = people.filter((p) => !located(p)).length;
+  const withTrains = riders.filter((p) => Object.keys(p.trains || {}).length || Object.keys(p.rail_min || {}).length).length;
+  const steps = [
+    ['sec-venue', '目的地', venueOk ? '已定位' : cfg.venue.address || cfg.venue.name ? '待定位' : '未填', venueOk],
+    ['sec-people', '成员', people.length ? `${people.length} 人${unlocated ? `，${unlocated} 人未定位` : ''}` : '未填', people.length > 0],
+    ['sec-stations', '车站', cfg.stations.length ? `${cfg.stations.length} 个` : '未选', cfg.stations.length > 0],
+    ['sec-people', '车次', riders.length ? `${withTrains}/${riders.length}` : '无需', riders.length === withTrains],
+    ['plan', '方案', result ? (isStale() ? '需重算' : '已算好') : '未计算', Boolean(result) && !isStale()],
+  ];
+  $('#steps').innerHTML = steps.map(([target, name, text, ok]) =>
+    `<button class="step ${ok ? 'done' : 'todo'}" data-goto="${target}"><b>${name}</b> ${esc(text)}</button>`).join('');
+}
+
+// ---------- 搜索与定位 ----------
+async function search(base, textKey) {
+  const q = (getPath(`${base}.${textKey}`) || '').trim();
+  const box = document.querySelector(`[data-cands="${base}"]`);
+  if (!q) { toast('先输入要搜索的名称'); return; }
+  box.innerHTML = '<button disabled>搜索中…</button>';
+  try {
+    const { results } = await backend.search(q, getPath(`${base}.city`), base.startsWith('stations.'));
+    candidates[base] = results;
+    box.innerHTML = results.length
+      ? results.map((r, k) => `<button data-pick="${base}" data-k="${k}">${esc(r.name)}<small>${esc(r.detail)}</small></button>`).join('')
+      : '<button disabled>没找到，换个说法试试</button>';
+  } catch (e) {
+    box.innerHTML = `<button disabled>${esc(e.message)}</button>`;
+  }
+}
+
+function cityFromDetail(detail) {
+  const m = String(detail || '').match(/(?:省|自治区)?([^省市区县]{2,}?市)/);
+  return m ? m[1] : '';
+}
+
+function pick(base, k) {
+  const r = candidates[base][k];
+  setPath(`${base}.location`, r.location);
+  const city = r.city || cityFromDetail(r.detail);
+  if (city && !getPath(`${base}.city`)) setPath(`${base}.city`, city);
+  if (base === 'venue' && !cfg.venue.name) cfg.venue.name = r.name;
+  fitted = false;
+  markDirty();
+  rerenderKeepingFocus();
+  toast(`已定位：${r.name}`);
+}
+
+// 计算或推荐时按文字定位到的坐标写回配置，下次不再请求
+function applyResolved(list) {
+  let n = 0;
+  for (const r of list || []) {
+    if (getPath(`${r.path}.location`)) continue;
+    setPath(`${r.path}.location`, r.location);
+    if (r.city && !getPath(`${r.path}.city`)) setPath(`${r.path}.city`, r.city);
+    n += 1;
+  }
+  if (n) { markDirty(); rerenderKeepingFocus(); }
+  return n;
+}
+
+// ---------- 增删改 ----------
+function addItem(kind) {
+  if (kind === 'station') cfg.stations.push({ name: '' });
+  if (kind === 'driver') cfg.people.push({ name: '', from: '', car_seats: 3 });
+  if (kind === 'rider') cfg.people.push({ name: '', from: '' });
+  markDirty();
+  renderForm();
+}
+
+function deleteItem(path) {
+  const [list, idx] = path.split('.');
+  const item = cfg[list][Number(idx)];
+  if (!confirm(`删除${list === 'people' ? '成员' : '车站'}「${item?.name || '未命名'}」？在线版可以在「历史」里找回。`)) return;
+  cfg[list].splice(Number(idx), 1);
+  if (list === 'stations') cfg.people.forEach((p) => ['rail_min', 'trains'].forEach((k) => p[k] && delete p[k][item.name]));
+  markDirty();
+  renderForm();
+}
+
+function renameStation(i, input) {
+  const oldName = input.dataset.old, newName = input.value.trim();
+  if (oldName === newName) return;
+  for (const p of cfg.people) {
+    for (const key of ['rail_min', 'trains']) {
+      if (p[key] && oldName in p[key]) {
+        if (newName) p[key][newName] = p[key][oldName];
+        delete p[key][oldName];
+      }
+    }
+  }
+  markDirty();
+  rerenderKeepingFocus();
+}
+
+function toggleCar(i, on) {
+  const p = cfg.people[i];
+  if (on) { p.car_seats = 3; delete p.pickup_at_home; }
+  else { delete p.car_seats; delete p.max_detour_min; }
+  markDirty();
+  renderForm();
+}
+
+function setStationValue(i, key, station, value) {
+  const p = cfg.people[i];
+  p[key] ??= {};
+  if (value === '') delete p[key][station]; else p[key][station] = value;
+  if (!Object.keys(p[key]).length) delete p[key];
+  markDirty();
+}
+
+function validate() {
+  const problems = [];
+  const names = cfg.people.map((p) => (p.name || '').trim());
+  if (!cfg.venue.location && !cfg.venue.address && !cfg.venue.name) problems.push('还没填目的地');
+  if (!cfg.people.length) problems.push('至少要有一位成员');
+  names.forEach((n, i) => {
+    if (!n) problems.push(`第 ${i + 1} 位成员没填名字`);
+    else if (names.indexOf(n) !== i) problems.push(`名字「${n}」重复了`);
+    if (!cfg.people[i].from && !cfg.people[i].location) problems.push(`${n || '第 ' + (i + 1) + ' 位成员'}没填出发地`);
+  });
+  cfg.stations.forEach((s, i) => { if (!(s.name || '').trim()) problems.push(`第 ${i + 1} 个候选站没填站名`); });
+  return problems;
+}
+
+// ---------- 保存与同步 ----------
+function markDirty() {
+  dirty = true;
+  $('#save').textContent = '保存*';
+  if (mode === 'online') scheduleSync();
+  renderSteps();
+  updateStale();
+  schedulePreview();
+}
+
+let synced = null, version = null, syncTimer = null, syncing = null, socket = null, retryDelay = 1000, lastError = '';
+
+function setStatus() {
+  const parts = [];
+  if (mode === 'local') parts.push(trip.file ? `本地 · ${trip.file}` : '本地');
+  else if (!socket || socket.readyState !== 1) parts.push('连接断开，正在重连…改动会在恢复后保存');
+  else if (lastError) parts.push(lastError);
+  else if (syncing || syncTimer) parts.push('同步中…');
+  else parts.push('已同步');
+  $('#status').textContent = parts.join(' · ');
+}
+
+function scheduleSync(delay = 800) {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { syncTimer = null; save(true).catch(() => {}); }, delay);
+  setStatus();
+}
+
+async function syncSave() {
+  clearTimeout(syncTimer); syncTimer = null;
+  while (syncing) await syncing; // 一次只发一个保存
+  if (!dirty) return;
+  syncing = (async () => {
+    setStatus();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const snapshot = clone(cfg);
+      let data;
+      try {
+        data = await api(`${API}/config`, { config: snapshot, base_version: version, client_id: me.clientId, author: me.name, note: describeChanges(synced, snapshot) });
+      } catch (e) {
+        if (e.status === 409) { // 别人先存了：合并后重试
+          const conflicts = [];
+          cfg = merge3(synced, cfg, e.data.config, '', conflicts);
+          synced = clone(e.data.config);
+          version = e.data.version;
+          rerenderKeepingFocus();
+          showConflicts(conflicts, e.data.author);
+          continue;
+        }
+        throw e;
+      }
+      version = data.version;
+      synced = snapshot;
+      if (same(cfg, snapshot)) { dirty = false; $('#save').textContent = '保存'; }
+      lastError = '';
+      return;
+    }
+    throw new Error('冲突太多，请刷新页面');
+  })();
+  try {
+    await syncing;
+  } catch (e) {
+    lastError = `没保存上：${e.message}`;
+    if (e.status !== 401) scheduleSync(4000); // 网络问题：过一会儿再试，改动不会丢
+    throw e;
+  } finally {
+    syncing = null;
+    setStatus();
+  }
+  if (dirty) scheduleSync();
+}
+
+async function save(quiet) {
+  if (mode === 'online') {
+    await syncSave();
+    if (!quiet) toast('已同步');
+    return;
+  }
+  await api('/api/config', { config: cfg });
+  dirty = false;
+  $('#save').textContent = '保存';
+  if (!quiet) toast('已保存');
+}
+
+function applyRemote(msg) {
+  if (msg.client_id === me.clientId || (version !== null && msg.version <= version)) return;
+  const who = msg.author || '有人';
+  if (dirty || syncing) { // 我这边有没存的改动：合并进来，再存一次
+    const conflicts = [];
+    cfg = merge3(synced, cfg, msg.config, '', conflicts);
+    synced = clone(msg.config);
+    version = msg.version;
+    rerenderKeepingFocus();
+    showConflicts(conflicts, who);
+    scheduleSync();
+    return;
+  }
+  const note = describeChanges(cfg, msg.config);
+  cfg = clone(msg.config);
+  synced = clone(msg.config);
+  version = msg.version;
+  rerenderKeepingFocus();
+  updateStale();
+  toast(msg.restored ? `${who} 恢复到了版本 ${msg.restored}` : `${who}：${note || '更新了配置'}`);
+}
+
+// 同一格都改了：先保留我的，告诉我对方改成了什么，可以一键改用对方的；需要更早的内容去「历史」里找
+function showConflicts(conflicts, who) {
+  for (const c of conflicts) {
+    const box = document.createElement('div');
+    box.className = 'conflict';
+    box.innerHTML = `你和 <b>${esc(who)}</b> 同时改了 <b>${esc(labelOf(c.path))}</b>：保留了你的「${esc(showValue(c.mine))}」，${esc(who)} 的是「${esc(showValue(c.theirs))}」。
+      <div class="acts"><button class="link" data-use-theirs>改用 ${esc(who)} 的</button><button class="link" data-dismiss>知道了</button></div>`;
+    box.querySelector('[data-use-theirs]').onclick = () => {
+      if (c.path.includes('.')) setPath(c.path, clone(c.theirs)); else cfg[c.path] = clone(c.theirs);
+      markDirty();
+      rerenderKeepingFocus();
+      box.remove();
+    };
+    box.querySelector('[data-dismiss]').onclick = () => box.remove();
+    $('#conflicts').append(box);
+    setTimeout(() => box.remove(), 60000);
+  }
+}
+
+// ---------- 实时连接：在线名单、谁在编辑哪一格 ----------
+function connectSync() {
+  if (mode !== 'online' || !me.name || (socket && socket.readyState <= 1)) return;
+  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${API}/sync`);
+  socket.onopen = () => {
+    retryDelay = 1000;
+    socket.send(JSON.stringify({ type: 'join', clientId: me.clientId, name: me.name }));
+    sendFocus();
+    setStatus();
+    if (dirty) scheduleSync(0); // 断线期间的改动补存
+  };
+  socket.onmessage = async (e) => {
+    if (e.data === 'pong') return;
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'presence') { peers = msg.people; renderPeers(); markPeers(); }
+    if (msg.type === 'config') applyRemote(msg);
+    if (msg.type === 'meta') { trip.name = msg.name; renderTitle(); }
+    if (msg.type === 'page') { trip.page = { url: `/p/${tripId}`, at: msg.at }; }
+    if (msg.type === 'deleted') { dirty = false; socket.onclose = null; socket.close(); deny('这个行程已经被删除了'); }
+    if (msg.type === 'hello' && version !== null && msg.version !== version) {
+      // 断线期间别人改过：没有本地改动就重新载入，有的话下次保存会走合并
+      if (dirty) scheduleSync(); else await loadConfig(true);
+    }
+  };
+  socket.onclose = () => {
+    peers = [];
+    renderPeers();
+    markPeers();
+    setStatus();
+    setTimeout(connectSync, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 15000);
+  };
+}
+setInterval(() => { if (socket && socket.readyState === 1) socket.send('ping'); }, 25000);
+
+let focusTimer = null;
+function sendFocus() {
+  clearTimeout(focusTimer);
+  focusTimer = setTimeout(() => {
+    if (socket && socket.readyState === 1) socket.send(JSON.stringify({ type: 'focus', path: pathOf(document.activeElement) }));
+  }, 150);
+}
+
+function renderPeers() {
+  $('#peers').innerHTML = peers.map((p) => {
+    const self = p.clientId === me.clientId;
+    return `<span class="peer-chip" title="${esc(p.name)}${self ? '（你）' : ''}"><i style="background:${peerColor(p.clientId)}">${esc(p.name.slice(0, 1))}</i>${esc(p.name)}${self ? '（你）' : ''}</span>`;
+  }).join('');
+}
+
+function markPeers() {
+  document.querySelectorAll('#form .peer-on').forEach((el) => { el.classList.remove('peer-on'); el.style.removeProperty('--peer'); el.removeAttribute('title'); });
+  document.querySelectorAll('#form .peer-tag').forEach((el) => el.remove());
+  for (const p of peers) {
+    if (p.clientId === me.clientId || !p.focus) continue;
+    const el = elementOf(p.focus);
+    if (!el) continue;
+    const color = peerColor(p.clientId);
+    el.classList.add('peer-on');
+    el.style.setProperty('--peer', color);
+    el.title = `${p.name} 正在编辑`;
+    const tag = document.createElement('span');
+    tag.className = 'peer-tag';
+    tag.style.setProperty('--peer', color);
+    tag.textContent = `${p.name} 正在编辑`;
+    (el.closest('.f, .rail-row, .station') || el.parentElement).append(tag);
+  }
+}
+
+// ---------- 计算后端：本地调 ui.py；在线在 Web Worker 里的 Pyodide 中算（web/pyworker.js） ----------
 let pyWorker = null, pyCalls = 0;
 const pyPending = new Map();
 function py(method, args) {
   if (!pyWorker) {
-    toast('首次计算要先下载计算环境（约 12MB），稍等…');
-    pyWorker = new Worker('pyworker.js', { type: 'module' });
+    toast('第一次计算要先下载计算环境（约 12MB），稍等…', 4000);
+    pyWorker = new Worker('/pyworker.js', { type: 'module' });
     pyWorker.onerror = (e) => { // 计算环境加载失败：把等待中的调用都结束掉，别一直转圈
       const msg = `计算环境加载失败：${e.message || '网络问题'}`;
       for (const { reject } of pyPending.values()) reject(new Error(msg));
@@ -160,11 +789,13 @@ function py(method, args) {
       pyWorker = null;
     };
     pyWorker.onmessage = (e) => {
-      const { id, result } = e.data;
-      const { resolve, reject } = pyPending.get(id);
+      const { id, result: out } = e.data;
+      const pending = pyPending.get(id);
+      if (!pending) return;
       pyPending.delete(id);
-      result && result.error ? reject(new Error(result.error)) : resolve(result);
+      out && out.error ? pending.reject(new Error(out.error)) : pending.resolve(out);
     };
+    pyWorker.postMessage({ id: 0, method: 'init', args: { base: API } });
   }
   return new Promise((resolve, reject) => {
     const id = ++pyCalls;
@@ -182,348 +813,53 @@ const backend = {
     if (station) params.set('station', '1');
     return api('/api/search?' + params);
   },
+  async suggest(config) {
+    if (mode !== 'online') return api('/api/suggest', { config });
+    const data = (await load12306()) || {};
+    return py('suggest', { config, valid_names: Object.keys(data.stations || {}) });
+  },
   async share(plan) {
     if (mode !== 'online') return api('/api/share', { plan });
     const { html } = await py('share', { plan });
-    return api('/api/pages', { html });
+    return api(`${API}/page`, { html });
   },
 };
 
-function showLogin() {
-  $('#login').hidden = false;
-  $('#code').focus();
-}
-
-function toast(msg) {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2600);
-}
-
-function markDirty() {
-  dirty = true;
-  $('#save').textContent = '保存*';
-  if (mode === 'online') scheduleSync();
-}
-
-// ---- 在线版实时同步：改动自动保存，别人的改动通过 WebSocket 推过来 ----
-// synced：上次和服务器一致时的配置，冲突时用它做三方合并；version：服务器上的版本号
-let synced = null, version = null, syncTimer = null, syncing = null, socket = null, retryDelay = 1000;
-const clientId = Math.random().toString(36).slice(2);
-const clone = (x) => structuredClone(x);
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
-
-// 三方合并：只有我改了用我的，只有对方改了用对方的；都改了就往下逐项合并，同一处都改了以我为准
-function merge3(base, mine, theirs) {
-  if (same(mine, base)) return clone(theirs);
-  if (same(theirs, base) || same(mine, theirs)) return clone(mine);
-  if (isPlain(base) && isPlain(mine) && isPlain(theirs)) {
-    const out = {};
-    for (const k of new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(theirs)])) {
-      const v = merge3(base[k], mine[k], theirs[k]);
-      if (v !== undefined) out[k] = v;
-    }
-    return out;
-  }
-  if ([base, mine, theirs].every(Array.isArray) && mine.length >= base.length && theirs.length >= base.length) {
-    // 没人删东西：原有的逐条合并，两边新加的都接在后面
-    const n = base.length;
-    return [...base.map((_, i) => merge3(base[i], mine[i], theirs[i])), ...clone(mine.slice(n)), ...clone(theirs.slice(n))];
-  }
-  return clone(mine);
-}
-
-function setSync(text) { $('#sync').textContent = text ? ` · ${text}` : ''; }
-
-function scheduleSync() {
-  clearTimeout(syncTimer);
-  setSync('待同步');
-  syncTimer = setTimeout(() => save(true).catch((e) => setSync('同步失败：' + e.message)), 800);
-}
-
-// 重画表单但保持正在输入的那一格的焦点和光标
-function rerenderKeepingFocus() {
-  const el = document.activeElement;
-  const attrs = ['bind', 'rail', 'train', 'station', 'stationName', 'search'];
-  const sel = el && el.closest && el.closest('#form')
-    ? Object.entries(el.dataset).filter(([k]) => attrs.includes(k))
-      .map(([k, v]) => `[data-${k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())}="${CSS.escape(v)}"]`).join('')
-    : '';
-  const pos = sel && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
-  renderForm();
-  const again = sel && document.querySelector(`#form ${el.tagName.toLowerCase()}${sel}`);
-  if (again) {
-    again.focus();
-    try { if (pos) again.setSelectionRange(...pos); } catch { /* 数字框不支持选区 */ }
-  }
-}
-
-async function syncSave() {
-  clearTimeout(syncTimer);
-  while (syncing) await syncing; // 一次只发一个保存
-  if (!dirty) return;
-  syncing = (async () => {
-    setSync('同步中…');
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const snapshot = clone(cfg);
-      const res = await fetch('/api/config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: snapshot, base_version: version, client_id: clientId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409) { // 别人先存了：合并后重试
-        cfg = merge3(synced, cfg, data.config);
-        synced = clone(data.config);
-        version = data.version;
-        rerenderKeepingFocus();
-        toast('别人刚改过配置，已合并');
-        continue;
-      }
-      if (res.status === 401) showLogin();
-      if (!res.ok) throw new Error(data.error || res.statusText);
-      version = data.version;
-      synced = snapshot;
-      if (same(cfg, snapshot)) { dirty = false; $('#save').textContent = '保存'; }
-      setSync(onlineText());
-      return;
-    }
-    throw new Error('冲突太多，请刷新页面');
-  })();
-  try { await syncing; } finally { syncing = null; }
-  if (dirty) scheduleSync(); // 保存过程中又有新改动
-}
-
-let online = 0;
-function onlineText() { return socket && socket.readyState === 1 ? `实时同步 · ${online} 人在线` : '同步已断开，重连中…'; }
-
-function applyRemote(msg) {
-  if (msg.client_id === clientId || (version !== null && msg.version <= version)) return;
-  if (dirty || syncing) { // 我这边有没存的改动：合并进来，再存一次
-    cfg = merge3(synced, cfg, msg.config);
-    synced = clone(msg.config);
-    version = msg.version;
-    rerenderKeepingFocus();
-    scheduleSync();
+// ---------- 推荐车站 ----------
+async function suggestStations() {
+  if (!cfg.people.some((p) => p.car_seats !== undefined) && !cfg.venue.location && !cfg.venue.address) {
+    toast('先填目的地和开车的成员，推荐才有依据');
     return;
   }
-  cfg = clone(msg.config);
-  synced = clone(msg.config);
-  version = msg.version;
-  rerenderKeepingFocus();
-  toast('别人更新了配置，已同步');
-}
-
-function connectSync() {
-  if (socket && socket.readyState <= 1) return;
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sync`);
-  socket.onopen = () => { retryDelay = 1000; setSync(onlineText()); };
-  socket.onmessage = async (e) => {
-    if (e.data === 'pong') return;
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'presence') { online = msg.online; setSync(onlineText()); }
-    if (msg.type === 'config') applyRemote(msg);
-    if (msg.type === 'hello' && version !== null && msg.version !== version) {
-      // 断线期间别人改过：没有本地改动就重新载入，有的话下次保存会走合并
-      if (dirty) scheduleSync(); else await loadConfig(true);
-    }
-  };
-  socket.onclose = () => {
-    setSync(onlineText());
-    setTimeout(connectSync, retryDelay);
-    retryDelay = Math.min(retryDelay * 2, 15000);
-  };
-}
-setInterval(() => { if (socket && socket.readyState === 1) socket.send('ping'); }, 25000);
-
-// ---- 读写 cfg 里的路径，如 "people.2.car_seats" ----
-function getPath(path) { return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg); }
-function setPath(path, value) {
-  const keys = path.split('.');
-  const last = keys.pop();
-  const obj = keys.reduce((o, k) => (o[k] ??= {}), cfg);
-  if (value === '' || value === undefined || Number.isNaN(value)) delete obj[last];
-  else obj[last] = value;
-}
-
-// ---- 表单 ----
-function field(label, path, { type = 'text', placeholder = '' } = {}) {
-  return `<label class="f"><span>${esc(label)}</span><input data-bind="${path}" data-type="${type}"
-    type="${type === 'number' ? 'number' : 'text'}" value="${esc(getPath(path))}" placeholder="${esc(placeholder)}"></label>`;
-}
-
-function locLine(base) {
-  const loc = getPath(base + '.location');
-  return loc
-    ? `<div class="loc">坐标 ${esc(loc)} <button class="link" data-clearloc="${base}">清除</button></div>`
-    : `<div class="loc">还没定坐标：计算时按文字解析，建议点「搜索」选一个</div>`;
-}
-
-function placeField(label, base, textKey, placeholder) {
-  return `<div class="place">${field(label, `${base}.${textKey}`, { placeholder })}
-    <button class="ghost" data-search="${base}" data-text="${textKey}">搜索</button></div>
-    ${locLine(base)}<div class="cands" data-cands="${base}"></div>`;
-}
-
-function stationRow(s, i) {
-  return `<div class="station">
-    <input data-station-name="${i}" data-old="${esc(s.name)}" value="${esc(s.name)}" placeholder="站名，如 杭州东站">
-    <input data-bind="stations.${i}.city" value="${esc(s.city)}" placeholder="城市">
-    <button class="ghost" data-search="stations.${i}" data-text="name">搜索</button>
-    <button class="link danger" data-del="stations.${i}">删除</button>
-    ${s.location ? `<div class="loc">坐标 ${esc(s.location)} <button class="link" data-clearloc="stations.${i}">清除</button></div>` : ''}
-    <div class="cands" data-cands="stations.${i}"></div>
-  </div>`;
-}
-
-function personCard(p, i) {
-  const base = `people.${i}`;
-  const drives = p.car_seats !== undefined;
-  const stations = cfg.stations || [];
-  const rails = p.rail_min || {};
-  const trains = p.trains || {};
-  const riderPart = `
-    <label class="toggle"><input type="checkbox" data-home="${i}" ${p.pickup_at_home === false ? '' : 'checked'}> 车主可以到家附近接</label>
-    <div class="rail">
-      <div class="sub">能去的站填 12306 查到的车次和时刻，如 <code>G1234 08:00→11:30</code>，会自动算用时并对齐接人时间；也可以只填分钟数（含去车站和候车）。都留空表示不去这个站。</div>
-      ${stations.length ? stations.map((s) => `<div class="rail-row"><span>${esc(s.name)}</span>
-        <input data-train="${i}" data-station="${esc(s.name)}" value="${esc(trains[s.name])}" placeholder="车次 发车→到站">
-        <input type="number" min="0" data-rail="${i}" data-station="${esc(s.name)}" value="${esc(rails[s.name])}" placeholder="分钟"></div>`).join('')
-        : '<div class="muted">先在上面添加候选站</div>'}
-      ${Object.keys(rails).length || Object.keys(trains).length ? '' : '<div class="hint">全部留空时改用高德估算：不含火车换乘，可能很不准。</div>'}
-    </div>`;
-  const driverPart = `<div class="row">${field('空座', base + '.car_seats', { type: 'number' })}
-    ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', placeholder: '默认 ' + (cfg.options?.max_detour_min ?? 30) })}</div>`;
-  return `<div class="card ${drives ? 'driver' : 'rider'}">
-    <div class="row head">${field('名字', base + '.name')}
-      <label class="toggle"><input type="checkbox" data-car="${i}" ${drives ? 'checked' : ''}> 开车</label>
-      <button class="link danger" data-del="people.${i}">删除</button></div>
-    ${placeField('出发地', base, 'from', '如 浙江省杭州市西湖区')}
-    ${drives ? driverPart : riderPart}
-    <label class="f"><span>备注</span><textarea rows="2" data-bind="${base}.note">${esc(p.note)}</textarea></label>
-  </div>`;
-}
-
-function renderForm() {
-  cfg.venue ??= {}; cfg.options ??= {}; cfg.stations ??= []; cfg.people ??= [];
-  $('#form').innerHTML = `
-    <section><h2>婚礼场地</h2>
-      ${field('名称', 'venue.name', { placeholder: '如 某某大酒店' })}
-      ${placeField('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准')}
-    </section>
-    <section><h2>选项</h2>
-      <div class="row">${field('默认最多绕路（分钟）', 'options.max_detour_min', { type: 'number', placeholder: '30' })}
-        ${field('每车最多停几次', 'options.max_stops', { type: 'number', placeholder: '2' })}</div>
-      <div class="row">${field('出发日期', 'options.travel_date', { placeholder: 'YYYY-MM-DD' })}
-        ${field('出发时间', 'options.travel_time', { placeholder: '08:00' })}</div>
-      <div class="row">${field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number', placeholder: '15' })}
-        ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number', placeholder: '45' })}</div>
-    </section>
-    <section><h2>候选高铁站 <button class="link" data-add="station">+ 添加</button></h2>
-      ${cfg.stations.map(stationRow).join('') || '<div class="muted">不填会自动搜索场地周围的火车站（可能漏掉大站）</div>'}
-    </section>
-    <section><h2>人员 <span class="adders"><button class="link" data-add="driver">+ 开车的</button><button class="link" data-add="rider">+ 不开车的</button></span></h2>
-      ${cfg.people.map(personCard).join('')}
-    </section>`;
-}
-
-function renameStation(i, input) {
-  const oldName = input.dataset.old, newName = input.value.trim();
-  if (oldName === newName) return;
-  for (const p of cfg.people) {
-    for (const key of ['rail_min', 'trains']) {
-      if (p[key] && oldName in p[key]) {
-        if (newName) p[key][newName] = p[key][oldName];
-        delete p[key][oldName];
-      }
-    }
-  }
-  renderForm();
-}
-
-async function search(base, textKey) {
-  const q = (getPath(`${base}.${textKey}`) || '').trim();
-  const box = document.querySelector(`[data-cands="${base}"]`);
-  if (!q) { toast('先输入要搜索的名称'); return; }
-  box.innerHTML = '<button disabled>搜索中…</button>';
+  openDrawer('推荐车站', '<div class="empty">正在找：目的地周边、车主出发地附近、沿各车主的路线。要查几十个点，第一次可能要一两分钟，之后会快很多。</div>');
   try {
-    const { results } = await backend.search(q, getPath(`${base}.city`), base.startsWith('stations.'));
-    candidates[base] = results;
-    box.innerHTML = results.length
-      ? results.map((r, k) => `<button data-pick="${base}" data-k="${k}">${esc(r.name)}<small>${esc(r.detail)}</small></button>`).join('')
-      : '<button disabled>没找到，换个说法试试</button>';
+    const out = await backend.suggest(cfg);
+    applyResolved(out.resolved);
+    if (!out.stations.length) { $('#drawerBody').innerHTML = '<div class="empty">附近没找到火车站，可以手动添加。</div>'; return; }
+    $('#drawerBody').innerHTML = `<p class="muted">按「车主最少绕路」排序；绕路超过各自上限的车主不会去接。勾选后加入候选站。</p>
+      ${out.stations.map((s, i) => `<label class="sug"><input type="checkbox" data-sug="${i}" ${i < 6 ? 'checked' : ''}>
+        <span><b>${esc(s.name)}</b> <span class="muted">${esc(s.where)}</span>
+        <small>到目的地约 ${s.to_venue == null ? '?' : fmtMin(s.to_venue)}${s.best ? `；${esc(s.best.driver)} 顺路去接多绕 ${fmtMin(s.best.detour)}` : ''}</small></span></label>`).join('')}
+      <button class="btn primary" id="addSug" style="margin-top:12px">加入选中的车站</button>`;
+    $('#addSug').onclick = () => {
+      const picked = [...document.querySelectorAll('[data-sug]:checked')].map((el) => out.stations[Number(el.dataset.sug)]);
+      for (const s of picked) cfg.stations.push({ name: s.name, city: s.city || undefined, location: s.location });
+      closeDrawer();
+      markDirty();
+      renderForm();
+      toast(`加了 ${picked.length} 个车站，接下来给不开车的人填车次`);
+    };
   } catch (e) {
-    box.innerHTML = `<button disabled>${esc(e.message)}</button>`;
+    $('#drawerBody').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
   }
 }
 
-function pick(base, k) {
-  const r = candidates[base][k];
-  setPath(`${base}.location`, r.location);
-  if (base === 'venue' && !cfg.venue.name) cfg.venue.name = r.name;
-  markDirty();
-  renderForm();
-  toast(`已选：${r.name}`);
-}
-
-function addItem(kind) {
-  if (kind === 'station') cfg.stations.push({ name: '' });
-  if (kind === 'driver') cfg.people.push({ name: '', from: '', car_seats: 3 });
-  if (kind === 'rider') cfg.people.push({ name: '', from: '' });
-  markDirty();
-  renderForm();
-}
-
-function deleteItem(path) {
-  const [list, idx] = path.split('.');
-  const [removed] = cfg[list].splice(Number(idx), 1);
-  if (list === 'stations') cfg.people.forEach((p) => ['rail_min', 'trains'].forEach((k) => p[k] && delete p[k][removed.name]));
-  markDirty();
-  renderForm();
-}
-
-function toggleCar(i, on) {
-  const p = cfg.people[i];
-  if (on) { p.car_seats = 3; delete p.pickup_at_home; delete p.rail_min; delete p.trains; }
-  else { delete p.car_seats; delete p.max_detour_min; }
-  markDirty();
-  renderForm();
-}
-
-function setStationValue(i, key, station, value) {
-  const p = cfg.people[i];
-  p[key] ??= {};
-  if (value === '') delete p[key][station]; else p[key][station] = value;
-  if (!Object.keys(p[key]).length) delete p[key];
-  markDirty();
-}
-
-function validate() {
-  const problems = [];
-  const names = cfg.people.map((p) => (p.name || '').trim());
-  if (!cfg.venue.location && !cfg.venue.address) problems.push('场地还没填地址或坐标');
-  if (!cfg.people.length) problems.push('至少要有一个人');
-  names.forEach((n, i) => {
-    if (!n) problems.push(`第 ${i + 1} 个人没填名字`);
-    else if (names.indexOf(n) !== i) problems.push(`名字「${n}」重复了`);
-    if (!cfg.people[i].from && !cfg.people[i].location) problems.push(`${n || '第 ' + (i + 1) + ' 个人'} 没填出发地`);
-  });
-  cfg.stations.forEach((s, i) => { if (!(s.name || '').trim()) problems.push(`第 ${i + 1} 个候选站没填站名`); });
-  return problems;
-}
-
-async function save(quiet) {
-  if (mode === 'online') {
-    await syncSave();
-    if (!quiet) toast('已同步');
-    return;
-  }
-  await api('/api/config', { config: cfg });
-  dirty = false;
-  $('#save').textContent = '保存';
-  if (!quiet) toast('已保存');
+// ---------- 计算方案 ----------
+const configHash = () => JSON.stringify({ ...cfg, people: (cfg.people || []).map(({ note, ...p }) => p) });
+const isStale = () => Boolean(result) && resultHash !== configHash();
+function updateStale() {
+  $('#stale').hidden = !isStale();
+  showLayers();
 }
 
 async function runPlan() {
@@ -533,21 +869,23 @@ async function runPlan() {
   btn.disabled = true;
   btn.textContent = '计算中…';
   try {
-    await save(true);
+    if (dirty) await save(true);
+    const hash = configHash();
     result = await backend.plan(cfg);
+    resultHash = hash;
     active = 0;
+    const saved = applyResolved(result.resolved);
+    if (saved) resultHash = configHash(); // 写回坐标不算改了方案
     renderResults(true);
-    toast('算好了');
+    toast(saved ? `算好了。顺便记下了 ${saved} 个地点的坐标，下次不用再查` : '算好了');
   } catch (e) {
     alert('计算失败：' + e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = '计算方案';
+    renderSteps();
   }
 }
-
-// ---- 结果与地图 ----
-function fmtMin(m) { return m >= 60 ? `${Math.floor(m / 60)}小时${String(m % 60).padStart(2, '0')}分` : `${m}分钟`; }
 
 function renderResults(fit) {
   $('#tabs').innerHTML = result.plans.map((p, i) => {
@@ -559,21 +897,54 @@ function renderResults(fit) {
   $('#warn').innerHTML = result.warnings.map((w) => `<div class="warn">${esc(w)}</div>`).join('');
   $('#report').innerHTML = marked.parse(result.report);
   $('#report').querySelectorAll('a').forEach((a) => { a.target = '_blank'; a.rel = 'noopener'; });
-  drawMap(fit);
+  drawPlan(fit);
+  updateStale();
 }
 
-function drawMap(fit) {
-  layer.clearLayers();
+// ---------- 地图：没算方案时实时显示已定位的地点；算出方案后画路线 ----------
+function showLayers() {
+  if (!map) return;
+  const plan = result && !isStale();
+  if (plan) { map.removeLayer(previewLayer); planLayer.addTo(map); }
+  else { map.removeLayer(planLayer); previewLayer.addTo(map); }
+}
+
+let previewTimer = null;
+function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(drawPreview, 250); }
+
+function drawPreview() {
+  if (!map || !cfg) return;
+  previewLayer.clearLayers();
+  const pts = [];
+  const add = (loc, kind, label, r = 7) => {
+    const ll = parseLoc(loc);
+    if (!ll) return;
+    pts.push(ll);
+    L.circleMarker(ll, { radius: r, color: '#fff', weight: 2, fillColor: POINT_STYLE[kind], fillOpacity: kind === 'st' ? 0.75 : 1 })
+      .bindTooltip(esc(label), { permanent: kind !== 'st', direction: 'top', offset: [0, -6], className: 'lbl' }).addTo(previewLayer);
+  };
+  add(cfg.venue?.location, 'venue', cfg.venue?.name || '目的地', 10);
+  (cfg.stations || []).forEach((s) => add(s.location, 'st', s.name || '车站', 6));
+  (cfg.people || []).forEach((p) => add(p.location, p.car_seats !== undefined ? 'car' : 'home', `${p.name || '成员'}${p.car_seats !== undefined ? '（开车）' : ''}`));
+  if (!fitted && pts.length) {
+    map.fitBounds(L.latLngBounds(pts).pad(0.15), { maxZoom: 11 });
+    fitted = true;
+  }
+  showLayers();
+}
+
+function drawPlan(fit) {
+  planLayer.clearLayers();
   const pts = result.points;
   const plan = result.plans[active];
   const used = new Set();
-  const stopNotes = {}; // 接人点 → ["车1 多绕 27分钟"]
+  const stopNotes = {};
   const ll = (id) => [pts[id].lat, pts[id].lng];
   (plan?.routes || []).forEach((r) => {
     // 先画不接人时的直达路线（灰色虚线），接人的彩色路线盖在上面，分岔的那段就是绕的路
     if (!r.stops.length) return;
     L.polyline(r.direct_path || [ll(`car:${r.driver}`), ll('venue')], { color: '#6b7280', weight: 4, opacity: 0.65, dashArray: '6 8' })
-      .bindTooltip(`${r.driver} 不接人的直达路线`, { sticky: true }).addTo(layer);
+      .bindTooltip(`${r.driver} 不接人的直达路线`, { sticky: true }).addTo(planLayer);
     (stopNotes[r.stops[0]] ??= []).push(`${r.driver} 多绕 ${fmtMin(r.detour)}`);
   });
   (plan?.routes || []).forEach((r, i) => {
@@ -581,11 +952,11 @@ function drawMap(fit) {
     const line = r.path || [`car:${r.driver}`, ...r.stops, 'venue'].map(ll);
     L.polyline(line, { color: COLORS[i % COLORS.length], weight: 5, opacity: 0.85, dashArray: r.path ? null : '8 8' })
       .bindTooltip(`${r.driver}：${r.stops.length ? '多绕 ' + fmtMin(r.detour) : '直达'}，全程约 ${fmtMin(r.minutes)}`, { sticky: true })
-      .addTo(layer);
+      .addTo(planLayer);
   });
   Object.entries(plan?.taxi || {}).forEach(([who, s]) => {
     used.add(s);
-    L.polyline([ll(s), ll('venue')], { color: '#6b7280', weight: 3, dashArray: '4 6' }).bindTooltip(`${who} 打车`, { sticky: true }).addTo(layer);
+    L.polyline([ll(s), ll('venue')], { color: '#6b7280', weight: 3, dashArray: '4 6' }).bindTooltip(`${who} 打车`, { sticky: true }).addTo(planLayer);
   });
   for (const [id, p] of Object.entries(pts)) {
     const kind = id === 'venue' ? 'venue' : id.split(':')[0];
@@ -594,34 +965,190 @@ function drawMap(fit) {
       radius: kind === 'venue' ? 10 : kind === 'st' ? (used.has(id) ? 9 : 5) : 7,
       color: '#fff', weight: 2, fillColor: POINT_STYLE[kind], fillOpacity: highlighted ? 1 : 0.5,
     }).bindTooltip(esc(p.name) + (stopNotes[id] ? `<br><b>${stopNotes[id].map(esc).join('<br>')}</b>` : ''),
-      { permanent: highlighted, direction: 'top', offset: [0, -6], className: 'lbl' }).addTo(layer);
+      { permanent: highlighted, direction: 'top', offset: [0, -6], className: 'lbl' }).addTo(planLayer);
   }
   if (fit) {
-    // 按方案里的路线缩放；远处不开车的人的出发地不算进来，缩小地图就能看到
     const focus = [ll('venue'), ...[...used].map(ll),
       ...(plan?.routes || []).flatMap((r) => [...(r.path || [ll(`car:${r.driver}`)]), ...(r.direct_path || [])])];
     map.fitBounds(L.latLngBounds(focus).pad(0.1));
   }
+  showLayers();
 }
 
 function initMap() {
-  map = L.map('map').setView([36.3, 117.2], 7);
+  map = L.map('map').setView([34.5, 112], 5);
   L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
     subdomains: '1234', maxZoom: 18, attribution: '© 高德地图',
   }).addTo(map);
-  layer = L.layerGroup().addTo(map);
+  planLayer = L.layerGroup();
+  previewLayer = L.layerGroup().addTo(map);
   const legend = L.control({ position: 'bottomleft' });
   legend.onAdd = () => {
     const d = L.DomUtil.create('div', 'legend');
-    d.innerHTML = `<div><i style="background:${POINT_STYLE.venue}"></i>场地</div><div><i style="background:${POINT_STYLE.car}"></i>车主出发地</div>
-      <div><i style="background:${POINT_STYLE.home}"></i>不开车的人</div><div><i style="background:${POINT_STYLE.st}"></i>车站（大点 = 本方案用到）</div>
+    d.innerHTML = `<div><i style="background:${POINT_STYLE.venue}"></i>目的地</div><div><i style="background:${POINT_STYLE.car}"></i>开车的成员</div>
+      <div><i style="background:${POINT_STYLE.home}"></i>不开车的成员</div><div><i style="background:${POINT_STYLE.st}"></i>车站</div>
       <div>彩色线 = 接人后的实际路线</div><div>灰色虚线 = 不接人时的直达路线</div>`;
     return d;
   };
   legend.addTo(map);
 }
 
-// ---- 事件 ----
+// ---------- 侧边面板：历史、更多 ----------
+function openDrawer(title, html) {
+  $('#drawerTitle').textContent = title;
+  $('#drawerBody').innerHTML = html;
+  $('#drawer').hidden = false;
+}
+function closeDrawer() { $('#drawer').hidden = true; }
+
+async function openHistory() {
+  openDrawer('历史版本', '<div class="empty">加载中…</div>');
+  try {
+    const { history } = await api(`${API}/history`);
+    $('#drawerBody').innerHTML = `<p class="muted">同一个人 2 分钟内的连续修改合并成一条。恢复会生成一个新版本，之后还能再撤回。</p>` +
+      (history.map((h) => `<div class="hist" data-v="${h.version}">
+        <div class="meta">版本 ${h.version} · ${esc(h.author || '未署名')} · ${esc(fmtTime(h.at))}${h.version === version ? ' · <b>当前</b>' : ''}</div>
+        <div class="notes">${esc((h.notes || []).join('；') || (h.restore ? '恢复' : '修改'))}</div>
+        ${h.version === version ? '' : `<button class="link" data-preview="${h.version}">看看和现在有什么不同</button>`}
+        <div class="slot"></div></div>`).join('') || '<div class="empty">还没有历史版本。</div>');
+  } catch (e) {
+    $('#drawerBody').innerHTML = `<div class="warn">${esc(e.message)}</div>`;
+  }
+}
+
+async function previewVersion(v, slot) {
+  slot.innerHTML = '<div class="diff">加载中…</div>';
+  const { config } = await api(`${API}/history/${v}`);
+  const diff = describeChanges(cfg, config);
+  slot.innerHTML = `<div class="diff">恢复后会：${esc(diff || '和现在一样')}</div>
+    <button class="btn" data-restore="${v}">恢复到这个版本</button>`;
+}
+
+async function restoreVersion(v) {
+  if (!confirm(`恢复到版本 ${v}？现在的内容会成为一个历史版本，之后可以再恢复回来。`)) return;
+  if (dirty) await save(true);
+  const out = await api(`${API}/restore`, { version: v, author: me.name, client_id: me.clientId });
+  cfg = clone(out.config);
+  synced = clone(out.config);
+  version = out.version;
+  dirty = false;
+  renderForm();
+  updateStale();
+  closeDrawer();
+  toast(`已恢复到版本 ${v}`);
+}
+
+function openMenu() {
+  const editLink = mode === 'online' ? `${location.origin}/t/${tripId}#k=${store.get('carpool_trips', []).find((t) => t.id === tripId)?.key || ''}` : '';
+  const page = trip.page;
+  openDrawer('更多', `
+    ${mode === 'online' ? `
+    <div class="kv"><span>行程名称</span><span class="row"><input id="tripName" value="${esc(trip.name)}"><button class="ghost" id="renameBtn">改名</button></span>
+      <span>邀请编辑</span><span class="row"><input readonly value="${esc(editLink)}"><button class="ghost" data-copy="${esc(editLink)}">复制</button></span>
+      <span>方案页</span><span>${page ? `<a href="${esc(page.url)}" target="_blank" rel="noopener">${esc(location.origin + page.url)}</a> <button class="link" data-copy="${esc(location.origin + page.url)}">复制</button><br><span class="muted">${esc(fmtTime(page.at))}发布；重新发布会更新这个链接</span>` : '<span class="muted">还没发布：算出方案后点「发布方案页」</span>'}</span>
+      <span>高德额度</span><span class="muted">${trip.mode === 'own' ? '用你自己的高德 Key' : '用站长的高德 Key'}，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用</span>
+    </div>
+    <p class="muted">编辑链接等于编辑权限，只发给一起规划的人。要给大家看结果，发「方案页」链接就行，不用发编辑链接。</p>` : ''}
+    <h3 style="font-size:13px;margin:14px 0 6px">备份</h3>
+    <div class="row"><button class="btn" id="exportBtn">导出配置（JSON）</button><button class="btn" id="importBtn">导入配置</button></div>
+    <p class="muted">导入会替换现在的配置${mode === 'online' ? '，旧内容留在「历史」里' : ''}。</p>
+    ${mode === 'online' ? `<p><a href="/">← 回首页（新建或切换行程）</a></p>
+    <h3 style="font-size:13px;margin:18px 0 6px;color:var(--danger)">删除行程</h3>
+    <p class="muted">配置、历史版本和方案页都会删掉，所有人的编辑链接和方案页链接都会失效，不能恢复。</p>
+    <button class="btn" id="deleteBtn" style="color:var(--danger)">删除这个行程</button>` : ''}`);
+  $('#exportBtn').onclick = exportConfig;
+  if ($('#deleteBtn')) {
+    $('#deleteBtn').onclick = async () => {
+      const typed = prompt(`确定删除？请输入行程名称「${trip.name}」确认：`);
+      if (typed === null) return;
+      if (typed.trim() !== trip.name) { alert('名称不对，没有删除'); return; }
+      await api(`${API}/delete`, {});
+      store.set('carpool_trips', store.get('carpool_trips', []).filter((t) => t.id !== tripId));
+      dirty = false;
+      location.href = '/';
+    };
+  }
+  $('#importBtn').onclick = () => $('#importFile').click();
+  if ($('#renameBtn')) {
+    $('#renameBtn').onclick = async () => {
+      const { name } = await api(`${API}/rename`, { name: $('#tripName').value });
+      trip.name = name;
+      renderTitle();
+      rememberTrip();
+      toast('已改名');
+    };
+  }
+}
+
+function exportConfig() {
+  const blob = new Blob([JSON.stringify({ name: trip.name || '', config: cfg }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `拼车-${(trip.name || cfg.venue?.name || '行程').replace(/[\\/:*?"<>|]/g, '')}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function importConfig(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    const next = data.config || data;
+    if (!isPlain(next) || !Array.isArray(next.people || []) || !isPlain(next.venue || {})) throw new Error('不是这个工具导出的配置');
+    if (!confirm('用导入的配置替换现在的内容？')) return;
+    cfg = { venue: {}, options: {}, stations: [], people: [], ...next };
+    markDirty();
+    renderForm();
+    closeDrawer();
+    toast('已导入');
+  } catch (e) {
+    alert('导入失败：' + e.message);
+  }
+}
+
+// ---------- 行程与身份 ----------
+function rememberTrip(key) {
+  if (mode !== 'online') return;
+  const list = store.get('carpool_trips', []).filter((t) => t.id !== tripId);
+  const old = store.get('carpool_trips', []).find((t) => t.id === tripId);
+  list.unshift({ id: tripId, key: key || old?.key, name: trip.name || cfg?.venue?.name || '', at: Date.now() });
+  store.set('carpool_trips', list.slice(0, 30));
+}
+
+function renderTitle() {
+  const name = mode === 'online' ? trip.name || '未命名行程' : '拼车出行规划';
+  $('#title').textContent = name;
+  document.title = `${name} · 拼车出行规划`;
+}
+
+function askName() {
+  return new Promise((resolve) => {
+    $('#nameInput').value = me.name;
+    $('#nameBox').hidden = false;
+    $('#nameInput').focus();
+    $('#nameForm').onsubmit = (e) => {
+      e.preventDefault();
+      me.name = $('#nameInput').value.trim().slice(0, 20);
+      if (!me.name) return;
+      store.set('carpool_name', me.name);
+      $('#nameBox').hidden = true;
+      resolve();
+    };
+  });
+}
+
+async function loadConfig(keepFocus) {
+  const data = await api(mode === 'online' ? `${API}/config` : '/api/config');
+  cfg = data.config;
+  synced = clone(cfg);
+  version = data.version ?? null;
+  if (mode === 'online') Object.assign(trip, { name: data.name, mode: data.mode, page: data.page, usage: data.usage });
+  else trip.file = data.file;
+  renderTitle();
+  if (keepFocus) rerenderKeepingFocus(); else renderForm();
+  setStatus();
+}
+
+// ---------- 事件 ----------
 $('#form').addEventListener('input', (e) => {
   const t = e.target;
   if (t.dataset.bind) {
@@ -645,19 +1172,37 @@ $('#form').addEventListener('change', (e) => {
     const p = cfg.people[Number(t.dataset.home)];
     if (t.checked) delete p.pickup_at_home; else p.pickup_at_home = false;
     markDirty();
-  } else if (t.dataset.bind?.endsWith('max_detour_min') && t.dataset.bind.startsWith('options')) {
-    renderForm(); // 刷新各车主的默认值提示
+  } else if (t.dataset.bind && /^(options\.|people\.\d+\.(name|from)$)/.test(t.dataset.bind)) {
+    rerenderKeepingFocus(); // 刷新默认值提示、12306 链接
   }
 });
+
+$('#form').addEventListener('keydown', (e) => {
+  // 地址框里按回车直接搜索
+  if (e.key !== 'Enter' || !e.target.dataset.bind) return;
+  const m = e.target.dataset.bind.match(/^(venue|people\.\d+)\.(address|from)$/);
+  if (m) { e.preventDefault(); search(m[1], m[2]); }
+});
+
+$('#form').addEventListener('focusin', sendFocus);
+$('#form').addEventListener('focusout', sendFocus);
 
 $('#form').addEventListener('click', (e) => {
   const t = e.target.closest('button');
   if (!t) return;
   if (t.dataset.search) search(t.dataset.search, t.dataset.text);
   else if (t.dataset.pick) pick(t.dataset.pick, Number(t.dataset.k));
-  else if (t.dataset.clearloc) { setPath(t.dataset.clearloc + '.location', ''); markDirty(); renderForm(); }
+  else if (t.dataset.clearloc) { setPath(t.dataset.clearloc + '.location', ''); markDirty(); rerenderKeepingFocus(); }
   else if (t.dataset.add) addItem(t.dataset.add);
   else if (t.dataset.del) deleteItem(t.dataset.del);
+  else if (t.dataset.suggest !== undefined) suggestStations();
+});
+
+$('#steps').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-goto]');
+  if (!t) return;
+  if (t.dataset.goto === 'plan') { if (!result || isStale()) runPlan(); else $('.results').scrollIntoView({ behavior: 'smooth' }); }
+  else document.getElementById(t.dataset.goto)?.scrollIntoView({ behavior: 'smooth' });
 });
 
 $('#tabs').addEventListener('click', (e) => {
@@ -665,56 +1210,72 @@ $('#tabs').addEventListener('click', (e) => {
   if (!t) return;
   active = Number(t.dataset.plan);
   $('#tabs').querySelectorAll('.tab').forEach((b, i) => b.classList.toggle('on', i === active));
-  drawMap(false);
+  drawPlan(false);
 });
 
+$('#drawer').addEventListener('click', async (e) => {
+  const t = e.target.closest('button, [data-close-drawer]');
+  if (!t) return;
+  try {
+    if (t.dataset.closeDrawer !== undefined) closeDrawer();
+    else if (t.dataset.preview) await previewVersion(Number(t.dataset.preview), t.closest('.hist').querySelector('.slot'));
+    else if (t.dataset.restore) await restoreVersion(Number(t.dataset.restore));
+    else if (t.dataset.copy !== undefined) { await navigator.clipboard.writeText(t.dataset.copy); toast('已复制'); }
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$('#historyBtn').addEventListener('click', openHistory);
+$('#menuBtn').addEventListener('click', openMenu);
+$('#importFile').addEventListener('change', (e) => { if (e.target.files[0]) importConfig(e.target.files[0]); e.target.value = ''; });
 $('#save').addEventListener('click', () => save().catch((e) => alert('保存失败：' + e.message)));
 $('#plan').addEventListener('click', runPlan);
 $('#sharebtn').addEventListener('click', async () => {
+  if (isStale() && !confirm('配置改过了，当前方案可能过期。仍然发布这个方案？')) return;
   const win = window.open('', '_blank'); // 先开窗口，避免异步之后被拦截
   try {
     const r = await backend.share(active);
     const link = new URL(r.url, location.href).href;
-    if (mode === 'online') navigator.clipboard?.writeText(link).catch(() => {});
-    toast(mode === 'online' ? `方案 ${active + 1} 已发布，链接已复制：${link}` : `方案 ${active + 1} 已生成：${r.file}`);
+    if (mode === 'online') {
+      trip.page = { url: r.url, at: r.at };
+      navigator.clipboard?.writeText(link).catch(() => {});
+      toast(`方案 ${active + 1} 已发布，链接已复制。重新发布会更新同一个链接`, 4000);
+    } else {
+      toast(`方案 ${active + 1} 已生成：${r.file}`);
+    }
     if (win) win.location = link; else location.href = link;
   } catch (e) {
     if (win) win.close();
-    alert('生成失败：' + e.message);
+    alert('发布失败：' + e.message);
   }
 });
 window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); });
 
-async function loadConfig(keepFocus) {
-  try {
-    const data = await api('/api/config');
-    cfg = data.config;
-    synced = clone(cfg);
-    version = data.version ?? null;
-    $('#file').textContent = data.file;
-    if (keepFocus) rerenderKeepingFocus(); else renderForm();
-    if (mode === 'online') connectSync();
-  } catch (e) {
-    $('#form').innerHTML = `<div class="warn" style="margin:16px">读取配置失败：${esc(e.message)}</div>`;
-  }
-}
-
-$('#loginform').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  try {
-    await api('/api/login', { code: $('#code').value });
-    $('#login').hidden = true;
-    $('#loginerr').textContent = '';
-    await loadConfig();
-  } catch (err) {
-    $('#loginerr').textContent = err.message;
-  }
-});
-
+// ---------- 启动 ----------
 (async () => {
   initMap();
+  load12306().then((data) => { rail12306.data = data; if (cfg) rerenderKeepingFocus(); });
   mode = (await api('/api/env').catch(() => ({ mode: 'local' }))).mode;
-  await loadConfig();
+  document.body.classList.toggle('online', mode === 'online');
+  $('#sharebtn').textContent = mode === 'online' ? '发布方案页' : '生成方案页';
+  try {
+    if (mode === 'online') {
+      tripId = location.pathname.match(/^\/t\/([a-z2-9]{10})/)?.[1];
+      if (!tripId) { location.href = '/'; return; }
+      API = `/api/t/${tripId}`;
+      const key = new URLSearchParams(location.hash.slice(1)).get('k') || store.get('carpool_trips', []).find((t) => t.id === tripId)?.key;
+      if (key) await api(`${API}/session`, { key });
+      await loadConfig();
+      rememberTrip(key);
+      if (!me.name) await askName();
+      connectSync();
+    } else {
+      await loadConfig();
+    }
+  } catch (e) {
+    if (e.status !== 401) $('#form').innerHTML = `<div class="warn" style="margin:16px">读取失败：${esc(e.message)}</div>`;
+  }
 })();
 </script>
 </body>

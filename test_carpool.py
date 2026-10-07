@@ -25,8 +25,8 @@ import ui
 from carpool import Place, km_between
 
 VENUE = "118.0,30.0"
-NEAR = "118.0,30.8"   # 场地正北约 89km：离场地最近的站
-WEST = "117.0,30.0"   # 场地正西约 96km：恰好在老王的路上
+NEAR = "118.0,30.8"   # 目的地正北约 89km：离目的地最近的站
+WEST = "117.0,30.0"   # 目的地正西约 96km：恰好在老王的路上
 WANG = "116.0,30.0"   # 老王从西边开过来，直达约 193km
 
 
@@ -50,6 +50,10 @@ class FakeAmap:
         self.calls += 1
         return self.pois
 
+    def stations_around(self, center, radius_km):
+        self.calls += 1
+        return self.pois
+
     def drive_minutes(self, origins, dest):
         self.calls += 1
         return [km_between(o, dest) for o in origins]
@@ -65,8 +69,11 @@ class FakeAmap:
         return [{"name": keywords, "location": self.places.get(keywords, VENUE), "detail": "fake"}]
 
     def drive_path(self, places):
+        # 沿直线插值，像真实路线一样有密集的点
         self.calls += 1
-        return [[p.lat, p.lng] for p in places]
+        pts = [[a.lat + (b.lat - a.lat) * k / 20, a.lng + (b.lng - a.lng) * k / 20]
+               for a, b in zip(places, places[1:]) for k in range(20)]
+        return pts + [[places[-1].lat, places[-1].lng]]
 
 
 def person(name, loc, **kw):
@@ -75,7 +82,7 @@ def person(name, loc, **kw):
 
 def config(people, stations=(("近站", NEAR), ("西站", WEST)), **options):
     return {
-        "venue": {"name": "婚礼场地", "location": VENUE},
+        "venue": {"name": "目的地", "location": VENUE},
         "options": options,
         "stations": [{"name": n, "location": loc} for n, loc in stations],
         "people": people,
@@ -146,7 +153,7 @@ class SolveTest(unittest.TestCase):
         self.assertEqual(plans[0].taxi, {"小陈": "st:近站", "我": "st:近站"})
 
     def test_taxi_station_follows_riders_rail_direction(self):
-        east = "119.0,30.0"  # 与西站到场地距离相同，但在东边
+        east = "119.0,30.0"  # 与西站到目的地距离相同，但在东边
         plans, *_ = best_plan(config(
             [person("我", "121.5,31.2"), person("小陈", "114.0,30.5")],
             stations=(("东站", east), ("西站", WEST)),
@@ -240,7 +247,7 @@ class RenderTest(unittest.TestCase):
     def test_resolves_addresses_through_client(self):
         amap = FakeAmap(places={"杭州": WANG, "武汉": "114.0,34.0", "场地地址": VENUE, "西站": WEST})
         cfg = {
-            "venue": {"name": "婚礼场地", "address": "场地地址"},
+            "venue": {"name": "目的地", "address": "场地地址"},
             "stations": [{"name": "西站"}],
             "people": [{"name": "老王", "from": "杭州", "car_seats": 2}, {"name": "小陈", "from": "武汉"}],
         }
@@ -372,7 +379,7 @@ class BrowserBridgeTest(unittest.TestCase):
         self.assertIn("未知操作", self.call("nope")["error"])
 
     def test_prefetch_fills_cache_then_get_hits_it(self):
-        amap = browser.BrowserAmap("", pause=0)
+        amap = browser.BrowserAmap(pause=0)
         q1 = amap.geocode_query("杭州东站")
         q2 = amap.distance_query([Place("a", 1, 2)], Place("b", 3, 4))
         replies = {"results": [{"status": "1", "geocodes": []}, {"status": "0", "info": "ENGINE_RESPONSE_DATA_ERROR"}]}
@@ -384,19 +391,55 @@ class BrowserBridgeTest(unittest.TestCase):
         self.assertNotIn(f"{q2[0]}?{carpool.urllib.parse.urlencode(q2[1])}", amap.cache)  # 失败的留给逐个请求
 
     def test_prefetch_stops_on_quota(self):
-        amap = browser.BrowserAmap("", pause=0)
+        amap = browser.BrowserAmap(pause=0)
         reply = {"results": [{"status": "0", "info": "USER_DAILY_QUERY_OVER_LIMIT", "infocode": "10044"}]}
         with mock.patch.object(amap, "_post_json", return_value=reply), self.assertRaises(carpool.QuotaError):
             amap.prefetch([amap.geocode_query("某地")])
 
     def test_prefetch_network_failure_is_silent(self):
-        amap = browser.BrowserAmap("", pause=0)
+        amap = browser.BrowserAmap(pause=0)
         with mock.patch.object(amap, "_post_json", side_effect=ConnectionError("断网")):
             amap.prefetch([amap.geocode_query("某地")])
         self.assertEqual(amap.cache, {})
 
     def test_browser_urls_go_through_proxy_without_key(self):
-        self.assertEqual(browser.BrowserAmap("secret")._url("/v3/distance", "a=1"), "/api/amap/v3/distance?a=1")
+        self.assertEqual(browser.BrowserAmap("/api/t/abc")._url("/v3/distance", "a=1"), "/api/t/abc/amap/v3/distance?a=1")
+
+
+class ResolveAndSuggestTest(unittest.TestCase):
+    def test_text_places_are_written_back(self):
+        amap = FakeAmap(places={"场地地址": VENUE, "杭州": WANG, "武汉": "114.0,34.0", "西站": WEST})
+        cfg = {
+            "venue": {"name": "目的地", "address": "场地地址"},
+            "stations": [{"name": "西站"}, {"name": "近站", "location": NEAR}],
+            "people": [{"name": "老王", "from": "杭州", "car_seats": 2}, {"name": "小陈", "from": "武汉"}],
+        }
+        out = service.plan_payload(service.compute(cfg, amap))
+        self.assertEqual({r["path"]: r["location"] for r in out["resolved"]}, {
+            "venue": "118.000000,30.000000", "people.0": "116.000000,30.000000",
+            "people.1": "114.000000,34.000000", "stations.0": "117.000000,30.000000",
+        })  # 近站已经有坐标，不在里面
+
+    def test_suggest_finds_station_on_drivers_way_and_filters_freight(self):
+        pois = [{"name": n, "location": loc, "typecode": "150200"} for n, loc in
+                [("西站", WEST), ("近站", NEAR), ("货运站", "117.5,30.0"), ("远站", "110.0,30.0"), ("西站-进站口", WEST)]]
+        # 近站在目的地以北约 89 公里：目的地周边 50 公里搜不到，靠周围那一圈搜到
+        cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")], stations=())
+        out = service.suggest_stations(cfg, FakeAmap(pois=pois), valid_names={"西", "近", "远"})
+        names = [s["name"] for s in out["stations"]]
+        self.assertEqual(names[:2], ["西站", "近站"])  # 西站在老王路上，绕路最少
+        self.assertNotIn("货运站", names)  # 12306 里没有
+        self.assertEqual(out["stations"][0]["best"], {"driver": "老王", "detour": 0})
+
+    def test_suggest_skips_existing_stations(self):
+        pois = [{"name": "西站", "location": WEST}, {"name": "近站", "location": NEAR}]
+        cfg = config([person("老王", WANG, car_seats=3)], stations=(("西站", WEST),))
+        self.assertEqual([s["name"] for s in service.suggest_stations(cfg, FakeAmap(pois=pois))["stations"]], ["近站"])
+
+    def test_trip_limit_errors_stop_like_quota(self):
+        with self.assertRaises(carpool.QuotaError) as ctx:
+            carpool.check_quota("TRIP_DAILY_LIMIT", "这个行程今天的高德调用已到上限")
+        self.assertIn("行程今天", str(ctx.exception))
 
 
 class TomlTest(unittest.TestCase):
@@ -419,7 +462,7 @@ class UiServerTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.config = Path(self.dir.name) / "trip.toml"
-        self.config.write_text('[venue]\nname = "婚礼场地"\nlocation = "118.0,30.0"\n# 手写注释\n', encoding="utf-8")
+        self.config.write_text('[venue]\nname = "目的地"\nlocation = "118.0,30.0"\n# 手写注释\n', encoding="utf-8")
         self.app = ui.App(self.config, FakeAmap())
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), ui.make_handler(self.app))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -442,9 +485,9 @@ class UiServerTest(unittest.TestCase):
 
     def test_page_and_config(self):
         with urllib.request.urlopen(self.base + "/") as resp:
-            self.assertIn("婚礼拼车规划", resp.read().decode())
+            self.assertIn("拼车出行规划", resp.read().decode())
         status, data = self.call("/api/config")
-        self.assertEqual((status, data["config"]["venue"]["name"]), (200, "婚礼场地"))
+        self.assertEqual((status, data["config"]["venue"]["name"]), (200, "目的地"))
 
     def test_save_backs_up_once(self):
         cfg = config([person("老王", WANG, car_seats=3)])
@@ -461,7 +504,8 @@ class UiServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         best = data["plans"][0]
         self.assertEqual(best["rides"], {"小陈": ["老王", "st:西站"]})
-        self.assertEqual(len(best["routes"][0]["path"]), 3)  # 出发地 → 西站 → 场地
+        path = best["routes"][0]["path"]  # 出发地 → 西站 → 目的地
+        self.assertEqual((path[0], path[20], path[-1]), ([30.0, 116.0], [30.0, 117.0], [30.0, 118.0]))
         self.assertIn("venue", data["points"])
         self.assertIn("## 推荐方案", data["report"])
 
@@ -481,6 +525,16 @@ class UiServerTest(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/share") as resp:
             self.assertIn("出行方案", resp.read().decode())
         self.assertEqual(self.call("/api/share", {"plan": 9})[0], 400)
+
+    def test_suggest_and_station_list(self):
+        # 本地版用真实的 12306 站名表过滤：「西站」不是真站名会被滤掉，「杭州东站」留下
+        pois = [{"name": "西站", "location": WEST}, {"name": "杭州东站", "location": WEST}]
+        self.app.amap = FakeAmap(pois=pois)
+        cfg = config([person("老王", WANG, car_seats=3)], stations=())
+        status, data = self.call("/api/suggest", {"config": cfg})
+        self.assertEqual((status, [s["name"] for s in data["stations"]]), (200, ["杭州东站"]))
+        with urllib.request.urlopen(self.base + "/stations12306.json") as resp:
+            self.assertIn("北京南", json.load(resp)["stations"])
 
     def test_search(self):
         status, data = self.call("/api/search?q=%E6%9D%AD%E5%B7%9E%E4%B8%9C%E7%AB%99")

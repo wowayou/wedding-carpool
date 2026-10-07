@@ -6,13 +6,17 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/p/*"]
+    "run_worker_first": ["/api/*", "/p/*", "/t/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "ROOM", "class_name": "ConfigRoom" }]
+    "bindings": [
+      { "name": "ROOM", "class_name": "ConfigRoom" },
+      { "name": "USAGE", "class_name": "Usage" }
+    ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ConfigRoom"] }
+    { "tag": "v1", "new_sqlite_classes": ["ConfigRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["Usage"] }
   ],
   "kv_namespaces": [
     { "binding": "DATA", "id": "dd28befbdf1c41cebb15a5fd2f5db89f" }

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""婚礼拼车的网页界面：在浏览器里填人、地点和车站，点一下算方案，结果画在高德地图上。
+"""拼车出行规划的本地网页界面：在浏览器里填人、地点和车站，点一下算方案，结果画在高德地图上。
 
     python3 ui.py                 # 编辑 trip.toml，打开 http://127.0.0.1:8765
     python3 ui.py other.toml --port 9000
 
 只监听本机；高德 Key 留在服务端（环境变量 AMAP_KEY 或同目录 .amap_key），不会发到浏览器。
 保存会覆盖配置文件里的手写注释，第一次保存前把原文件备份成 <配置>.bak。
-「生成方案页」把当前方案写成 <配置名>-plan.html（见 share.py），可以直接发给舍友。
+「生成方案页」把当前方案写成 <配置名>-plan.html（见 share.py），可以直接发给同行的人。
 """
 
 from __future__ import annotations
@@ -22,9 +22,11 @@ from pathlib import Path
 
 import carpool
 import share
-from service import compute, plan_payload
+from service import compute, plan_payload, suggest_stations
 
 HERE = Path(__file__).parent
+STATIONS_12306 = HERE / "web" / "stations12306.json"
+VALID_STATIONS = set(json.loads(STATIONS_12306.read_text(encoding="utf-8"))["stations"]) if STATIONS_12306.exists() else None
 SAVE_HEADER = "# 由 ui.py 保存。手写注释不会保留，第一次保存前的原文件在同名 .bak 里\n"
 
 
@@ -97,6 +99,8 @@ def make_handler(app: App):
             url = urllib.parse.urlsplit(self.path)
             if url.path in ("/", "/index.html"):
                 self._send(200, (HERE / "ui.html").read_bytes(), "text/html; charset=utf-8")
+            elif url.path == "/stations12306.json" and STATIONS_12306.exists():
+                self._send(200, STATIONS_12306.read_bytes(), "application/json; charset=utf-8")
             elif url.path == "/share":
                 if app.share_path.exists():
                     self._send(200, app.share_path.read_bytes(), "text/html; charset=utf-8")
@@ -118,6 +122,8 @@ def make_handler(app: App):
                 self._guard(lambda: (app.save(self._body()["config"]), {"saved": app.config.name})[1])
             elif self.path == "/api/plan":
                 self._guard(lambda: app.plan(self._body()["config"]))
+            elif self.path == "/api/suggest":
+                self._guard(lambda: suggest_stations(self._body()["config"], app.amap, VALID_STATIONS))
             elif self.path == "/api/share":
                 self._guard(lambda: app.share(int(self._body().get("plan", 0))))
             else:
@@ -127,7 +133,7 @@ def make_handler(app: App):
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(description="婚礼拼车规划的网页界面")
+    ap = argparse.ArgumentParser(description="拼车出行规划的本地网页界面")
     ap.add_argument("config", nargs="?", default=str(HERE / "trip.toml"), help="配置文件，默认 trip.toml")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--key", default=carpool.default_key(), help="高德 Web 服务 Key")

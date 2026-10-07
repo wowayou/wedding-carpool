@@ -1,7 +1,7 @@
 """网页版的胶水代码：在浏览器的 Pyodide 里运行，由 web/pyworker.js 调用。
 
-高德请求改发到同域的 Worker 代理（/api/amap/...），Key 由 Worker 加上，不进浏览器；
-登录口令对应的 Cookie 会随同域请求自动带上。
+高德请求改发到同域的 Worker 代理（/api/t/<行程>/amap/...），Key 由 Worker 加上，不进浏览器；
+编辑链接换来的 Cookie 会随同域请求自动带上。
 """
 
 from __future__ import annotations
@@ -24,8 +24,12 @@ def _busy_sleep(seconds: float) -> None:
 
 
 class BrowserAmap(carpool.Amap):
+    def __init__(self, base: str = "/api", pause: float = 0.35):
+        super().__init__("", pause=pause)
+        self.base = base  # 行程的接口前缀，如 /api/t/abcdefghij
+
     def _url(self, path: str, query: str) -> str:
-        return f"/api/amap{path}?{query}"
+        return f"{self.base}/amap{path}?{query}"
 
     def _fetch(self, url: str) -> dict:
         from pyodide.http import open_url  # 同步 XHR，只能在 Web Worker 里用
@@ -51,11 +55,11 @@ class BrowserAmap(carpool.Amap):
         for i in range(0, len(todo), BATCH_LIMIT):
             chunk = todo[i:i + BATCH_LIMIT]
             try:
-                results = self._post_json("/api/amap-batch", {"requests": [{"path": p, "query": q} for _, p, q in chunk]})["results"]
+                results = self._post_json(f"{self.base}/amap-batch", {"requests": [{"path": p, "query": q} for _, p, q in chunk]})["results"]
             except (ConnectionError, KeyError, ValueError):
                 return  # 预取只是加速，失败了就逐个请求
             for (key, _, _), data in zip(chunk, results):
-                carpool.check_quota(str(data.get("info")))
+                carpool.check_quota(str(data.get("info")), carpool._text(data.get("error")))
                 if str(data.get("status")) == "1":
                     self.cache[key] = data
 
@@ -73,16 +77,23 @@ class BrowserAmap(carpool.Amap):
 
 
 BATCH_LIMIT = 40  # Worker 免费套餐单次请求最多 50 个子请求
-amap: carpool.Amap = BrowserAmap("", pause=0.35)
+amap: carpool.Amap = BrowserAmap()
 _last: dict | None = None
 
 
 def handle(method: str, args_json: str) -> str:
     """JS 调用入口：方法名 + JSON 参数，返回 JSON 字符串；出错时返回 {"error": ...}。"""
-    global _last
+    global _last, amap
     args = json.loads(args_json)
     try:
-        if method == "plan":
+        if method == "init":  # 打开行程时设定接口前缀
+            amap = BrowserAmap(args["base"])
+            _last = None
+            result = {"ok": True}
+        elif method == "suggest":
+            valid = set(args["valid_names"]) if args.get("valid_names") else None
+            result = service.suggest_stations(args["config"], amap, valid)
+        elif method == "plan":
             _last = service.compute(args["config"], amap)
             result = service.plan_payload(_last)
         elif method == "search":

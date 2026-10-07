@@ -10,3 +10,4 @@ dist/
 .wrangler/
 .dev.vars
 .access_code
+.trip_link

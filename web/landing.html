@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>拼车出行规划</title>
+<meta name="description" content="多人从不同城市去同一个地方：算出谁开车顺路接谁、不开车的人坐到哪个高铁站最合适，生成一页出行方案发给大家。">
+<style>
+  :root { --bg: #faf7f2; --ink: #24201c; --muted: #7a7168; --line: #ebe4da; --accent: #b4442c; --soft: #fbefe9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 18px 48px; }
+  header { padding: 42px 0 18px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .lead { color: #4b443d; margin: 0; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 22px 0; }
+  .steps div { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+  .steps b { display: block; color: var(--accent); }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin: 18px 0; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  label { display: block; margin-bottom: 12px; font-size: 14px; }
+  label > span { display: block; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+  input[type=text], input[type=password] { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+  .modes { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .modes label { display: flex; gap: 6px; align-items: center; margin: 0; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+  .modes label:has(input:checked) { border-color: var(--accent); background: var(--soft); }
+  .btn { display: inline-block; font: inherit; padding: 8px 18px; border-radius: 9px; border: 0; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; }
+  .btn:disabled { opacity: .6; cursor: progress; }
+  .err { color: #b91c1c; min-height: 1.6em; margin: 6px 0 0; font-size: 14px; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .trips a { color: var(--ink); }
+  .trip { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .trip:last-child { border-bottom: 0; }
+  .trip small { color: var(--muted); }
+  .trip button { border: 0; background: none; color: var(--muted); cursor: pointer; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 28px; }
+  footer a { color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>拼车出行规划</h1>
+    <p class="lead">一群人从不同城市去同一个地方（婚礼、聚会、团建……），有人开车、有人坐高铁。这里帮你算出：谁开车顺路接谁、在哪个站接、几点出发；不开车的人坐到哪个站最合适；最后生成一页出行方案发给大家。</p>
+  </header>
+
+  <div class="steps">
+    <div><b>① 填目的地和成员</b>谁开车、从哪出发、几个空座</div>
+    <div><b>② 推荐车站</b>沿车主路线自动找顺路的高铁站</div>
+    <div><b>③ 填车次</b>一键打开填好出发地的 12306 查车次</div>
+    <div><b>④ 算方案、发链接</b>每人一张时间线，地图看绕了哪段路</div>
+  </div>
+
+  <div class="card" id="mine" hidden>
+    <h2>我打开过的行程</h2>
+    <div class="trips" id="trips"></div>
+  </div>
+
+  <form class="card" id="create">
+    <h2>新建行程</h2>
+    <label><span>行程名称</span><input type="text" id="name" maxlength="60" placeholder="比如 小王婚礼 10 月 19 日" required></label>
+    <div class="modes">
+      <label id="codeMode"><input type="radio" name="mode" value="code" checked> 我有创建口令</label>
+      <label><input type="radio" name="mode" value="key"> 用我自己的高德 Key</label>
+    </div>
+    <label id="codeField"><span>创建口令（站长给你的）</span><input type="password" id="code" autocomplete="off"></label>
+    <div id="keyField" hidden>
+      <label><span>高德 Web 服务 Key</span><input type="text" id="amapKey" autocomplete="off" placeholder="32 位字母和数字"></label>
+      <p class="hint">在 <a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只保存在服务器上，不会再显示在网页里；调用次数算在你自己的免费额度里，用完会停下提示。</p>
+    </div>
+    <button class="btn" id="createBtn">新建并开始编辑</button>
+    <div class="err" id="err"></div>
+    <p class="hint">新建后会得到一个<b>编辑链接</b>，发给一起规划的人就能多人同时编辑。只想让大家看结果的话，发之后生成的<b>方案页</b>链接就行。</p>
+  </form>
+
+  <footer>
+    数据保存在 Cloudflare：行程只有拿到编辑链接的人能看到和修改；方案页链接拿到就能看，里面不含不开车的人的家庭位置。
+    开源：<a href="https://github.com/wowayou/wedding-carpool" target="_blank" rel="noopener">github.com/wowayou/wedding-carpool</a>，可以自己部署一份。
+  </footer>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 隐私模式 */ } } };
+
+function renderTrips() {
+  const list = store.get('carpool_trips', []);
+  $('#mine').hidden = !list.length;
+  $('#trips').innerHTML = list.map((t) => `<div class="trip">
+    <a href="/t/${esc(t.id)}#k=${esc(t.key || '')}">${esc(t.name || '未命名行程')}</a>
+    <span><small>${new Date(t.at).toLocaleDateString('zh-CN')}</small> <button data-forget="${esc(t.id)}" title="只是从这台设备的列表里移除，不会删除行程">移除</button></span></div>`).join('');
+}
+
+$('#trips').addEventListener('click', (e) => {
+  const id = e.target.dataset.forget;
+  if (!id) return;
+  store.set('carpool_trips', store.get('carpool_trips', []).filter((t) => t.id !== id));
+  renderTrips();
+});
+
+document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', () => {
+  const byKey = document.querySelector('input[name=mode]:checked').value === 'key';
+  $('#keyField').hidden = !byKey;
+  $('#codeField').hidden = byKey;
+}));
+
+$('#create').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const byKey = document.querySelector('input[name=mode]:checked').value === 'key';
+  const body = { name: $('#name').value.trim(), ...(byKey ? { amapKey: $('#amapKey').value.trim() } : { code: $('#code').value }) };
+  $('#createBtn').disabled = true;
+  $('#err').textContent = '';
+  try {
+    const res = await fetch('/api/trips', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    const list = store.get('carpool_trips', []);
+    list.unshift({ id: data.id, key: data.key, name: body.name, at: Date.now() });
+    store.set('carpool_trips', list.slice(0, 30));
+    location.href = data.url;
+  } catch (err) {
+    $('#err').textContent = err.message;
+  } finally {
+    $('#createBtn').disabled = false;
+  }
+});
+
+renderTrips();
+fetch('/api/env').then((r) => r.json()).then((env) => {
+  if (env.ownerKey) return;
+  // 站点没配站长 Key：只能自带 Key
+  $('#codeMode').hidden = true;
+  document.querySelector('input[value=key]').checked = true;
+  $('#keyField').hidden = false;
+  $('#codeField').hidden = true;
+}).catch(() => {});
+</script>
+</body>
+</html>

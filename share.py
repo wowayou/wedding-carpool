@@ -1,7 +1,7 @@
-"""方案页：把选定的拼车方案排成每个人的时间线，生成可以直接发给舍友的独立 HTML。
+"""方案页：把选定的拼车方案排成每个人的时间线，生成可以直接发给同行的人的独立 HTML。
 
 页面不依赖本地服务：文字内容是服务端写好的，没网也能看；地图（Leaflet + 高德瓦片）有网时才显示。
-不开车的人的家庭位置不放进页面，只放车主出发地、用到的车站和场地。
+不开车的人的家庭位置不放进页面，只放车主出发地、用到的车站和目的地。
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
     taxis = carpool.taxi_schedule(plan, trip, T)
     clock = carpool.clock
     venue = pts["venue"]
-    venue_link = ("场地位置", carpool.marker_url(venue))
+    venue_link = ("目的地位置", carpool.marker_url(venue))
 
     def stop_link(stop: str) -> tuple[str, str]:
         return ("接人点地图", carpool.marker_url(pts[stop]))
@@ -60,7 +60,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
         for s in r.stops:
             who = "、".join(n for n, (d, st) in plan.rides.items() if d == r.driver and st == s)
             steps.append(_step(at(s), f"到 <b>{escape(carpool.stop_label(s, pts))}</b>，接 {escape(who)}", stop_link(s)))
-        steps.append(_step(at("venue"), f"到场地 <b>{escape(venue.name)}</b>", venue_link))
+        steps.append(_step(at("venue"), f"到目的地 <b>{escape(venue.name)}</b>", venue_link))
         summary = (f"全程约 {carpool.fmt_min(r.minutes)}，比直达多绕 {carpool.fmt_min(r.detour)}"
                    if r.stops else f"直达，约 {carpool.fmt_min(r.minutes)}，这次不用接人")
         navs = " ".join(f'<a class="btn" href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>'
@@ -84,7 +84,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
                      _step(board, f"上 <b>{escape(driver)}</b> 的车", stop_link(stop))]
         else:
             steps = [_step(board, f"<b>{escape(driver)}</b> 到家附近接")]
-        steps.append(_step(arrive, "到场地", venue_link))
+        steps.append(_step(arrive, "到目的地", venue_link))
         riders.append(_card("rider", name, f"搭 {driver} 的车", steps, note(name)))
     for stop, group in taxis.items():
         station = pts[stop].name
@@ -97,12 +97,12 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
                      _step(clock(group["ready"]) if group["ready"] is not None else "",
                            f"在 <b>{escape(station)}</b> {meet}打车（约 {carpool.fmt_min(T.get((stop, 'venue'), carpool.INF))}）",
                            ("车站地图", carpool.marker_url(pts[stop]))),
-                     _step(clock(group["arrive"]) if group["arrive"] is not None else "", "到场地", venue_link)]
+                     _step(clock(group["arrive"]) if group["arrive"] is not None else "", "到目的地", venue_link)]
             riders.append(_card("taxi", name, "打车", steps, note(name)))
     for name in plan.stranded:
         riders.append(_card("taxi", name, "待安排", [_step("", "没有可用的候选站，需要单独商量")], note(name)))
 
-    # 地图数据：车主出发地、用到的接人点、场地
+    # 地图数据：车主出发地、用到的接人点、目的地
     used = {s for r in plan.routes for s in r.stops} | set(plan.taxi.values())
     keep = ["venue", *(f"car:{r.driver}" for r in plan.routes), *sorted(used)]
     def line(driver: str, stops: tuple) -> list:
@@ -131,6 +131,7 @@ def render_share(state: dict, index: int, generated: dt.datetime | None = None) 
         venue=escape(venue.name),
         venue_url=escape(venue_link[1]),
         summary=escape(summary),
+        description=escape(f"{_date_label(trip.travel_date)} 出发 · {summary}"),
         drivers="".join(drivers),
         riders="".join(riders) or '<p class="meta">这个方案里没有需要接的人。</p>',
         buffer=round(trip.exit_buffer),
@@ -145,6 +146,9 @@ TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
+<meta name="description" content="{description}">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {{ --bg: #faf7f2; --card: #fff; --ink: #24201c; --muted: #7a7168; --line: #ebe4da; --accent: #b4442c; --drive: #15803d; --ride: #d97706; --taxi: #6b7280; }}
@@ -184,7 +188,7 @@ TEMPLATE = """<!doctype html>
     <div class="eyebrow">{eyebrow}</div>
     <h1>去 {venue}</h1>
     <p class="sum">{summary}</p>
-    <a class="btn ghost" href="{venue_url}" target="_blank" rel="noopener">在高德里看场地</a>
+    <a class="btn ghost" href="{venue_url}" target="_blank" rel="noopener">在高德里看目的地</a>
   </header>
   <div id="map"></div>
   <p class="legend">彩色线：接人后的实际路线；灰色虚线：不接人时的直达路线，两条线分开的那段就是绕的路。</p>

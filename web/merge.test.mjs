@@ -24,3 +24,12 @@ assert.deepEqual(merge3({ a: 1, b: 2 }, { a: 1 }, { a: 1, b: 2 }), { a: 1 });
 // 对方删了一个人、我没改：跟对方
 assert.equal(merge3(base, base, { ...base, people: [base.people[0]] }).people.length, 1);
 });
+
+test('同一格都改了：以我的为准，并记下冲突供提示', () => {
+  const base = { people: [{ name: '老王', car_seats: 3 }], venue: { name: 'A' } };
+  const conflicts = [];
+  const out = merge3(base, { people: [{ name: '老王', car_seats: 2 }], venue: { name: 'A' } },
+    { people: [{ name: '老王', car_seats: 4 }], venue: { name: 'B' } }, '', conflicts);
+  assert.deepEqual(out, { people: [{ name: '老王', car_seats: 2 }], venue: { name: 'B' } });
+  assert.deepEqual(conflicts, [{ path: 'people.0.car_seats', mine: 2, theirs: 4 }]);
+});
