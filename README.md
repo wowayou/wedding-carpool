@@ -158,7 +158,7 @@ npm run deploy                             # 构建 dist/ 并部署
 - 方案页的 HTML 由编辑者的浏览器上传，所以放进 CSP 沙箱（独立的匿名来源）：读不到本站的存储和 Cookie，也不能发请求。
 - 改动状态的请求（`/api/*` 的 POST 和 DELETE、方案页口令表单）校验 Origin，跨站来源会被拒；WebSocket 也校验 Origin；500 错误不返回内部错误原文。
 - 流量统计在服务端做，只记按天汇总的次数（页面访问、爬虫、外站来源的域名和 `?from=` 参数、新建行程、发布和打开方案页的次数），不记 IP 和完整地址，不用 Cookie，保留 35 天；管理接口 `/api/admin/stats` 返回近 30 天。
-- Cloudflare 的 Web Analytics 会自动往页面里注入统计脚本，和「不做统计埋点」不一致，而且会被 CSP 拦下。自己部署时请在 Cloudflare 后台关掉。
+- Cloudflare 的 Web Analytics 会自动往页面里注入统计脚本，和「网页里没有统计脚本」不一致，而且会被 CSP 拦下。自己部署时请在 Cloudflare 后台关掉。
 
 ## 已知限制
 
@@ -173,8 +173,14 @@ npm run deploy                             # 构建 dist/ 并部署
 ## 测试
 
 ```bash
-npm test     # Worker、页面合并逻辑（node --test）和 Python（unittest），都离线运行
+npm test     # Worker、页面合并逻辑、编辑页静态检查（node --test）和 Python（unittest），都离线运行
 ```
+
+编辑页和管理页的交互（弹窗、手机分页签、加载失败等）在浏览器里验证：`npm run build` 后 `npx wrangler dev`，用 Playwright 走一遍。编辑页里所有确认、提示、输入都是页内弹窗（`<dialog>`）和轻提示，没有原生 `alert` / `confirm` / `prompt`；自动化脚本用稳定的选择器：确认 `[data-dialog-ok]`、取消 `[data-dialog-cancel]`、输入框 `[data-dialog-input]`、错误提示 `[data-dialog-error]`。
+
+### 重新生成示例页 `/demo`
+
+示例页是用虚构数据算一次方案、发布，再把生成的方案页改成站点页面：在编辑页导入虚构配置（宏村示例酒店，老王从杭州开车、老张从南京开车，小李同行 2 人从上海、小陈从武汉坐高铁，开返程）、计算方案、发布方案页，把得到的 HTML 存下来，运行 `python3 web/make_demo.py 存下的文件.html` 生成 `web/demo.html`。计算一次会消耗一次高德额度，方案页模板（`share.py`）改了才需要重新生成。
 
 v2（多行程、并发、通用化）的计划和验收标准见 `docs/v2-plan.md`，v3（开源授权、隐私、邀请码、返程和同行人数）见 `docs/v3-plan.md`。
 

@@ -366,7 +366,7 @@ class TrainScheduleTest(unittest.TestCase):
         html = share.render_share(state, 0, expires=dt.date(2027, 4, 5))
         self.assertIn("这一页会在 2027-04-05 前后自动删除", html)
         self.assertNotIn("自动删除", share.render_share(state, 0))  # 本地版没有保留期，不写这行
-        for text in ("window.print()", "@media print", "break-inside: avoid", "favicon.svg"):
+        for text in ("window.print()", "@media print", "break-inside: avoid", "data:image/svg+xml"):
             self.assertIn(text, html)
 
     def test_share_page_hides_home_pickup(self):

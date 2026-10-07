@@ -11,7 +11,7 @@
 
 ## 设计变量
 
-浅色在 `:root`，深色按标准三段写：`@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) {…} }` 和 `:root[data-theme=dark] {…}`，两段内容必须一致（构建时检查）。深色设 `color-scheme: dark`。`data-theme=light` 可以强制浅色，示例方案页目前用它，等方案页模板（`share.py`）支持深色后去掉。
+浅色在 `:root`，深色按标准三段写：`@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) {…} }` 和 `:root[data-theme=dark] {…}`，两段内容必须一致（构建时检查）。深色设 `color-scheme: dark`。`data-theme=light` 可以强制浅色。方案页模板（`share.py`）已经内嵌同一套变量并支持深色，示例方案页不再需要它。方案页在 CSP 沙箱里展示，不能引用 `/design.css`，所以变量内嵌在模板里，`test_carpool.py` 会解析 `design.css` 逐个比对，改颜色时两处要一起改。
 
 | 变量 | 浅色 | 深色 | 用途 |
 |---|---|---|---|
@@ -63,7 +63,7 @@
 - 按钮 `c-btn`：`--primary`、默认（次要）、`--ghost`、`--danger`（`--solid` 为实心）、`--link`；`--sm`、`--lg`；`.is-loading`、`disabled`。
 - 表单：`c-input`、`c-select`、`c-textarea`、`c-check`（`--pill`）、`c-switch`、`c-field`（`__label`、`__hint`、`__error`，出错时加 `has-error`）。
 - 容器：`c-card`（`--drive` `--ride` `--taxi` `--accent` 左边色条）、`c-tag`（`--ok` `--warn` `--danger` `--info` `--accent` `--drive` `--ride` `--taxi`）、`c-alert`（`--info` `--ok` `--warn` `--danger`）、`c-callout`。
-- 浮层：弹窗 `dialog.c-modal`、抽屉 `dialog.c-drawer`（都用原生 `<dialog>`，`showModal()` 自带焦点管理和 Esc 关闭）、轻提示 `c-toasts` 加 `c-toast`。第二期用它们替换编辑页的 `alert` / `confirm` / `prompt`。
+- 浮层：弹窗 `dialog.c-modal`、抽屉 `dialog.c-drawer`（都用原生 `<dialog>`，`showModal()` 自带焦点管理和 Esc 关闭）、轻提示 `c-toasts` 加 `c-toast`。编辑页和管理页用它们替换了 `alert` / `confirm` / `prompt`：各封装成 `confirmDialog`、`promptDialog`、`alertDialog` 和 `toast`，确认按钮 `[data-dialog-ok]`、取消 `[data-dialog-cancel]`、输入框 `[data-dialog-input]`、错误提示 `[data-dialog-error]`；删除、重置、停用这类危险操作用 `c-btn--danger c-btn--solid`。
 - 数据展示：`c-table-wrap` + `c-table`（窄屏横向滚动）、`c-tabs`、`c-steps`（`--row` 为横排）、`c-progress`（用 `--value`）、`c-empty`、`c-skeleton`。
 - 页面结构：站点页头 `c-site-header`（含手机菜单 `c-nav-toggle`、「场景」下拉 `c-nav__group`）、页脚 `c-site-footer`、精简页头 `c-bar`、面包屑 `c-breadcrumb`；`c-container`、`c-prose`、`c-section`、`c-hero`、`c-faq`、`c-figure`。
 - 图标：`web/partials/icons.svg` 是 sprite，24 网格、1.75 描边、`currentColor`。模板里写 `{{icon:car}}`，生成 `<svg class="c-icon"><use href="/icons.svg#i-car"/></svg>`。现有：car、train、taxi、pin、station、copy、external、print、menu、close、check、alert、info、plus、trash、map、edit、arrow-right、chevron-down、heart、users、briefcase、github。不用 emoji 当图标。

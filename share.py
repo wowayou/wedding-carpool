@@ -42,6 +42,12 @@ DARK = {
 }
 
 
+# 页面图标内嵌成 data: 地址（和 web/favicon.svg 同款）：沙箱的内容安全策略只放行 data:、cdnjs 和高德瓦片，不能引用站点上的图片
+ICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23b4442c'/%3E"
+        "%3Cg fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 15C28 15 28 32 42 32'/%3E"
+        "%3Cpath d='M12 49C28 49 28 32 42 32'/%3E%3C/g%3E%3Ccircle cx='47' cy='32' r='9' fill='%23fff'/%3E%3Ccircle cx='47' cy='32' r='3.6' fill='%23b4442c'/%3E%3C/svg%3E")
+
+
 def _css_vars(values: dict[str, str]) -> str:
     return " ".join(f"{k}: {v};" for k, v in values.items())
 
@@ -277,6 +283,7 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
         data=json.dumps(map_data, ensure_ascii=False).replace("</", "<\\/"),
         light=_css_vars(LIGHT),
         dark=_css_vars(DARK),
+        icon=ICON,
     ))
 
 
@@ -290,8 +297,7 @@ TEMPLATE = """<!doctype html>
 <meta name="description" content="@@description@@">
 <meta property="og:title" content="@@title@@">
 <meta property="og:description" content="@@description@@">
-<link rel="icon" type="image/svg+xml" href="https://carpool.eigentime.org/favicon.svg">
-<link rel="apple-touch-icon" href="https://carpool.eigentime.org/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="@@icon@@">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous">
 <style>
   /* 设计变量和 web/design.css 一致（test_carpool.py 会逐个比对）。方案页在沙箱里展示，不能引用站点的样式文件，所以内嵌 */

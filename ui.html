@@ -853,11 +853,11 @@ function setStationValue(i, key, station, value) {
 // ---------- 校验 ----------
 // 格式问题（车次、时间、日期、数字范围、重名）随时在输入框旁提示；缺少的内容（没填名字、出发地等）在点「计算方案」失败后再标出来
 let showRequired = false;
-const isDate = (t) => {
+function isDate(t) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return false;
   const d = new Date(`${t}T00:00:00Z`);
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === t;
-};
+}
 const isClock = (t) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(t);
 // 车次：计算内核（carpool.train_times）认的是文字里的 H:MM 时刻；返程只需要发车时刻，去程最好有发车和到站两个
 function trainProblem(text, back, hasMinutes) {
