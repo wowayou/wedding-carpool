@@ -733,6 +733,34 @@ class RankBasisTest(unittest.TestCase):
         self.assertIn('href="https://carpool.eigentime.org/guide/method"', html)
 
 
+class MethodPageTest(unittest.TestCase):
+    """规则说明页 /guide/method 和代码对得上：默认值表、版本号。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (Path(__file__).parent / "web" / "pages" / "guide-method.html").read_text(encoding="utf-8")
+
+    def test_default_table_matches_code(self):
+        cells = re.findall(r'<td[^>]*data-default="(\w+)"[^>]*>(.*?)</td>', self.html)
+        page = {key: re.search(r"\d+:\d+|\d+", text).group(0) for key, text in cells}
+        self.assertEqual(len(cells), len(page), "默认值表里有重复的键")
+        self.assertEqual(page, {k: str(v) for k, v in carpool.DEFAULTS.items()})
+
+    def test_page_names_the_current_version(self):
+        self.assertIn(f"第 {carpool.RULES_VERSION} 版", self.html)
+
+    def test_defaults_are_what_the_loader_uses(self):
+        trip = carpool.load_trip(config([person("小陈", "114.0,34.0")]), FakeAmap())
+        d = carpool.DEFAULTS
+        self.assertEqual((trip.max_stops, trip.station_cost, trip.exit_buffer, trip.travel_time),
+                         (d["max_stops"], d["station_cost_min"], d["exit_buffer_min"], d["travel_time"]))
+        self.assertEqual(trip.people[0].max_detour, d["max_detour_min"])
+        cfg = config([person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→10:00"})])
+        self.assertEqual(carpool.load_trip(cfg, FakeAmap()).people[0].rail_min, {"西站": 180 + d["station_access_min"]})
+        cfg["return"] = {"enabled": True, "depart_time": "18:00"}
+        self.assertEqual(carpool.load_trip(cfg, FakeAmap()).back.margin, d["security_min"])
+
+
 class TomlTest(unittest.TestCase):
     def test_dump_roundtrips(self):
         cfg = {

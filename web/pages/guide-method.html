@@ -1,0 +1,143 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="zh-CN">
+<head>
+<!-- head -->
+</head>
+<body>
+<!-- include:header -->
+<main id="main" class="c-main">
+<div class="c-container">
+  <!-- crumbs -->
+  <article class="c-prose">
+    <p class="c-eyebrow">使用指南</p>
+    <h1>方案是怎么算出来的：计算规则（第 1 版）</h1>
+    <p class="c-lead">先让尽量多的人搭上顺风车，再让总用时最少。这一页把规则、用到的数据和默认值都写明，方案页的页脚会标出用的是哪一版。</p>
+
+    <h2>一句话</h2>
+    <ul>
+      <li>先看有几个人能搭上顺风车，多的排前面；人数一样，再比总分钟数，少的排前面。</li>
+      <li>没有付费排名，不偏向哪位成员：每个人的一分钟，按同样的口径算。</li>
+      <li>行车时间和车次相同，算出来的结果也相同。完全打平时，保留先算到的那个，和成员的填写顺序有关。</li>
+      <li>在线版在你的浏览器里计算，服务器只转发高德查询、保存你的配置。</li>
+    </ul>
+
+    <h2>用到的数据</h2>
+    <ul>
+      <li><b>高德驾车测距</b>：各点之间的行车分钟数，是查询时的路况。在线版的节点会把同一个查询缓存 20 分钟。</li>
+      <li><b>你填的车次</b>：不开车的人到各个站坐的车，格式如 <code>G1234 08:00→11:30</code>。</li>
+      <li><b>高德公共交通估算</b>：没填车次也没填分钟数时用。高德跨城只给直达火车，不含换乘和刚开通的线路，可能不准。</li>
+      <li><b>默认值</b>：都没有的时候，按下面「默认值」表里的数估算。</li>
+      <li><b>12306 站名表</b>：「推荐车站」时用它去掉不办客运的站（多半是货运站）。排方案时不用。</li>
+    </ul>
+
+    <h2>硬性条件</h2>
+    <p>下面这些不满足的组合，直接不考虑，不参与排序：</p>
+    <ul>
+      <li><b>空座</b>：每辆车搭的人数不超过空座数，按同行人数算。</li>
+      <li><b>绕路上限</b>：每位车主的接人路线，比直达多出的分钟数不超过自己设的上限。返程可以单独设上限，也可以设成返程不开车送人。</li>
+      <li><b>停车次数</b>：每辆车最多停几个接人点。</li>
+      <li><b>同行的一组不拆开</b>：一起走的几个人，要么上同一辆车，要么一起打车。</li>
+      <li><b>返程赶车次</b>：填了回程车次的人，送到站的时刻要在发车前的提前量之前（默认 40 分钟）；打车去站也一样。赶不上任何一个候选站的人，方案里标为需要单独安排。</li>
+      <li><b>只停有人上下车的点</b>：白停一站的组合不考虑。</li>
+      <li><b>乘客能去的站</b>：填了某些站的车次或分钟数的人，只会去这些站；设了「只考虑这些站」的人，也只去这些站。</li>
+    </ul>
+
+    <h2>怎么排序</h2>
+    <p>满足硬性条件的组合，按下面的顺序比：</p>
+    <ol>
+      <li><b>搭车人数</b>，按同行人数算，多的在前。</li>
+      <li><b>总分钟</b>，少的在前。</li>
+      <li><b>停车次数</b>，少的在前。</li>
+      <li>以上都一样时，保留先算到的那个。</li>
+    </ol>
+    <p>总分钟由三项相加，每个方案下面的「排序依据」会把三项写出来：</p>
+    <ul>
+      <li><b>车主多绕</b>：接人路线的全程，减去直达，几位车主合计。</li>
+      <li><b>乘客到上车点</b>：搭上车的乘客，到上车点要多久。
+        <ul>
+          <li>在家附近上车，记 0。</li>
+          <li>去车站上车：填了车次的，记「首个发车时刻到最后到站时刻」的用时，再加去车站和候车的时间（默认 45 分钟）；只填了分钟数的，就用这个分钟数。</li>
+          <li>车次和分钟数都没填的，用高德公共交通估算。一个站都估算不到时，每个站记 60 分钟；只有部分站估算不到时，这些站不考虑。</li>
+          <li>返程同理：用回程车次的用时加上同样的候车时间，没填的每个站记 60 分钟，不用高德公共交通估算。</li>
+        </ul>
+      </li>
+      <li><b>打车组</b>：没搭上车的人，每人（同行的一组算一份）取最省的一个站，用时是到站用时，加上站到目的地的车程。返程是目的地到站的车程。</li>
+    </ul>
+    <p>还有两点要说明：</p>
+    <ul>
+      <li>车主的一分钟和乘客的一分钟同等看待，三项直接相加。</li>
+      <li>同行的一组按一份算，不乘人数。</li>
+    </ul>
+
+    <h2>时刻怎么推</h2>
+    <ul>
+      <li><b>去程</b>：填了车次时，每个接人点的上车时刻，是最晚到站的那位的到站时刻，加出站时间（默认 15 分钟）。车主的出发时间，从这些上车时刻往回推，取最晚的那个；早到的接人点，车主到了就在那里等。</li>
+      <li><b>返程</b>：从你填的散场出发时间往后推，依次算到各个送人点的时刻，要赶在发车前 40 分钟（默认）到站。</li>
+      <li><b>打车费</b>：粗估，按每分钟约 1 公里、每公里 2–3 元，每 4 个人一辆车，以实际为准。</li>
+    </ul>
+
+    <h2>默认值</h2>
+    <p>配置里没写的选项，用下面的值。这些写在配置的 <code>[options]</code> 里，编辑页的「选项」和成员卡片里能改其中一部分。</p>
+    <div class="c-table-wrap">
+      <table class="c-table">
+        <thead><tr><th>选项</th><th>默认值</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>最多绕路</td><td class="c-tnum" data-default="max_detour_min">30 分钟</td><td>每位车主愿意绕多久，可以按人单独设</td></tr>
+          <tr><td>最多停几次</td><td class="c-tnum" data-default="max_stops">2 个</td><td>每辆车最多停几个接人点</td></tr>
+          <tr><td>到站用时的估值</td><td class="c-tnum" data-default="station_cost_min">60 分钟</td><td>查不到乘客到站用时时，每个站按这个数算</td></tr>
+          <tr><td>去车站和候车</td><td class="c-tnum" data-default="station_access_min">45 分钟</td><td>填了车次时，加在车上用时之外</td></tr>
+          <tr><td>下车到上车</td><td class="c-tnum" data-default="exit_buffer_min">15 分钟</td><td>列车到站后出站、走到接人点</td></tr>
+          <tr><td>返程提前到站</td><td class="c-tnum" data-default="security_min">40 分钟</td><td>回程车次发车前多久要到站</td></tr>
+          <tr><td>公共交通估算的出发时刻</td><td class="c-tnum" data-default="travel_time">08:00</td><td>没填车次时，用这个时刻查高德</td></tr>
+          <tr><td>自动找站的范围</td><td class="c-tnum" data-default="discover_radius_km">120 公里</td><td>没写候选站时，目的地周边搜多远（本地版和命令行）</td></tr>
+          <tr><td>自动找站最多留几个</td><td class="c-tnum" data-default="discover_limit">10 个</td><td>同上</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>算得完的代价</h2>
+    <p>车很多的时候，组合数会爆炸。为了能在浏览器里算完，每辆车只保留绕路最少的若干条路线：2 位车主各留约 170 条，3 位约 30 条，4 位约 12 条。所以结果不一定是理论上的最优，只是在这个范围内最好的。</p>
+
+    <h2>目前没考虑的</h2>
+    <p>这些也是以后可能改进的方向：</p>
+    <ul>
+      <li>几位车主之间负担是否均衡。</li>
+      <li>等人的时间不计入总分钟：车主在站里等乘客，乘客在站里等车主。</li>
+      <li>过路费、油费、停车费。</li>
+      <li>出发当时的路况。</li>
+      <li>高铁换乘和刚开通的线路（公共交通估算查不到）。</li>
+      <li>站里停车和出站口的实际条件。</li>
+      <li>同行人数多时，乘客用时要不要按人数加权。</li>
+    </ul>
+    <p>有想法请到 <a href="https://github.com/wowayou/wedding-carpool/issues" target="_blank" rel="noopener">GitHub 提 issue</a>。</p>
+
+    <h2>规则版本</h2>
+    <ul>
+      <li>现在是第 1 版（2026-10）。</li>
+      <li>方案页的页脚会标明用哪一版算的。</li>
+      <li>以后改排序或口径，会升版本，并在<a href="/changelog">更新记录</a>里写明原因。只改界面或文字，不升版本。</li>
+    </ul>
+
+    <h2>源码</h2>
+    <p>全部逻辑都在开源的 <a href="https://github.com/wowayou/wedding-carpool/blob/HEAD/carpool.py" target="_blank" rel="noopener"><code>carpool.py</code></a> 里：<code>solve</code> 枚举组合，<code>evaluate</code> 给每个组合打分，<code>assign</code> 把乘客分到车上。仓库里有固定场景的测试，规则一变测试就会失败，提醒同步更新这一页。</p>
+
+    <h2>相关页面</h2>
+    <ul>
+      <li>选站的道理：<a href="/guide/station">怎么选接人的高铁站</a>。</li>
+      <li>完整步骤：<a href="/guide">使用指南</a>。</li>
+    </ul>
+
+    <!-- notext -->
+    <div class="c-card c-card--soft c-row" style="margin-top: var(--sp-6)">
+      <a class="c-btn c-btn--primary" href="/#create">新建行程{{icon:arrow-right}}</a>
+      <a class="c-btn" href="/guide">回到使用指南</a>
+      <a class="c-btn c-btn--ghost" href="/demo">看示例方案页</a>
+    </div>
+    <!-- /notext -->
+  </article>
+</div>
+</main>
+<!-- include:footer -->
+</body>
+</html>

@@ -34,6 +34,10 @@ test('官方构建：可收录页面没有 noindex，有 sitemap 和 llms，robo
     assert.match(b.read('robots.txt'), /Allow: \//);
     assert.match(b.read('robots.txt'), new RegExp(`Sitemap: ${OFFICIAL}/sitemap.xml`));
     assert.match(b.read('sitemap.xml'), new RegExp(`<loc>${OFFICIAL}/guide</loc>`));
+    assert.match(b.read('sitemap.xml'), new RegExp(`<loc>${OFFICIAL}/guide/method</loc>`));
+    assert.match(b.read('llms.txt'), new RegExp(`${OFFICIAL}/guide/method`));
+    assert.match(b.read('llms-full.txt'), /计算规则（第 1 版）/);
+    assert.match(b.read('guide/method.html'), /href="\/guide\/method"/); // 页脚里的入口
     assert.ok(b.has('llms.txt') && b.has('llms-full.txt'));
   } finally { rmSync(b.dir, { recursive: true, force: true }); }
 });

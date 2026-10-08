@@ -14,6 +14,7 @@
 
 - [使用指南](https://carpool.eigentime.org/guide)：从新建行程到发布方案页的八个步骤。
 - [怎么选接人的高铁站](https://carpool.eigentime.org/guide/station)：车主绕路、乘客用时、出站缓冲，以及为什么最近的站不一定最好。
+- [方案是怎么算出来的](https://carpool.eigentime.org/guide/method)：计算规则（带版本号）：先让尽量多的人搭上车，再让总用时最少；数据来源、硬性条件、排序方式、默认值和目前没考虑的地方。
 - [示例方案页](https://carpool.eigentime.org/demo)：虚构的行程，看方案页长什么样。
 
 ## 适合哪些场合
