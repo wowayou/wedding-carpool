@@ -32,6 +32,7 @@
 
 ## 在线版
 
+- **试玩**：没有邀请码、也没有高德 Key 的人可以打开 `/try`。里面是虚构的行程（宏村示例酒店，老王、老张开车，小李、小陈坐高铁，开返程），数据在 `web/try-trip.json`；能改谁开车、空座、最多绕路、同行人数、车次和分钟数，能删成员和候选站，能开关返程，「恢复示例」回到初始。不能搜索和改地点、加成员和车站、保存、发布方案页。行车时间在浏览器里按直线距离估算（直线公里数 × 1.3 ÷ 75 km/h，再加 10 分钟），路线画成直线，报告里写明是示意；全程不调用高德 Web 服务，也没有 `/api/t/` 请求（地图底图仍是高德瓦片）。构建时把编辑页复制成 `dist/try.html`，页面按路径 `/try` 切到试玩模式。
 - **新建行程**：首页填行程名称，然后二选一：
   - 有**邀请码**（站长发的，也可以直接打开邀请链接 `/?invite=<邀请码>`），用站点的公共高德额度；
   - 填**自己的高德 Web 服务 Key**。Key 只保存在服务端，不会回传到网页，调用次数算在你自己的额度里。
@@ -139,7 +140,7 @@ npm run deploy                             # 构建 dist/ 并部署
 
 - 在 `wrangler.jsonc` 的 `vars` 里设 `TRIP_DAILY_LIMIT`、`OWN_TRIP_DAILY_LIMIT`、`OWNER_DAILY_LIMIT`，调整每日上限；设 `OWNER_MONTHLY_LBS_BUDGET`、`OWNER_MONTHLY_SEARCH_BUDGET`，调整站点公共额度的月预算（默认 140000 和 4500）；
 - 在 `routes` 里绑定自己的域名。`workers.dev` 域名在国内不翻墙常常打不开。
-- `wrangler.jsonc` 的 `assets.run_worker_first` 里的页面路径（`/`、`/demo`、`/guide`、`/for/*` 等）让 Worker 先处理再转给静态文件，用来统计页面访问；`not_found_handling: "404-page"` 让不存在的地址返回 `404.html`。这两处和 `web/worker.js` 配套，不要删。
+- `wrangler.jsonc` 的 `assets.run_worker_first` 里的页面路径（`/`、`/demo`、`/try`、`/guide`、`/for/*` 等）让 Worker 先处理再转给静态文件，用来统计页面访问；`not_found_handling: "404-page"` 让不存在的地址返回 `404.html`。这两处和 `web/worker.js` 配套，不要删。
 - 站点地址和搜索引擎收录（构建时读环境变量，在 `npm run build` / `npm run deploy` 前设好）：
   - `SITE_ORIGIN`：站点的完整地址，如 `https://carpool.example.com`（不带路径）。用在页面的 canonical、Open Graph、结构化数据、`sitemap.xml`、`robots.txt` 和 `llms*.txt` 里。不设就是官方站 `https://carpool.eigentime.org`。
   - `SITE_INDEXABLE`：设成 `1` 才允许搜索引擎收录。**换了域名又没设它的话，默认不收录**：所有页面加 `<meta name="robots" content="noindex">`，`robots.txt` 只有 `Disallow: /`，不生成 `sitemap.xml`、`llms.txt`、`llms-full.txt`。这样自部署的副本不会和官方站抢搜索结果；想让自己的站被收录再设 `SITE_INDEXABLE=1`。

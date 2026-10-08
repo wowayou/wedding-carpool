@@ -211,7 +211,7 @@ function validate(page, html) {
   if (page.index && !html.includes(`rel="canonical" href="${abs(page.path)}"`)) throw new Error(`${where}规范地址要是 ${abs(page.path)}`);
 }
 
-// 站内链接：以 / 开头的 href 和 src 必须指向 dist 里存在的页面或文件（/t/、/p/、/api/ 由 Worker 处理，不查）
+// 站内链接：以 / 开头的 href 和 src 必须指向 dist 里存在的页面或文件（/t/、/p/、/api/ 由 Worker 处理，不查；/try 是 build.mjs 在站点构建之后从编辑页复制的，也不查）
 function checkLinks(dist, pages) {
   const ids = new Map();
   for (const page of pages) ids.set(page.path, [...readFileSync(join(dist, page.out), 'utf8').matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
@@ -220,7 +220,7 @@ function checkLinks(dist, pages) {
     for (const [, url] of html.matchAll(/\b(?:href|src)="(\/[^"]*)"/g)) {
       const [pathAndQuery, hash] = url.split('#');
       const path = pathAndQuery.split('?')[0];
-      if (/^\/(t|p|api)\//.test(path) || path === '//') continue;
+      if (/^\/(t|p|api)\//.test(path) || path === '//' || path === '/try') continue;
       const exists = /\.\w+$/.test(path) ? existsSync(join(dist, path)) : path === '/' || existsSync(join(dist, `${path}.html`));
       if (!exists) throw new Error(`${page.out}：链接 ${url} 指向的页面或文件不存在`);
       const target = pages.find((x) => x.path === path);
