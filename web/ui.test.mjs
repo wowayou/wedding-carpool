@@ -143,7 +143,7 @@ test('试玩模式：只在在线站点的 /try 或 /try.html 启用，加载示
 });
 
 test('试玩模式：隐藏发布按钮，只留「看示例方案页」', () => {
-  assert.match(ui, /body\.try \.local-only, body\.try \.online-only, body\.try #sharebtn \{ display: none; \}/);
+  assert.match(ui, /body\.try \.local-only, body\.try #sharebtn \{ display: none; \}/);
   assert.match(ui, /id="demoLink" href="\/demo"/);
   assert.match(ui, /\$\('#sharebtn'\)\.hidden = mode === 'try' \|\| !result\.plans\.length;/);
 });
@@ -188,4 +188,10 @@ test('试玩模式：不能加成员和车站、不能推荐车站，横幅有�
   assert.match(form, /href="\/#create">新建行程<\/a>/);
   assert.match(code, /else if \(t\.dataset\.tryReset !== undefined\) resetTry\(\);/);
   assert.doesNotMatch(code, /onclick="/); // 没有内联事件处理器
+});
+
+test('按模式显示的类不用 display: revert（a.c-btn 会被退回成行内元素，和按钮对不齐）', () => {
+  assert.doesNotMatch(ui, /-only\s*\{\s*display:\s*revert/);
+  assert.match(ui, /body:not\(\.try\) \.try-only \{ display: none; \}/);
+  assert.match(ui, /body:not\(\.online\) \.online-only \{ display: none; \}/);
 });

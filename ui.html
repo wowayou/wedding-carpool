@@ -17,9 +17,10 @@
   body { font-size: var(--fs-14); line-height: 1.5; overflow: hidden; }
   button { font: inherit; }
   .app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
-  .online-only { display: none; } body.online .online-only { display: revert; } body.online .local-only { display: none; }
+  /* 按模式显示：不在这个模式就隐藏，不用 display: revert（它会把 a.c-btn 退回成行内元素，按钮就对不齐了） */
+  body:not(.online) .online-only { display: none; } body.online .local-only { display: none; }
   /* 试玩模式（/try）：没有保存、历史、发布；只留「看示例方案页」 */
-  .try-only { display: none; } body.try .try-only { display: revert; } body.try .local-only, body.try .online-only, body.try #sharebtn { display: none; }
+  body:not(.try) .try-only { display: none; } body.try .local-only, body.try #sharebtn { display: none; }
   .try-banner { margin: var(--sp-3) var(--sp-4) 0; }
   .try-banner .row { margin-top: var(--sp-2); }
 
