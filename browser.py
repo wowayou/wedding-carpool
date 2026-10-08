@@ -87,6 +87,36 @@ class BrowserAmap(carpool.Amap):
         return json.loads(xhr.responseText)
 
 
+class TryAmap:
+    """试玩模式（/try）用的计算后端：不碰网络，也不继承 BrowserAmap 的请求代码。
+    行车时间按直线距离估算，路线画成直线；查地点、查车站、查公交一律报错（试玩只能改已有的内容）。"""
+
+    is_try = True  # carpool.plan_trip 据此给报告加试玩的说明
+    DETOUR = 1.3  # 直线距离到路程的折算系数
+    SPEED_KMH = 75.0
+    CITY_MIN = 10.0  # 进出城的固定耗时
+    REFUSE = "试玩模式不能查新地点和公交；想用真实地点，请新建行程"
+
+    def __init__(self):
+        self.calls = 0
+        self.cache: dict[str, dict] = {}
+
+    def _refuse(self, *_args, **_kwargs):
+        raise carpool.AmapError(self.REFUSE)
+
+    geocode = search = find_station = stations_near = stations_around = transit = _refuse
+
+    def drive_minutes(self, origins: list[carpool.Place], dest: carpool.Place) -> list[float | None]:
+        out = []
+        for o in origins:
+            km = carpool.km_between(o, dest)
+            out.append(0.0 if km == 0 else km * self.DETOUR / self.SPEED_KMH * 60 + self.CITY_MIN)
+        return out
+
+    def drive_path(self, places: list[carpool.Place], max_points: int = 600) -> list[list[float]]:
+        return [[p.lat, p.lng] for p in places]
+
+
 BATCH_LIMIT = 40  # Worker 免费套餐单次请求最多 50 个子请求
 
 
@@ -111,7 +141,7 @@ def handle(method: str, args_json: str) -> str:
     args = json.loads(args_json)
     try:
         if method == "init":  # 打开行程时设定接口前缀
-            amap = BrowserAmap(args["base"])
+            amap = TryAmap() if args.get("try") else BrowserAmap(args["base"])
             _last = None
             result = {"ok": True}
         elif method == "suggest":
@@ -137,7 +167,7 @@ def handle(method: str, args_json: str) -> str:
     except SystemExit as e:
         result = {"error": str(e.code)}
     except carpool.AmapError as e:
-        result = {"error": f"高德接口报错：{e}"}
+        result = {"error": str(e) if getattr(amap, "is_try", False) else f"高德接口报错：{e}"}
     except Exception as e:  # noqa: BLE001 —— 错误要显示在界面上
         result = {"error": f"{type(e).__name__}: {e}"}
     return json.dumps(result, ensure_ascii=False, default=str)

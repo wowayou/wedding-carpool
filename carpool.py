@@ -348,6 +348,10 @@ class Trip:
     resolved: list[dict] = field(default_factory=list)  # 这次按文字定位到的坐标，写回配置后下次就不用再查
     back: "Leg | None" = None  # 返程插件开启时的返程设置
     back_plans: list = field(default_factory=list)
+    try_mode: bool = False  # 试玩模式（网页版 /try）：行车时间是直线距离估算的，报告不能说来自高德
+
+
+TRY_NOTICE = "试玩：行车时间按直线距离估算，路线画成直线，不是真实路况。"
 
 
 def prefetch(amap, build) -> None:
@@ -1056,6 +1060,8 @@ def rail_section(trip: Trip) -> list[str]:
     if not lines:
         return []
     return ["## 不开车的人到各站要多久", "",
+            "括号里是配置里填的车次（标「手填」的只填了分钟数）。试玩里的车次和时刻都是示意，不是真实车次。"
+            if trip.try_mode else
             "括号里是配置里填的车次（标「手填」的只填了分钟数）；其余按 "
             f"{trip.travel_date} {trip.travel_time} 出发，用高德公共交通最快方案估算。"
             "高德跨城只给直达火车，不含火车换乘和刚开通的线路，估算可能偏差很大，请用 12306 核对。",
@@ -1098,10 +1104,14 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
     L += ["## 地点核对与高德链接", "", "先确认「解析结果」对得上，链接可直接发群里，手机点开会跳到高德。", "",
           "| 地点 | 解析结果 | 链接 |", "|---|---|---|"]
     L += [f"| {p.name} | {p.note} | [打开]({marker_url(p)}) |" for p in pts.values()]
-    L += ["", "## 说明", "",
+    L += ["", "## 说明", ""]
+    L += ["- 试玩模式：地点和车次都是虚构的示意；行车时间按直线距离估算（直线公里数 × 1.3 ÷ 75 公里/小时，再加 10 分钟进出城），不是真实路况。",
+          "- 不开车的人到各站的用时：用配置里填的车次和分钟数；没填的按默认每站 "
+          f"{trip.station_cost:.0f} 分钟算。"] if trip.try_mode else [
           "- 时间来自高德驾车测距，接近查询时的路况，当天可能有出入；车次和到站时间请在 12306 核对。",
           "- 不开车的人到各站的用时：优先用配置里手填的 `rail_min`，否则用高德公共交通估算；"
-          "估算不准或想排除某些站时，给他填 `stations` 或 `rail_min`。",
+          "估算不准或想排除某些站时，给他填 `stations` 或 `rail_min`。"]
+    L += [
           f"- 方案按计算规则第 {RULES_VERSION} 版排序，规则和默认值见 https://carpool.eigentime.org/guide/method",
           "- 高铁站一般要到停车场或网约车上车点接人，约定时说到具体停车场和区域。"]
     return "\n".join(L) + "\n"
@@ -1109,6 +1119,9 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
 
 def plan_trip(cfg: dict, amap) -> tuple[Trip, dict[str, Place], dict, list[Plan]]:
     trip = load_trip(cfg, amap)
+    if getattr(amap, "is_try", False):  # 试玩：不估算公交，报告顶部先说明数据是示意的
+        trip.try_mode, trip.estimate_rail = True, False
+        trip.warnings.insert(0, TRY_NOTICE)
     pts = points_of(trip)
     skip = {f"home:{p.name}" for p in trip.people if not p.drives and not p.pickup_at_home}
     T = build_matrix(amap, pts, skip, both_ways=trip.back is not None)

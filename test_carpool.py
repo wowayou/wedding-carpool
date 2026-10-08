@@ -933,6 +933,78 @@ class UiServerTest(unittest.TestCase):
         self.assertEqual((status, data["results"][0]["name"]), (200, "杭州东站"))
 
 
+class TryAmapTest(unittest.TestCase):
+    """试玩模式：不碰网络，行车时间按直线估算，报告不说数据来自高德。"""
+
+    def setUp(self):
+        self._amap, self._last = browser.amap, browser._last
+        browser.amap, browser._last = browser.TryAmap(), None
+        stops = (("近站", NEAR), ("西站", WEST))
+        self.cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", trains={"西站": "G1 08:00→10:00"})],
+                          stops, estimate_rail=False)
+
+    def tearDown(self):
+        browser.amap, browser._last = self._amap, self._last
+
+    def call(self, method, **args):
+        return json.loads(browser.handle(method, json.dumps(args)))
+
+    def test_no_network(self):
+        boom = AssertionError("试玩不该发网络请求")
+        with (mock.patch("urllib.request.urlopen", side_effect=boom),
+              mock.patch("socket.socket.connect", side_effect=boom),
+              mock.patch.object(browser.BrowserAmap, "_post_json", side_effect=boom),
+              mock.patch.object(carpool.Amap, "_fetch", side_effect=boom)):
+            self.assertEqual(self.call("init", **{"try": True}), {"ok": True})
+            out = self.call("plan", config=self.cfg)
+        self.assertIn("plans", out)
+        self.assertTrue(out["plans"][0]["routes"])
+        self.assertFalse(issubclass(browser.TryAmap, browser.BrowserAmap))
+
+    def test_estimates_by_straight_line(self):
+        amap = browser.TryAmap()
+        a, b = Place("a", 118.0, 30.0), Place("b", 118.0, 31.0)
+        km = km_between(a, b)
+        self.assertAlmostEqual(amap.drive_minutes([a], b)[0], km * 1.3 / 75 * 60 + 10)
+        self.assertEqual(amap.drive_minutes([a, b], b), [amap.drive_minutes([a], b)[0], 0.0])  # 同一个点算 0
+        self.assertEqual(amap.drive_path([a, b, a]), [[30.0, 118.0], [31.0, 118.0], [30.0, 118.0]])
+
+    def test_new_places_are_refused_with_hint(self):
+        amap = browser.TryAmap()
+        for call in (lambda: amap.geocode("某地"), lambda: amap.search("某地"), lambda: amap.find_station("某站"),
+                     lambda: amap.stations_near(Place("a", 1, 2), 10), lambda: amap.stations_around(Place("a", 1, 2), 10),
+                     lambda: amap.transit(Place("a", 1, 2), Place("b", 3, 4), "2027-1-1", "08:00")):
+            with self.assertRaises(carpool.AmapError) as cm:
+                call()
+            self.assertIn("试玩模式不能查新地点和公交", str(cm.exception))
+        self.call("init", **{"try": True})
+        for method, args in (("search", {"q": "某地"}), ("suggest", {"config": self.cfg})):
+            msg = self.call(method, **args)["error"]
+            self.assertIn("请新建行程", msg)
+            self.assertNotIn("高德接口报错", msg)
+        no_loc = {**self.cfg, "people": [{"name": "新人", "from": "某地"}]}
+        self.assertIn("试玩模式不能查新地点", self.call("plan", config=no_loc)["error"])
+
+    def test_report_does_not_claim_amap(self):
+        out = self.call("plan", config=self.cfg)
+        report = out["report"]
+        self.assertIn(carpool.TRY_NOTICE, out["warnings"])
+        self.assertIn(f"> ⚠️ {carpool.TRY_NOTICE}", report)
+        for phrase in ("来自高德", "高德驾车测距", "高德公共交通", "接近查询时的路况"):
+            self.assertNotIn(phrase, report)
+        self.assertIn("试玩模式：地点和车次都是虚构的示意", report)
+        self.assertIn("试玩里的车次和时刻都是示意", report)
+
+    def test_real_trip_report_unchanged(self):
+        browser.amap = FakeAmap()
+        out = self.call("plan", config=self.cfg)
+        self.assertNotIn("试玩", out["report"])
+        self.assertNotIn("试玩", "".join(out["warnings"]))
+        self.assertIn("时间来自高德驾车测距", out["report"])
+        self.assertIn("否则用高德公共交通估算", out["report"])
+        self.assertIn("用高德公共交通最快方案估算", out["report"])
+
+
 class CliTest(unittest.TestCase):
     def test_missing_key_exits(self):
         with self.assertRaises(SystemExit) as ctx:
