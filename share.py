@@ -409,7 +409,7 @@ document.getElementById('printBtn').addEventListener('click', function () { wind
   var colors = { venue: v('--dest'), st: v('--station'), car: v('--drive'), home: v('--ride') };
   var map = L.map('map', { scrollWheelZoom: false });
   L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-    { subdomains: '1234', maxZoom: 18, attribution: '© 高德地图' }).addTo(map);
+    { subdomains: '1234', maxZoom: 18, attribution: '© 高德地图 GS(2025)5996号' }).addTo(map);
   var bounds = [];
   data.routes.forEach(function (r) {
     (r.direct || []).forEach(function (seg) {

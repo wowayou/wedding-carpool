@@ -114,3 +114,15 @@ test('地图提示框里的名字都经过转义（审计 S-13）', () => {
   const raw = [...html.matchAll(/bindTooltip\(`\$\{(?!esc\()[^}]*\}/g)].map((m) => m[0]);
   assert.deepEqual(raw, []);
 });
+
+test('三处地图（编辑页、方案页模板、示例页）的角标一样，带审图号', () => {
+  const attr = (text) => [...text.matchAll(/attribution:\s*'([^']*)'/g)].map((m) => m[1]);
+  const found = [['ui.html', ui], ['share.py', readFileSync('share.py', 'utf8')], ['web/demo.html', readFileSync('web/demo.html', 'utf8')]].map(([name, text]) => [name, attr(text)]);
+  for (const [name, list] of found) assert.equal(list.length, 1, `${name} 里的 attribution 应该正好一处`);
+  assert.deepEqual(new Set(found.map(([, list]) => list[0])), new Set(['© 高德地图 GS(2025)5996号']));
+});
+
+test('成员的出发地下面有提示，目的地没有', () => {
+  assert.match(ui, /placeField\('出发地', base, 'from', [^\n]*'不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。'\)/);
+  assert.match(ui, /placeField\('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准'\)/);
+});

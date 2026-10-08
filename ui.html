@@ -86,6 +86,7 @@
   .place .c-btn { margin-bottom: var(--sp-2); }
   .loc { font-size: var(--fs-12); color: var(--ink-2); margin: -4px 0 var(--sp-2); }
   .loc.missing { color: var(--warn); }
+  .place-hint { font-size: var(--fs-12); color: var(--ink-2); margin: -4px 0 var(--sp-2); }
   .muted { color: var(--ink-2); }
   .cands:empty { display: none; }
   .cands { border: 1px solid var(--line); border-radius: var(--r-ctl); margin: -2px 0 10px; max-height: 240px; overflow: auto; background: var(--surface); }
@@ -633,10 +634,10 @@ function locLine(base) {
     : `<div class="loc missing">还没定位：点「搜索」选一个；不选的话，计算时会按文字自动定位并记下来</div>`;
 }
 
-function placeField(label, base, textKey, placeholder) {
+function placeField(label, base, textKey, placeholder, hint = '') {
   return `<div class="place">${field(label, `${base}.${textKey}`, { placeholder })}
     <button class="c-btn c-btn--sm" data-search="${base}" data-text="${textKey}">搜索</button></div>
-    ${locLine(base)}<div class="cands" data-cands="${base}"></div>`;
+    ${hint ? `<div class="place-hint">${esc(hint)}</div>` : ''}${locLine(base)}<div class="cands" data-cands="${base}"></div>`;
 }
 
 function stationRow(s, i) {
@@ -707,7 +708,7 @@ function personCard(p, i) {
     <div class="row head">${field('名字', base + '.name', { placeholder: '比如 老王' })}
       <label class="toggle"><input type="checkbox" data-car="${i}" ${drives ? 'checked' : ''}> 开车</label>
       <button class="c-btn c-btn--link is-danger" data-del="people.${i}">删除</button></div>
-    ${placeField('出发地', base, 'from', '如 浙江省杭州市西湖区某某小区')}
+    ${placeField('出发地', base, 'from', '如 浙江省杭州市西湖区某某小区', '不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。')}
     ${drives ? driverPart : riderPart}
     <label class="f"><span>备注</span><textarea class="c-textarea" rows="2" data-bind="${base}.note" style="min-height:64px">${esc(p.note)}</textarea></label>
   </div>`;
@@ -1581,7 +1582,7 @@ function initMap() {
   $('#mapFail').hidden = true;
   map = L.map('map').setView([34.5, 112], 5);
   L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
-    subdomains: '1234', maxZoom: 18, attribution: '© 高德地图',
+    subdomains: '1234', maxZoom: 18, attribution: '© 高德地图 GS(2025)5996号',
   }).addTo(map);
   planLayer = L.layerGroup();
   previewLayer = L.layerGroup().addTo(map);
