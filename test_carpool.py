@@ -599,6 +599,83 @@ class PartyTest(unittest.TestCase):
         self.assertIn("不开车的 4 人里，**2 人能搭上顺风车**", report)
 
 
+class RuleSnapshotTest(unittest.TestCase):
+    """规则快照：固定场景下前几个方案的顺序和各项数字。改了排序或成本口径，这里会失败。"""
+
+    HINT = ("计算结果变了。如果是有意修改规则：更新期望值，把 RULES_VERSION 加一，"
+            "并更新 /guide/method 和 CHANGELOG。")
+
+    def check(self, plans, expected):
+        got = [(tuple(s for r in p.routes for s in r.stops), p.rides, p.taxi, p.stranded, p.carried,
+                round(p.detour, 1), round(p.cost, 1)) for p in plans]
+        self.assertEqual(got, expected, self.HINT)
+
+    def test_station_on_the_way(self):
+        plans, *_ = best_plan(config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")]))
+        self.check(plans, [
+            (("st:西站",), {"小陈": ("老王", "st:西站")}, {}, [], 1, 0.0, 205.7),
+            ((), {}, {"小陈": "st:近站"}, [], 0, 0.0, 291.4),
+        ])
+
+    def test_seat_shortage_sends_rest_to_taxi(self):
+        plans, *_ = best_plan(config([
+            person("老王", WANG, car_seats=1), person("小陈", "114.0,34.0"), person("小李", "113.0,35.0")]))
+        self.check(plans, [
+            (("st:西站",), {"小陈": ("老王", "st:西站")}, {"小李": "st:近站"}, [], 1, 0.0, 544.7),
+            ((), {}, {"小陈": "st:近站", "小李": "st:近站"}, [], 0, 0.0, 630.4),
+        ])
+
+    def test_pickup_near_home_costs_detour(self):
+        cfg = config([person("老王", WANG, car_seats=3, max_detour_min=60),
+                      person("小李", "116.5,30.4"), person("小陈", "114.0,34.0")])
+        plans, *_ = best_plan(cfg)
+        self.check(plans, [
+            (("home:小李", "st:西站"), {"小李": ("老王", "home:小李"), "小陈": ("老王", "st:西站")}, {}, [], 2, 34.7, 240.3),
+            (("st:西站",), {"小李": ("老王", "st:西站"), "小陈": ("老王", "st:西站")}, {}, [], 2, 0.0, 257.5),
+            (("home:小李",), {"小李": ("老王", "home:小李")}, {"小陈": "st:近站"}, [], 1, 23.7, 315.1),
+        ])
+
+    def test_detour_over_limit_drops_the_plan(self):
+        plans, *_ = best_plan(config([
+            person("老王", WANG, car_seats=3), person("小李", "116.5,30.4"), person("小陈", "114.0,34.0")]))
+        self.check(plans, [
+            (("st:西站",), {"小李": ("老王", "st:西站"), "小陈": ("老王", "st:西站")}, {}, [], 2, 0.0, 257.5),
+            (("home:小李",), {"小李": ("老王", "home:小李")}, {"小陈": "st:近站"}, [], 1, 23.7, 315.1),
+            ((), {}, {"小李": "st:西站", "小陈": "st:近站"}, [], 0, 0.0, 439.5),
+        ])
+
+    def test_party_counts_by_people(self):
+        plans, *_ = best_plan(config([
+            person("老王", WANG, car_seats=3), person("甲家", "114.0,34.0", party=2), person("乙家", "113.0,35.0", party=2)]))
+        self.check(plans, [
+            (("st:西站",), {"甲家": ("老王", "st:西站")}, {"乙家": "st:近站"}, [], 2, 0.0, 544.7),
+            ((), {}, {"甲家": "st:近站", "乙家": "st:近站"}, [], 0, 0.0, 630.4),
+        ])
+
+    def test_return_trip_catching_train(self):
+        cfg = config([person("老王", WANG, car_seats=3),
+                      person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站20:30→小陈家23:30"})])
+        cfg["return"] = {"enabled": True, "depart_time": "18:00"}
+        trip, *_ = carpool.plan_trip(cfg, FakeAmap())
+        self.check(trip.back_plans, [
+            (("st:西站",), {"小陈": ("老王", "st:西站")}, {}, [], 1, 0.0, 225.0),
+            ((), {}, {"小陈": "st:西站"}, [], 0, 0.0, 321.3),
+        ])
+
+    def test_return_trip_missing_train_is_stranded(self):
+        cfg = config([person("老王", WANG, car_seats=3),
+                      person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站19:30→小陈家22:30"})])
+        cfg["return"] = {"enabled": True, "depart_time": "18:00"}
+        trip, *_ = carpool.plan_trip(cfg, FakeAmap())
+        self.check(trip.back_plans, [((), {}, {}, ["小陈"], 0, 0.0, 0.0)])
+
+    def test_nobody_can_reach_a_station(self):
+        plans, *_ = best_plan(config([
+            person("老王", WANG, car_seats=3),
+            person("小陈", "114.0,34.0", stations=["不存在站"], pickup_at_home=False)]))
+        self.check(plans, [((), {}, {}, ["小陈"], 0, 0.0, 0.0)])
+
+
 class TomlTest(unittest.TestCase):
     def test_dump_roundtrips(self):
         cfg = {
