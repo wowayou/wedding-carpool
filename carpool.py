@@ -37,10 +37,12 @@ STATION_NOISE = ("-", "(", "（", "进站", "出站", "售票", "停车", "候�
 TRANSIENT_ERRORS = (urllib.error.URLError, ConnectionError, TimeoutError, http.client.HTTPException, ValueError)
 RETRIES = 3
 COMBO_LIMIT = 30_000  # 车主路线组合的枚举上限，车多时自动收紧每辆车保留的候选路线
+TAXI_COMBO_LIMIT = 20_000  # 打车选站组合的穷举上限，超过就用贪心
+CAR_SEATS = 4  # 一辆出租最多坐几个人
 INF = math.inf
 
 # 计算规则的版本：只有排序规则或成本口径变了才加一；改界面、改文字不加。说明见 /guide/method
-RULES_VERSION = 1
+RULES_VERSION = 2
 # 配置里没写时的默认值，说明页的默认值表会和它核对（test_carpool.py）
 DEFAULTS = {
     "max_detour_min": 30,       # 车主最多愿意绕多久
@@ -50,6 +52,9 @@ DEFAULTS = {
     "exit_buffer_min": 15,      # 列车到站后出站、走到接人点
     "security_min": 40,         # 返程：发车前多久到站
     "max_wait_min": 30,         # 返程：乘客最多愿意等车主多久
+    "taxi_mode": "save",        # 打车怎么安排：save 尽量拼车省钱，fast 各人走自己最快的站
+    "taxi_pool_extra_min": 30,  # 为了拼车，一个人最多比他自己最快的走法多花几分钟
+    "taxi_wait_min": 30,        # 同一辆出租里的人，到站或离场的时间最多相差几分钟
     "discover_radius_km": 120,  # 自动找站的范围
     "discover_limit": 10,       # 自动找站最多留几个
     "travel_time": "08:00",     # 公交估算的出发时刻
@@ -351,6 +356,9 @@ class Trip:
     back: "Leg | None" = None  # 返程插件开启时的返程设置
     back_plans: list = field(default_factory=list)
     outbound: bool = True  # 是否规划去程；关掉时只算返程（plans 为空）
+    taxi_mode: str = DEFAULTS["taxi_mode"]
+    taxi_extra: float = DEFAULTS["taxi_pool_extra_min"]  # 为了拼车，一个人最多比自己最快的走法多花几分钟
+    taxi_wait: float = DEFAULTS["taxi_wait_min"]         # 同一辆出租里的人，到站或离场的时间最多相差几分钟
     try_mode: bool = False  # 试玩模式（网页版 /try）：行车时间是直线距离估算的，报告不能说来自高德
 
 
@@ -457,6 +465,9 @@ def load_trip(cfg: dict, amap) -> Trip:
         raise SystemExit("去程和返程至少要规划一段：现在去程关了，返程也没开")
     if not outbound and not str((cfg.get("return") or {}).get("date") or "").strip():
         raise SystemExit("只规划返程时，要填返程日期（[return] 的 date，如 2026-10-18）")
+    taxi_mode = str(opt.get("taxi_mode", DEFAULTS["taxi_mode"]))
+    if taxi_mode not in ("save", "fast"):
+        raise SystemExit(f"打车方式 taxi_mode 只能是 \"save\"（尽量拼车省钱）或 \"fast\"（各人走自己最快的站），现在是「{taxi_mode}」")
     resolved: list[dict] = []
     venue, people = load_places(cfg, amap, resolved)
     if not people:
@@ -487,7 +498,9 @@ def load_trip(cfg: dict, amap) -> Trip:
                 estimate_rail=bool(opt.get("estimate_rail", True)),
                 travel_date=f"{y}-{m}-{d}", travel_time=str(opt.get("travel_time", DEFAULTS["travel_time"])),
                 exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back,
-                outbound=outbound)
+                outbound=outbound, taxi_mode=taxi_mode,
+                taxi_extra=float(opt.get("taxi_pool_extra_min", DEFAULTS["taxi_pool_extra_min"])),
+                taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])))
 
 
 def back_leg(cfg: dict) -> "Leg | None":
@@ -624,6 +637,8 @@ class Plan:
     carried: int = 0                    # 搭上车的人数（按同行人数算）
     rider_min: float = 0.0              # 搭上车的乘客到上车点的用时合计
     taxi_min: float = 0.0               # 打车组到站用时，加上站到目的地的车程，合计
+    taxi_cars: int = 0                  # 打车要几辆车
+    taxi_ride: float = 0.0              # 车数 × 车程分钟数，只用来粗估打车费，不参与排序
 
     @property
     def score(self) -> tuple:
@@ -790,8 +805,159 @@ def _assign_groups(routes, seats, riders, opts, usable) -> tuple[dict[str, tuple
     return best["rides"], best["cost"]
 
 
+# ---------- 打车安排 ----------
+
+@dataclass
+class Arrangement:
+    """没搭上车的这群人怎么打车。"""
+    taxi: dict[str, str]    # 人 -> 去哪个站
+    stranded: list[str]     # 一个能去的站都没有（或返程赶不上）的人
+    minutes: float          # 每人（同行的一组算一份）到站用时加站到目的地车程，合计
+    cars: int               # 要几辆车
+    ride: float             # 车数 × 车程分钟数，打车费按它粗估
+
+
+def taxi_slot(p: Person, stop: str, T, leg: Leg, exit_buffer: float) -> tuple[float | None, float, float]:
+    """这个人去这个站打车：(能上车/出发的时刻, 最晚能走的时刻, 站和目的地之间的车程)。
+    去程：到站后加出站时间才能上车，没填车次就不知道时刻（None，当作可以和任何人拼）。
+    返程：从自己的离场时间走，要赶在发车前 N 分钟到站，所以出发不能晚于「发车前提前量 − 车程」。"""
+    ride = leg.station_to_venue(T, stop)
+    if leg.reverse:
+        deadline = back_deadline(p, stop, leg)
+        return leave_of(p, leg), INF if deadline is None else deadline - ride, ride
+    arr = arrival_at(p, stop)
+    return None if arr is None else arr + exit_buffer, INF, ride
+
+
+def pack_cars(members: list[tuple], wait: float) -> list[dict]:
+    """同一个站的人分成几辆车。members = [(名字, 同行人数, 时刻或 None, 最晚出发时刻)]。
+    按时刻排好，时刻相差不超过 wait 的才拼一辆；一辆最多 CAR_SEATS 人，同行的一组不拆开；
+    不知道时刻的人当作可以和任何人拼，先填满已有的车，坐不下再另开一辆。"""
+    cars: list[dict] = []
+    known = sorted((m for m in members if m[2] is not None), key=lambda m: (m[2], m[0]))
+    for name, party, t, latest in known:
+        for car in cars:
+            if car["n"] + party <= CAR_SEATS and t - car["start"] <= wait and t <= car["latest"] and t <= latest:
+                car["names"].append(name)
+                car["n"] += party
+                car["t"], car["latest"] = t, min(car["latest"], latest)
+                break
+        else:
+            cars.append({"names": [name], "n": party, "start": t, "t": t, "latest": latest, "unknown": []})
+    for name, party, t, latest in (m for m in members if m[2] is None):
+        for car in cars:
+            if car["n"] + party <= CAR_SEATS:
+                car["names"].append(name)
+                car["unknown"].append(name)
+                car["n"] += party
+                break
+        else:
+            cars.append({"names": [name], "n": party, "start": None, "t": None, "latest": INF, "unknown": [name]})
+    return cars
+
+
+def taxi_cars(assigned: dict[str, str], people: dict[str, Person], T, leg: Leg, trip: Trip) -> list[dict]:
+    """每辆出租：站点、同车的人、出发（汇合）时刻、车程。报告和方案页用，和选站时的分车规则一样。"""
+    by_stop: dict[str, list[tuple]] = {}
+    for name, stop in assigned.items():
+        t, latest, _ = taxi_slot(people[name], stop, T, leg, trip.exit_buffer)
+        by_stop.setdefault(stop, []).append((name, people[name].party, t, latest))
+    out = []
+    for stop, members in by_stop.items():
+        ride = leg.station_to_venue(T, stop)
+        for car in pack_cars(members, trip.taxi_wait):
+            out.append({"stop": stop, "names": car["names"], "n": car["n"], "time": car["t"], "unknown": car["unknown"], "ride": ride})
+    return out
+
+
+class TaxiPool:
+    """没搭上车的人怎么打车。结果只取决于「哪些人没搭上车」，所以按人群缓存：同一群人整个求解只算一次。
+
+    taxi_mode = "fast"：每人走自己最快的站，只按时间切分来分车、估打车费。
+    taxi_mode = "save"：在每人最多比自己最快的走法多花 taxi_pool_extra_min 分钟的前提下，
+    先让打车费（车数 × 车程）最少，再让总分钟最少。组合数不超过 TAXI_COMBO_LIMIT 时穷举，超过时用贪心。"""
+
+    def __init__(self, trip: Trip, riders: list[Person], opts: dict[str, dict[str, float]], T, leg: Leg):
+        self.trip, self.T, self.leg = trip, T, leg
+        self.order = [p.name for p in riders]
+        self.cands: dict[str, list[tuple]] = {}
+        for p in riders:  # (到站再打车的总分钟, 站, 时刻, 最晚时刻, 车程)，最快的排前面；同样快的按站名
+            found = []
+            for s, c in opts[p.name].items():
+                if not s.startswith("st:"):
+                    continue
+                t, latest, ride = taxi_slot(p, s, T, leg, trip.exit_buffer)
+                if ride != INF and (t is None or t <= latest):
+                    found.append((c + ride, s, t, latest, ride))
+            self.cands[p.name] = sorted(found, key=lambda x: (x[0], x[1]))
+        self.party = {p.name: p.party for p in riders}
+        self.cache: dict[frozenset, Arrangement] = {}
+
+    def arrange(self, left: frozenset) -> Arrangement:
+        got = self.cache.get(left)
+        if got is None:
+            got = self.cache[left] = self._arrange([n for n in self.order if n in left])
+        return got
+
+    def _arrange(self, names: list[str]) -> Arrangement:
+        stranded = [n for n in names if not self.cands[n]]
+        members = [n for n in names if self.cands[n]]
+        pick = {n: self.cands[n][0] for n in members}
+        if self.trip.taxi_mode == "save" and len(members) > 1:
+            pick = self._save(members, pick)
+        cars, ride = self._cars(pick)
+        return Arrangement({n: pick[n][1] for n in members}, stranded, sum(c[0] for c in pick.values()), cars, ride)
+
+    def _cars(self, pick: dict[str, tuple]) -> tuple[int, float]:
+        by_stop: dict[str, list[tuple]] = {}
+        for n, c in pick.items():
+            by_stop.setdefault(c[1], []).append((n, self.party[n], c[2], c[3]))
+        cars, ride = 0, 0.0
+        for members in by_stop.values():
+            k = sum((car["n"] + CAR_SEATS - 1) // CAR_SEATS for car in pack_cars(members, self.trip.taxi_wait))
+            cars += k
+            ride += k * pick[members[0][0]][4]
+        return cars, ride
+
+    def _measure(self, pick: dict[str, tuple]) -> tuple[float, float]:
+        return round(self._cars(pick)[1], 6), round(sum(c[0] for c in pick.values()), 6)
+
+    def _save(self, members: list[str], fast: dict[str, tuple]) -> dict[str, tuple]:
+        extra = self.trip.taxi_extra
+        pools = [[c for c in self.cands[n] if c[0] <= self.cands[n][0][0] + extra] for n in members]
+        if all(len(pool) == 1 for pool in pools):
+            return fast
+        if math.prod(len(pool) for pool in pools) > TAXI_COMBO_LIMIT:
+            return self._greedy(members, pools, fast)
+        best, best_pick = self._measure(fast), fast
+        for combo in itertools.product(*pools):  # 第一个就是各走最快的站，同样好时保持它
+            pick = dict(zip(members, combo))
+            if (m := self._measure(pick)) < best:
+                best, best_pick = m, pick
+        return best_pick
+
+    def _greedy(self, members: list[str], pools: list[list[tuple]], fast: dict[str, tuple]) -> dict[str, tuple]:
+        """组合太多：先各走最快的站，再把人挪到已经有人去的站，只要没超过多花上限、能省钱就挪，直到挪不动。"""
+        cur, best = dict(fast), self._measure(fast)
+        for _ in range(3 * len(members) + 3):
+            used = {c[1] for c in cur.values()}
+            move = None
+            for n, pool in zip(members, pools):
+                for c in pool:
+                    if c[1] == cur[n][1] or c[1] not in used:
+                        continue
+                    m = self._measure({**cur, n: c})
+                    if m < (move[0] if move else best):
+                        move = (m, n, c)
+            if move is None:
+                break
+            best, n, c = move
+            cur[n] = c
+        return cur
+
+
 def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Person],
-             opts: dict[str, dict[str, float]], T, leg: Leg = OUT) -> Plan | None:
+             opts: dict[str, dict[str, float]], T, leg: Leg, pool: TaxiPool) -> Plan | None:
     allowed = None
     if leg.reverse:  # 返程：车主几点走车就几点走；乘客准备好后最多等 max_wait，送到站的时刻要赶得上车次
         leaves = {d.name: leave_of(d, leg) for d in drivers}
@@ -806,27 +972,11 @@ def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Perso
     used = set(rides.values())
     if any((r.driver, s) not in used for r in combo for s in r.stops):
         return None  # 白停一站的方案一定不如少停这一站的方案
-    taxi, stranded, taxi_cost = {}, [], 0.0
-    for p in riders:
-        if p.name in rides:
-            continue
-        cands = []
-        for s, c in opts[p.name].items():
-            if not s.startswith("st:"):
-                continue
-            ride = leg.station_to_venue(T, s)
-            deadline = back_deadline(p, s, leg) if leg.reverse else None
-            if deadline is None or leave_of(p, leg) + ride <= deadline:  # 打车的人从自己的离场时间出发
-                cands.append((c + ride, s))
-        best = min(cands, default=(INF, ""))
-        if best[0] == INF:
-            stranded.append(p.name)
-        else:
-            taxi[p.name] = best[1]
-            taxi_cost += best[0]
+    left = pool.arrange(frozenset(p.name for p in riders if p.name not in rides))  # 没搭上车的人另外安排打车
     detour = sum(r.detour for r in combo)
     carried = sum(p.party for p in riders if p.name in rides)
-    return Plan(list(combo), rides, taxi, stranded, detour, detour + ride_cost + taxi_cost, carried, ride_cost, taxi_cost)
+    return Plan(list(combo), rides, dict(left.taxi), list(left.stranded), detour, detour + ride_cost + left.minutes, carried,
+                ride_cost, left.minutes, left.cars, left.ride)
 
 
 def solve(trip: Trip, T, top: int = 3, leg: Leg = OUT) -> list[Plan]:
@@ -838,8 +988,9 @@ def solve(trip: Trip, T, top: int = 3, leg: Leg = OUT) -> list[Plan]:
     pickups = sorted({s for o in opts.values() for s in o})
     keep = max(1, int(COMBO_LIMIT ** (1 / max(len(drivers), 1))) - 1)
     per_car = [car_routes(d, pickups, T, trip.max_stops, leg)[:keep + 1] for d in drivers]
+    pool = TaxiPool(trip, riders, opts, T, leg)
     plans = [pl for combo in itertools.product(*per_car)
-             if (pl := evaluate(combo, drivers, riders, opts, T, leg))]
+             if (pl := evaluate(combo, drivers, riders, opts, T, leg, pool))]
     return sorted(plans, key=lambda pl: pl.score)[:top]
 
 
@@ -919,21 +1070,6 @@ def route_schedule(route: Route, ready: dict[tuple[str, str], float], T) -> dict
     return {"depart": depart, "times": times}
 
 
-def taxi_schedule(plan: Plan, trip: Trip, T) -> dict[str, dict]:
-    """打车组：站点 → 汇合时刻（最晚到站的人出站后）和到目的地时刻。"""
-    people = {p.name: p for p in trip.people}
-    out: dict[str, dict] = {}
-    for name, stop in plan.taxi.items():
-        group = out.setdefault(stop, {"names": [], "ready": None})
-        group["names"].append(name)
-        arr = arrival_at(people[name], stop)
-        if arr is not None:
-            group["ready"] = max(group["ready"] or -INF, arr + trip.exit_buffer)
-    for stop, group in out.items():
-        group["arrive"] = None if group["ready"] is None else group["ready"] + T.get((stop, "venue"), INF)
-    return out
-
-
 def who(names, trip: Trip) -> str:
     """名字列表，多人同行的标上人数：小陈（3 人）。"""
     party = {p.name: p.party for p in trip.people}
@@ -973,14 +1109,13 @@ def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
             timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(first)} 到第一个接人点；"
         lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{timing}"
                      f"全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。{route_links(r, pts)}")
-    party = {p.name: p.party for p in trip.people}
-    for s, group in taxi_schedule(plan, trip, T).items():
-        ride = T.get((s, "venue"), INF)
-        timing = (f"约 {clock(group['ready'])} 在站汇合，{clock(group['arrive'])} 左右到目的地"
-                  if group["ready"] is not None else f"车程约 {fmt_min(ride)}")
-        fare = taxi_fare(ride, sum(party[n] for n in group["names"]))
-        lines.append(f"- **打车/包车组**：{who(group['names'], trip)} 坐高铁到 **{pts[s].name}**，"
-                     f"一起打车到目的地，{timing}{fare}。[导航]({nav_url(pts[s], pts['venue'])})")
+    for car in taxi_cars(plan.taxi, {p.name: p for p in trip.people}, T, OUT, trip):
+        s, ride, ready = car["stop"], car["ride"], car["time"]
+        timing = (f"约 {clock(ready)} 在站汇合，{clock(ready + ride)} 左右到目的地" if ready is not None else f"车程约 {fmt_min(ride)}")
+        if car["unknown"] and ready is not None:
+            timing += f"（{who(car['unknown'], trip)}没填车次，按同一时间算）"
+        lines.append(f"- **打车/包车组**：{who(car['names'], trip)} 坐高铁到 **{pts[s].name}**，"
+                     f"一起打车到目的地，{timing}{taxi_fare(ride, car['n'])}。[导航]({nav_url(pts[s], pts['venue'])})")
     for name in plan.stranded:
         lines.append(f"- **{name}**：没有可用的候选站，需要单独安排。")
     return lines
@@ -1009,22 +1144,13 @@ def describe_back(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]
             legs.append(f"{stop_label(s, pts)} {clock(times[s])}（送 {who(names, trip)}{catch}{waits}）")
         lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{clock(depart)} 从目的地出发 → {' → '.join(legs)} → "
                      f"约 {clock(times[home])} 到家；全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。")
-    groups: dict[str, list[str]] = {}
-    for name, s in plan.taxi.items():
-        groups.setdefault(s, []).append(name)
-    for s, names in groups.items():
-        ride = T.get(("venue", s), INF)
+    for car in taxi_cars(plan.taxi, people, T, leg, trip):
+        s, names, ride, t = car["stop"], car["names"], car["ride"], car["time"]
         trains = [people[n].back_trains.get(pts[s].name) for n in names]
-        catch = f"，赶 {'、'.join(t for t in trains if t)}" if any(trains) else ""
-        fare = taxi_fare(ride, sum(people[n].party for n in names))
-        leaves = {n: leave_of(people[n], leg) for n in names}
-        if len(set(leaves.values())) == 1:
-            when = f"{clock(leaves[names[0]])} 从目的地一起打车去"
-            arrive = f"约 {clock(leaves[names[0]] + ride)} 到"
-        else:  # 离场时间不同：各自从自己的离场时间出发
-            when = f"各自离场后（{'、'.join(f'{n} {clock(t)}' for n, t in leaves.items())}）从目的地打车去"
-            arrive = f"分别约 {'、'.join(clock(t + ride) for t in leaves.values())} 到"
-        lines.append(f"- **打车组**：{who(names, trip)} {when} **{pts[s].name}**，{arrive}{catch}{fare}。")
+        catch = f"，赶 {'、'.join(x for x in trains if x)}" if any(trains) else ""
+        waits = "".join(f"，{n}等 {fmt_min(t - leave_of(people[n], leg))}" for n in names if t - leave_of(people[n], leg) >= 1)
+        lines.append(f"- **打车组**：{who(names, trip)} {clock(t)} 从目的地一起打车去 **{pts[s].name}**，"
+                     f"约 {clock(t + ride)} 到{catch}{waits}{taxi_fare(ride, car['n'])}。")
     for name in plan.stranded:
         lines.append(f"- **{name}**：按 {clock(leave_of(people[name], leg))} 离场，赶不上任何一个候选站的车次，需要单独安排（提前离场或改签）。")
     return lines
@@ -1044,6 +1170,8 @@ def rank_basis(plan: Plan, best: Plan | None = None) -> list[str]:
     total, *parts = cost_parts(plan)
     terms = " + ".join(f"{n} {v}" for n, v in zip(COST_NAMES, parts))
     lines = [f"排序依据：{plan.carried} 人搭车；总分钟 {total} = {terms}"]
+    if plan.taxi_cars:  # 打车费只用来选站，不参与方案之间的排序
+        lines.append(f"打车：{plan.taxi_cars} 辆，粗估 {round(plan.taxi_ride * 2, -1):.0f}–{round(plan.taxi_ride * 3, -1):.0f} 元")
     if best is None or best is plan:
         return lines
     if plan.carried != best.carried:

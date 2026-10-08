@@ -52,7 +52,7 @@ def _back_payload(trip, T, paths) -> dict | None:
                    "direct_path": paths.get(("back", r.driver, ())) if r.stops else None,
                    "depart": carpool.clock(carpool.leave_of(people[r.driver], trip.back))} for r in plan.routes]
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi, "stranded": plan.stranded,
-                    "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
+                    "detour": round(plan.detour), "carried": plan.carried, "taxi_cars": plan.taxi_cars, "routes": routes})
     return {"depart": carpool.clock(trip.back.depart), "plans": out}
 
 
@@ -70,7 +70,7 @@ def plan_payload(state: dict) -> dict:
                            "direct_path": paths[(r.driver, ())] if r.stops else None,
                            "depart": carpool.clock(sched["depart"]) if sched else None})
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi,
-                    "stranded": plan.stranded, "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
+                    "stranded": plan.stranded, "detour": round(plan.detour), "carried": plan.carried, "taxi_cars": plan.taxi_cars, "routes": routes})
     return {
         "report": carpool.render(trip, pts, T, plans),
         "outbound": trip.outbound,  # false：只规划返程，plans 为空

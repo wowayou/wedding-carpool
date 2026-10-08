@@ -153,16 +153,18 @@ def _return_section(state: dict, index: int) -> str:
         else:
             steps = [_step(depart, board), _step(clock(times[stop]), "顺路送到家附近")]
         cards.append(_card("rider", name, f"搭 {driver} 的车", steps))
-    for name, stop in plan.taxi.items():
-        p = people[name]
-        train = p.back_trains.get(pts[stop].name, "")
-        first = carpool.train_times(train)
-        others = [n for n, s in plan.taxi.items() if s == stop and n != name]
-        ride = T.get(("venue", stop), carpool.INF)
-        steps = [_step(clock(leave(name)), f"{('和 ' + escape('、'.join(others)) + ' ') if others else ''}从目的地打车去 <b>{escape(pts[stop].name)}</b>（约 {carpool.fmt_min(ride)}）",
-                       station_link(stop)),
-                 _step(clock(first[0]) if first else "", f"坐 <b>{escape(train)}</b>" if train else "坐车回家")]
-        cards.append(_card("taxi", name, "打车", steps))
+    for car in carpool.taxi_cars(plan.taxi, people, T, leg, trip):  # 离场时间相近的人拼一辆，车在最晚的那位离场时出发
+        stop, ride = car["stop"], car["ride"]
+        for name in car["names"]:
+            train = people[name].back_trains.get(pts[stop].name, "")
+            first = carpool.train_times(train)
+            others = [n for n in car["names"] if n != name]
+            wait = car["time"] - leave(name)
+            steps = [_step(clock(car["time"]), f"{('和 ' + escape('、'.join(others)) + ' ') if others else ''}从目的地打车去 <b>{escape(pts[stop].name)}</b>（约 {carpool.fmt_min(ride)}）"
+                           + (f"，你 {clock(leave(name))} 离场，等 {carpool.fmt_min(wait)}" if wait >= 1 else ""),
+                           station_link(stop)),
+                     _step(clock(first[0]) if first else "", f"坐 <b>{escape(train)}</b>" if train else "坐车回家")]
+            cards.append(_card("taxi", name, "打车", steps))
     for name in plan.stranded:
         cards.append(_card("taxi", name, "待安排", [_step(clock(leave(name)), "按这个离场时间赶不上候选站的车次，需要单独商量（提前离场或改签）")]))
     return f'<h2>返程 · {clock(leg.depart)} 散场后出发</h2>{"".join(cards)}'
@@ -183,7 +185,7 @@ def _outbound(state: dict, index: int) -> tuple[str, dict]:
     plan: carpool.Plan = state["plans"][index]
     people = {p.name: p for p in trip.people}
     ready = carpool.pickup_ready(plan, trip)
-    taxis = carpool.taxi_schedule(plan, trip, T)
+    taxis = carpool.taxi_cars(plan.taxi, people, T, carpool.OUT, trip)
     clock = carpool.clock
     venue = pts["venue"]
     venue_link = ("目的地位置", carpool.marker_url(venue))
@@ -230,18 +232,20 @@ def _outbound(state: dict, index: int) -> tuple[str, dict]:
             steps = [_step(board, f"<b>{escape(driver)}</b> 到家附近接，具体地点在群里约")]
         steps.append(_step(arrive, "到目的地", venue_link))
         riders.append(_card("rider", name, f"搭 {driver} 的车", steps, note(name)))
-    for stop, group in taxis.items():
+    for car in taxis:  # 到站时间相近的人拼一辆；没填车次的人当作可以和任何人拼
+        stop, ready = car["stop"], car["time"]
         station = pts[stop].name
-        for name in group["names"]:
+        for name in car["names"]:
             train = people[name].trains.get(station, "")
             times = carpool.train_times(train)
-            others = [n for n in group["names"] if n != name]
+            others = [n for n in car["names"] if n != name]
             meet = f"和 {escape('、'.join(others))} 汇合，" if others else ""
+            same_time = "（你没填车次，按同一时间算）" if name in car["unknown"] and ready is not None else ""
             steps = [_step(clock(times[0]) if times else "", f"坐 <b>{escape(train)}</b>" if train else f"坐高铁到 {escape(station)}"),
-                     _step(clock(group["ready"]) if group["ready"] is not None else "",
-                           f"在 <b>{escape(station)}</b> {meet}打车（约 {carpool.fmt_min(T.get((stop, 'venue'), carpool.INF))}）",
+                     _step(clock(ready) if ready is not None else "",
+                           f"在 <b>{escape(station)}</b> {meet}打车（约 {carpool.fmt_min(car['ride'])}）{same_time}",
                            ("车站地图", carpool.marker_url(pts[stop]))),
-                     _step(clock(group["arrive"]) if group["arrive"] is not None else "", "到目的地", venue_link)]
+                     _step(clock(ready + car["ride"]) if ready is not None else "", "到目的地", venue_link)]
             riders.append(_card("taxi", name, "打车", steps, note(name)))
     for name in plan.stranded:
         riders.append(_card("taxi", name, "待安排", [_step("", "没有可用的候选站，需要单独商量")], note(name)))
@@ -273,7 +277,7 @@ def _outbound(state: dict, index: int) -> tuple[str, dict]:
     for pt in points:
         pt["notes"] = detours.get(pt.pop("key"), [])
     map_data = {"points": points, "routes": routes,
-                "taxis": [[[pts[s].lat, pts[s].lng], [venue.lat, venue.lng]] for s in taxis]}
+                "taxis": [[[pts[s].lat, pts[s].lng], [venue.lat, venue.lng]] for s in dict.fromkeys(car["stop"] for car in taxis)]}
     html = ("<h2>开车的</h2>" + "".join(drivers) + "<h2>坐车的</h2>"
             + ("".join(riders) or '<p class="meta">这个方案里没有需要接的人。</p>'))
     return html, map_data

@@ -253,3 +253,22 @@ test('返程：成员卡片有离场时间，返程一节有乘客最多等；�
   assert.equal(run([{ name: '甲', from: 'x', leave_time: '21:30' }], {}).length, 0);
   assert.ok(run([{ name: '甲', from: 'x' }], { max_wait_min: -5 }).some((p) => p.path === 'return.max_wait_min'));
 });
+
+test('选项里有打车方式、拼车多花、时间差；方案卡片显示打车几辆', () => {
+  const code = scripts(ui).at(-1);
+  const form = /function renderForm\(\) \{[\s\S]*?\n\}\n/.exec(code)[0];
+  assert.match(form, /<select class="c-select" data-bind="options\.taxi_mode"/);
+  assert.match(form, /<option value="save"[^>]*>尽量拼车省钱<\/option>/);
+  assert.match(form, /<option value="fast"[^>]*>各人走自己最快的站<\/option>/);
+  assert.match(form, /'options\.taxi_pool_extra_min'/);
+  assert.match(form, /'options\.taxi_wait_min'/);
+  assert.match(code, /打车\$\{st\.cars \? `（\$\{st\.cars\} 辆）` : ''\}/);
+  const stats = pick(['planStats'], { cfg: { people: [{ name: '甲', party: 2 }, { name: '乙' }] } }).planStats({ rides: {}, taxi: { 甲: 'st:a', 乙: 'st:a' }, detour: 0, carried: 0, taxi_cars: 1 });
+  assert.equal(stats.cars, 1);
+  assert.equal(stats.taxi, 3);
+  const run = (O) => pick(['isDate', 'isClock', 'trainProblem', 'collectProblems'], { cfg: { venue: { name: 'v' }, options: O, stations: [], people: [{ name: '甲', from: 'x' }] } }).collectProblems();
+  assert.ok(run({ taxi_mode: 'cheap' }).some((p) => p.path === 'options.taxi_mode'));
+  assert.ok(run({ taxi_wait_min: -1 }).some((p) => p.path === 'options.taxi_wait_min'));
+  assert.equal(run({ taxi_mode: 'fast', taxi_pool_extra_min: 20 }).length, 0);
+  assert.match(code, /options\.taxi_mode' && value === 'save' \? ''/); // 默认值不写进配置
+});

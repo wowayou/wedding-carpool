@@ -566,7 +566,7 @@ function labelOf(path) {
   if (k[0] === 'return') return '返程「' + ({ enabled: '开关', depart_time: '散场后几点出发', security_min: '发车前多久到站', date: '返程日期', max_wait_min: '乘客最多等车主' }[k[1]] || k[1]) + '」';
   if (k[0] === 'options') {
     return '选项「' + ({ max_detour_min: '默认最多绕路', max_stops: '每车最多停几次', travel_date: '出发日期', travel_time: '出发时间',
-      exit_buffer_min: '下车到上车', station_access_min: '去车站+候车', outbound: '规划去程' }[k[1]] || k[1]) + '」';
+      exit_buffer_min: '下车到上车', station_access_min: '去车站+候车', outbound: '规划去程', taxi_mode: '打车方式', taxi_pool_extra_min: '拼车最多多花', taxi_wait_min: '拼一辆的时间差' }[k[1]] || k[1]) + '」';
   }
   if (k[0] === 'stations') return `候选站「${cfg?.stations?.[k[1]]?.name || Number(k[1]) + 1}」`;
   if (k[0] === 'people') {
@@ -807,6 +807,12 @@ function renderForm() {
         ${field('出发时间', 'options.travel_time', { placeholder: '08:00' })}</div>` : ''}
       <div class="row">${outboundOn() ? field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number', min: 0, placeholder: '15' }) : ''}
         ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number', min: 0, placeholder: '45' })}</div>
+      <label class="f"><span>没搭上车的人怎么打车</span><select class="c-select" data-bind="options.taxi_mode" data-type="text">
+        <option value="save"${cfg.options.taxi_mode === 'fast' ? '' : ' selected'}>尽量拼车省钱</option>
+        <option value="fast"${cfg.options.taxi_mode === 'fast' ? ' selected' : ''}>各人走自己最快的站</option></select></label>
+      <div class="row">${field('拼车最多多花（分钟）', 'options.taxi_pool_extra_min', { type: 'number', min: 0, placeholder: '30' })}
+        ${field('拼一辆的时间差（分钟）', 'options.taxi_wait_min', { type: 'number', min: 0, placeholder: '30' })}</div>
+      <div class="muted">省钱：每个人最多比自己最快的走法多花这么久，让打车费最少。时间差：到站（返程是离场）相差不超过这么久的，才拼一辆，一辆最多 4 人。</div>
     </section>`;
   markPeers();
   refreshDerived();
@@ -1019,6 +1025,9 @@ function collectProblems() {
   nonneg('options.max_stops', '每车最多停几次', O.max_stops);
   if (outOn) nonneg('options.exit_buffer_min', '下车到上车', O.exit_buffer_min);
   nonneg('options.station_access_min', '去车站+候车', O.station_access_min);
+  nonneg('options.taxi_pool_extra_min', '拼车最多多花的分钟数', O.taxi_pool_extra_min);
+  nonneg('options.taxi_wait_min', '拼一辆的时间差', O.taxi_wait_min);
+  if (O.taxi_mode !== undefined && !['save', 'fast'].includes(O.taxi_mode)) add('options.taxi_mode', '打车方式只能选「尽量拼车省钱」或「各人走自己最快的站」');
   if (R.enabled) {
     if (!R.depart_time) add('return.depart_time', '开了返程，还没填散场后几点出发（如 20:30）', { required: true });
     else if (!isClock(String(R.depart_time))) add('return.depart_time', '散场后出发的时间要写成 时:分（24 小时制），如 20:30');
@@ -1475,7 +1484,8 @@ let activeBack = 0, viewLeg = 'out'; // 返程方案的选择；地图正在画�
 
 function planStats(p) {
   const party = Object.fromEntries((cfg.people || []).map((x) => [x.name, Number(x.party) || 1]));
-  return { carried: p.carried ?? Object.keys(p.rides).length, detour: p.detour, taxi: Object.keys(p.taxi || {}).reduce((n, name) => n + (party[name] || 1), 0) };
+  return { carried: p.carried ?? Object.keys(p.rides).length, detour: p.detour, cars: p.taxi_cars || 0,
+    taxi: Object.keys(p.taxi || {}).reduce((n, name) => n + (party[name] || 1), 0) };
 }
 
 // 每个方案一张卡片，关键数字放在前面：搭车人数、车主多绕、打车人数；去程和返程分开
@@ -1488,7 +1498,7 @@ function renderTabs() {
       <span class="stats">
         <span class="stat"><b>${st.carried}<small>人</small></b><span>搭车</span></span>
         <span class="stat"><b>${fmtMin(st.detour)}</b><span>车主多绕</span></span>
-        <span class="stat"><b>${st.taxi}<small>人</small></b><span>打车</span></span>
+        <span class="stat"><b>${st.taxi}<small>人</small></b><span>打车${st.cars ? `（${st.cars} 辆）` : ''}</span></span>
       </span></button>`;
   };
   const group = (title, html) => `<div class="tabs-leg"><h3>${title}</h3><div class="tabs-grid">${html}</div></div>`;
@@ -1918,7 +1928,8 @@ $('#form').addEventListener('input', (e) => {
   const t = e.target;
   if (t.dataset.bind) {
     const emptySeats = /^people\.\d+\.car_seats$/.test(t.dataset.bind); // 空座清空不能删掉这个字段，否则这位车主会变成「不开车」
-    setPath(t.dataset.bind, t.dataset.type === 'number' ? (t.value === '' ? (emptySeats ? 0 : '') : Number(t.value)) : t.value);
+    const value = t.dataset.type === 'number' ? (t.value === '' ? (emptySeats ? 0 : '') : Number(t.value)) : t.value;
+    setPath(t.dataset.bind, t.dataset.bind === 'options.taxi_mode' && value === 'save' ? '' : value); // 默认的「省钱」不写进配置
     markDirty();
   } else if (t.dataset.stationName !== undefined) {
     cfg.stations[Number(t.dataset.stationName)].name = t.value.trim();
