@@ -15,13 +15,19 @@ travel_time = "08:00"       # 出发时间
 station_cost_min = 60     # 既没填 rail_min、也没估算出公共交通方案时，把「坐车去站」估成多少分钟
 discover_radius_km = 120  # 没写候选站时，自动搜索场地周围多大范围内的火车站
 discover_limit = 10       # 自动搜索最多保留几个站
+# outbound = false          # 不规划去程，只规划返程（这时必须开返程，并填 [return] 的 date）
+# 没搭上车的人另外打车：
+# taxi_mode = "save"        # "save" 默认，尽量拼车省钱；"fast" 各人走自己最快的站
+# taxi_pool_extra_min = 30  # 为了拼车，一个人最多比他自己最快的走法多花几分钟
+# taxi_wait_min = 30        # 同一辆出租里的人，到站（返程是离场）的时间最多相差几分钟
 
 # 返程（可选）：散场后车主从场地出发，顺路送人去车站或回家
 # [return]
 # enabled = true
 # depart_time = "20:30"   # 车主几点从场地出发
 # security_min = 40       # 高铁发车前多久到站
-# date = "2026-10-18"     # 返程日期，只用来拼 12306 查询链接；不写就用 travel_date
+# max_wait_min = 30       # 乘客准备好后，最多愿意等车主多久（车主比乘客早走就带不了）
+# date = "2026-10-18"     # 返程日期，用来拼 12306 查询链接；不写就用 travel_date。只规划返程（outbound = false）时必填
 
 # 候选高铁站：不写就自动搜索；第一次跑完看报告里的「候选站对比」，再把合适的站写进来
 # [[stations]]
@@ -44,6 +50,7 @@ car_seats = 2
 max_detour_min = 20       # 单独覆盖默认绕路上限
 # return_drives = false     # 返程不顺路送人（默认送）
 # return_max_detour_min = 15  # 返程最多绕多久，不写就和去程一样
+# leave_time = "21:30"        # 开了返程时：这个人几点离开场地，不写就是 [return] 的 depart_time；车主的离场时间就是车的出发时间
 
 [[people]]
 name = "我"

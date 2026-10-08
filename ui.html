@@ -136,6 +136,7 @@
 
   /* 方案结果：每个方案一张卡片，关键数字放在前面 */
   .tabs-leg { margin-bottom: var(--sp-3); }
+  .tabs-note { font-size: var(--fs-13); margin: 0 0 var(--sp-2); }
   .tabs-leg > h3 { font-size: var(--fs-13); color: var(--ink-2); margin: 0 0 6px; letter-spacing: .04em; }
   .tabs-grid { display: grid; gap: var(--sp-2); grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
   .tab { text-align: left; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 10px 12px; cursor: pointer; transition: border-color var(--ease), background var(--ease); }
@@ -562,10 +563,10 @@ function labelOf(path) {
   if (path === 'people') return '成员列表';
   if (path === 'stations') return '候选站列表';
   if (k[0] === 'venue') return { name: '目的地名称', address: '目的地地址', location: '目的地坐标' }[k[1]] || '目的地';
-  if (k[0] === 'return') return '返程「' + ({ enabled: '开关', depart_time: '散场后几点出发', security_min: '发车前多久到站', date: '返程日期' }[k[1]] || k[1]) + '」';
+  if (k[0] === 'return') return '返程「' + ({ enabled: '开关', depart_time: '散场后几点出发', security_min: '发车前多久到站', date: '返程日期', max_wait_min: '乘客最多等车主' }[k[1]] || k[1]) + '」';
   if (k[0] === 'options') {
     return '选项「' + ({ max_detour_min: '默认最多绕路', max_stops: '每车最多停几次', travel_date: '出发日期', travel_time: '出发时间',
-      exit_buffer_min: '下车到上车', station_access_min: '去车站+候车' }[k[1]] || k[1]) + '」';
+      exit_buffer_min: '下车到上车', station_access_min: '去车站+候车', outbound: '规划去程', taxi_mode: '打车方式', taxi_pool_extra_min: '拼车最多多花', taxi_wait_min: '拼一辆的时间差' }[k[1]] || k[1]) + '」';
   }
   if (k[0] === 'stations') return `候选站「${cfg?.stations?.[k[1]]?.name || Number(k[1]) + 1}」`;
   if (k[0] === 'people') {
@@ -575,7 +576,7 @@ function labelOf(path) {
     if (k[2] === 'return_trains') return `${who}从${k.slice(3).join('.')}返程的车次`;
     return `${who}的` + ({ name: '名字', from: '出发地', car_seats: '空座', max_detour_min: '最多绕路', note: '备注',
       pickup_at_home: '到家附近接', location: '坐标', city: '城市', party: '同行人数', return_drives: '返程是否开车',
-      return_max_detour_min: '返程最多绕路' }[k[2]] || k[2] || '信息');
+      return_max_detour_min: '返程最多绕路', leave_time: '离场时间' }[k[2]] || k[2] || '信息');
   }
   return path;
 }
@@ -682,7 +683,7 @@ function link12306(p, stationName, back = false) {
   const data = rail12306.data;
   const station = stationName.replace(/站$/, '');
   const city = originCity(p, data);
-  const date = (back ? cfg.return?.date : '') || cfg.options?.travel_date || bjDate(Date.now() + 864e5);
+  const date = (back ? cfg.return?.date : '') || (outboundOn() ? cfg.options?.travel_date : '') || bjDate(Date.now() + 864e5);
   const home = city ? `${encodeURIComponent(city)},${data.cities[city]}` : '';
   const st = data.stations[station] ? `${encodeURIComponent(station)},${data.stations[station]}` : '';
   const [fs, ts] = back ? [st, home] : [home, st]; // 返程反过来：从车站回家
@@ -696,8 +697,11 @@ function personCard(p, i) {
   const rails = p.rail_min || {};
   const trains = p.trains || {};
   const backOn = Boolean(cfg.return?.enabled);
+  const outOn = outboundOn();
   const backTrains = p.return_trains || {};
   const backPart = !backOn ? '' : `<div class="rail">
+      <div class="row">${field('离场时间（返程，可选）', base + '.leave_time', { placeholder: leavePlaceholder() })}</div>
+      <div class="sub">离场时间不填就是散场时间。车主走得比你早，就带不了你；你最多等车主 ${esc(cfg.return?.max_wait_min ?? 30)} 分钟。</div>
       <div class="sub">返程：各站坐哪趟车回去，如 <code>G1234 20:30→23:50</code>（第一个时刻是发车时间，用来判断赶不赶得上）。都留空表示返程不坐火车或另行安排。</div>
       ${stations.map((s) => `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
           <input class="c-input span2" data-backtrain="${i}" data-station="${esc(s.name)}" value="${esc(backTrains[s.name])}" placeholder="车次 发车→到达" aria-label="${esc(s.name)}返程车次">
@@ -706,17 +710,18 @@ function personCard(p, i) {
   const riderPart = `
     <div class="row">${field('同行人数（含自己）', base + '.party', { type: 'number', placeholder: '1', min: 1 })}
       <label class="toggle" style="flex:2"><input type="checkbox" data-home="${i}" ${p.pickup_at_home === false ? '' : 'checked'}> 顺路的话，车主可以到家附近接</label></div>
-    <div class="rail">
+    ${!outOn ? '' : `<div class="rail">
       <div class="sub">能去的站填 12306 查到的车次和时刻，如 <code>G1234 08:00→11:30</code>，会自动算用时并对齐接人时间；也可以只填分钟数（含去车站和候车）。都留空表示不去这个站。点「查」打开已填好出发地和日期的 12306。</div>
       ${stations.length ? stations.map((s) => `<div class="rail-row"><span title="${esc(s.name)}">${esc(s.name)}</span>
           <input class="c-input" data-train="${i}" data-station="${esc(s.name)}" value="${esc(trains[s.name])}" placeholder="车次 发车→到站" aria-label="${esc(s.name)}车次">
           <input class="c-input" type="number" min="0" inputmode="numeric" data-rail="${i}" data-station="${esc(s.name)}" value="${esc(rails[s.name])}" placeholder="分钟" aria-label="${esc(s.name)}用时（分钟）">
           ${railLinkHtml(p, i, s.name || '', false)}</div>`).join('') : '<div class="muted">先在上面添加候选车站</div>'}
       ${Object.keys(rails).length || Object.keys(trains).length ? '' : `<div class="hint">${mode === 'try' ? `全部留空时，每个站都按默认的 ${DEFAULTS_STATION_COST} 分钟算。` : '全部留空时改用高德估算：不含火车换乘，可能很不准。'}</div>`}
-    </div>${backPart}`;
+    </div>`}${backPart}`;
   const driverPart = `<div class="row">${field('空座', base + '.car_seats', { type: 'number', min: 1 })}
     ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', min: 0, placeholder: detourHint() })}</div>
-    ${!backOn ? '' : `<div class="row"><label class="toggle" style="flex:2"><input type="checkbox" data-backdrive="${i}" ${p.return_drives === false ? '' : 'checked'}> 返程也开车，可以顺路送人</label>
+    ${!backOn ? '' : `<div class="row">${field('离场时间（返程，车几点出发）', base + '.leave_time', { placeholder: leavePlaceholder() })}</div>
+    <div class="row"><label class="toggle" style="flex:2"><input type="checkbox" data-backdrive="${i}" ${p.return_drives === false ? '' : 'checked'}> 返程也开车，可以顺路送人</label>
       ${p.return_drives === false ? '' : field('返程最多绕路', base + '.return_max_detour_min', { type: 'number', min: 0, placeholder: '同去程' })}</div>`}`;
   return `<div class="card c-card ${drives ? 'c-card--drive driver' : 'c-card--ride rider'}">
     <div class="row head">${field('名字', base + '.name', { placeholder: '比如 老王' })}
@@ -734,7 +739,9 @@ function railLinkHtml(p, i, stationName, back) {
 }
 const DEFAULTS_STATION_COST = 60; // 与 carpool.DEFAULTS['station_cost_min'] 一致：查不到用时的站按这个估
 const detourHint = () => '默认 ' + (cfg.options?.max_detour_min ?? 30);
-const returnDatePlaceholder = () => cfg.options?.travel_date || 'YYYY-MM-DD';
+const leavePlaceholder = () => cfg.return?.depart_time || '同散场时间';
+const outboundOn = () => cfg.options?.outbound !== false; // 规划去程（默认是）
+const returnDatePlaceholder = () => (outboundOn() && cfg.options?.travel_date) || 'YYYY-MM-DD';
 
 // 字段失焦（change）时只更新由字段值推出来的内容，不重建表单。
 // 重建会换掉所有输入框：用户按下鼠标时正好触发失焦，那一下点击会落在被换掉的元素上，点击和输入就丢了。
@@ -760,6 +767,7 @@ function refreshDerived() {
   }
   const back = document.querySelector('#form [data-bind="return.date"]');
   if (back) back.placeholder = returnDatePlaceholder();
+  for (const el of document.querySelectorAll('#form [data-bind$=".leave_time"]')) el.placeholder = leavePlaceholder();
   renderSteps();
   decorateProblems();
 }
@@ -769,6 +777,11 @@ function renderForm() {
   const left = trip.expiresAt ? Math.ceil((trip.expiresAt - Date.now()) / 864e5) : Infinity;
   const isTry = mode === 'try';
   $('#form').innerHTML = `${isTry ? `<div class="c-alert c-alert--info try-banner" id="tryBanner"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>试玩模式：虚构的行程，行车时间按直线距离估算，不保存。想规划你们自己的出行，请新建行程（需要邀请码或高德 Key）。<div class="row"><button class="c-btn c-btn--sm" data-try-reset>恢复示例</button><a class="c-btn c-btn--sm c-btn--primary" href="/#create">新建行程</a></div></div></div>` : ''}${left <= 7 ? `<div class="c-alert c-alert--warn" style="margin:var(--sp-3) var(--sp-4) 0"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>这个行程 ${left <= 0 ? '即将' : `${left} 天后`}自动删除（出行日期过后 60 天、或 180 天没人编辑）。需要留存的话，在「更多」里导出配置。</div></div>` : ''}
+    <section id="sec-legs"><h2>规划哪几段</h2>
+      <div><label class="toggle"><input type="checkbox" data-outbound-toggle ${outboundOn() ? 'checked' : ''}> 去程：从各自的出发地到目的地</label></div>
+      <div><label class="toggle"><input type="checkbox" data-return-toggle ${cfg.return?.enabled ? 'checked' : ''}> 返程：散场后谁顺路把谁送到车站</label></div>
+      <div class="muted">两段分开算，至少选一段。算完后去程方案和返程方案可以分别选，同一个人去程和返程坐谁的车互不影响。</div>
+    </section>
     <section id="sec-venue"><h2>① 目的地</h2>
       ${field('名称', 'venue.name', { placeholder: '如 某某大酒店' })}
       ${placeField('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准')}
@@ -780,20 +793,26 @@ function renderForm() {
       ${cfg.stations.map(stationRow).join('') || (isTry ? '<div class="muted">候选站都删光了：点上面的「恢复示例」。</div>' : '<div class="muted">点「推荐车站」：在目的地周边、车主出发地附近和沿途找火车站，按顺路程度排好。</div>')}
       ${isTry ? '<div class="muted">试玩里的候选站是固定的，只能删除。自己的行程可以用「推荐车站」，在目的地周边和车主沿途找火车站，按顺路程度排好。</div>' : ''}
     </section>
-    <section id="sec-return"><h2>④ 返程（可选）</h2>
-      <label class="toggle"><input type="checkbox" data-return-toggle ${cfg.return?.enabled ? 'checked' : ''}> 也规划返程：散场后谁顺路把谁送到车站</label>
-      ${cfg.return?.enabled ? `<div class="row">${field('散场后几点出发', 'return.depart_time', { placeholder: '20:30' })}
+    ${cfg.return?.enabled ? `<section id="sec-return"><h2>④ 返程</h2>
+      <div class="row">${field('散场后几点出发', 'return.depart_time', { placeholder: '20:30' })}
         ${field('发车前多久到站（分钟）', 'return.security_min', { type: 'number', min: 0, placeholder: '40' })}
-        ${field('返程日期', 'return.date', { placeholder: returnDatePlaceholder() })}</div>
-      <div class="muted">不开车的人在自己的卡片里填返程车次；车主可以设返程是否开车送人。</div>` : ''}
-    </section>
+        ${field(outboundOn() ? '返程日期' : '返程日期（必填）', 'return.date', { placeholder: returnDatePlaceholder() })}</div>
+      <div class="row">${field('乘客最多等车主（分钟）', 'return.max_wait_min', { type: 'number', min: 0, placeholder: '30' })}</div>
+      <div class="muted">每个人可以在自己的卡片里填离场时间，不填就是上面的散场时间：车主几点走，车就几点走；乘客准备好后最多等这么久，车主走得比乘客早就带不了。不开车的人填返程车次；车主可以设返程是否开车送人。</div>
+    </section>` : ''}
     <section id="sec-options"><h2>选项</h2>
       <div class="row">${field('默认最多绕路（分钟）', 'options.max_detour_min', { type: 'number', min: 0, placeholder: '30' })}
         ${field('每车最多停几次', 'options.max_stops', { type: 'number', min: 0, placeholder: '2' })}</div>
-      <div class="row">${field('出发日期', 'options.travel_date', { placeholder: 'YYYY-MM-DD' })}
-        ${field('出发时间', 'options.travel_time', { placeholder: '08:00' })}</div>
-      <div class="row">${field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number', min: 0, placeholder: '15' })}
+      ${outboundOn() ? `<div class="row">${field('出发日期', 'options.travel_date', { placeholder: 'YYYY-MM-DD' })}
+        ${field('出发时间', 'options.travel_time', { placeholder: '08:00' })}</div>` : ''}
+      <div class="row">${outboundOn() ? field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number', min: 0, placeholder: '15' }) : ''}
         ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number', min: 0, placeholder: '45' })}</div>
+      <label class="f"><span>没搭上车的人怎么打车</span><select class="c-select" data-bind="options.taxi_mode" data-type="text">
+        <option value="save"${cfg.options.taxi_mode === 'fast' ? '' : ' selected'}>尽量拼车省钱</option>
+        <option value="fast"${cfg.options.taxi_mode === 'fast' ? ' selected' : ''}>各人走自己最快的站</option></select></label>
+      <div class="row">${field('拼车最多多花（分钟）', 'options.taxi_pool_extra_min', { type: 'number', min: 0, placeholder: '30' })}
+        ${field('拼一辆的时间差（分钟）', 'options.taxi_wait_min', { type: 'number', min: 0, placeholder: '30' })}</div>
+      <div class="muted">省钱：每个人最多比自己最快的走法多花这么久，让打车费最少。时间差：到站（返程是离场）相差不超过这么久的，才拼一辆，一辆最多 4 人。</div>
     </section>`;
   markPeers();
   refreshDerived();
@@ -824,7 +843,7 @@ function renderSteps() {
     ['sec-venue', '目的地', venueOk ? '已定位' : cfg.venue.address || cfg.venue.name ? '待定位' : '未填', venueOk],
     ['sec-people', '成员', people.length ? `${people.length} 人${unlocated ? `，${unlocated} 人未定位` : ''}` : '未填', people.length > 0],
     ['sec-stations', '车站', cfg.stations.length ? `${cfg.stations.length} 个` : '未选', cfg.stations.length > 0],
-    ['sec-people', '车次', riders.length ? `${withTrains}/${riders.length}` : '无需', riders.length === withTrains],
+    ...(outboundOn() ? [['sec-people', '车次', riders.length ? `${withTrains}/${riders.length}` : '无需', riders.length === withTrains]] : []),
     ...(cfg.return?.enabled ? [['sec-return', '返程', cfg.return.depart_time
       ? `${riders.filter((p) => Object.keys(p.return_trains || {}).length).length}/${riders.length} 人填了车次` : '没填出发时间',
       Boolean(cfg.return.depart_time) && riders.every((p) => Object.keys(p.return_trains || {}).length)]] : []),
@@ -971,6 +990,8 @@ function collectProblems() {
   const nonneg = (path, label, v) => { if (v !== undefined && v !== '' && !(Number(v) >= 0)) add(path, `${label}不能小于 0`); };
   if (!V.location && !V.address && !V.name) add('venue.address', '还没填目的地', { required: true });
   if (!cfg.people.length) add('sec-people', '至少要有一位成员', { required: true });
+  const outOn = O.outbound !== false;
+  if (!outOn && !R.enabled) add('sec-legs', '去程和返程至少要规划一段：勾上返程，或把去程勾回来');
   const firstSeen = new Map();
   cfg.people.forEach((p, i) => {
     const n = (p.name || '').trim(), base = `people.${i}`, who = n || `第 ${i + 1} 位成员`;
@@ -985,11 +1006,12 @@ function collectProblems() {
     nonneg(`${base}.max_detour_min`, `${who}的最多绕路`, p.max_detour_min);
     nonneg(`${base}.return_max_detour_min`, `${who}的返程最多绕路`, p.return_max_detour_min);
     for (const [st, mins] of Object.entries(p.rail_min || {})) nonneg(`${base}.rail_min.${st}`, `${who}到${st}的用时`, mins);
-    for (const [st, text] of Object.entries(p.trains || {})) {
+    for (const [st, text] of outOn ? Object.entries(p.trains || {}) : []) {
       const bad = trainProblem(text, false, (p.rail_min || {})[st] !== undefined);
       if (bad) add(`${base}.trains.${st}`, `${who}到${st}的车次：${bad.msg}`, { soft: bad.soft });
     }
     if (R.enabled) {
+      if (p.leave_time !== undefined && !isClock(String(p.leave_time))) add(`${base}.leave_time`, `${who}的离场时间要写成 时:分（24 小时制），如 21:30`);
       for (const [st, text] of Object.entries(p.return_trains || {})) {
         const bad = trainProblem(text, true, true);
         if (bad) add(`${base}.return_trains.${st}`, `${who}从${st}返程的车次：${bad.msg}`);
@@ -997,17 +1019,22 @@ function collectProblems() {
     }
   });
   cfg.stations.forEach((s, i) => { if (!(s.name || '').trim()) add(`stations.${i}.name`, `第 ${i + 1} 个候选站没填站名`, { required: true }); });
-  if (O.travel_date !== undefined && !isDate(String(O.travel_date))) add('options.travel_date', '出发日期要写成 年-月-日，如 2026-10-17');
-  if (O.travel_time !== undefined && !isClock(String(O.travel_time))) add('options.travel_time', '出发时间要写成 时:分（24 小时制），如 08:00');
+  if (outOn && O.travel_date !== undefined && !isDate(String(O.travel_date))) add('options.travel_date', '出发日期要写成 年-月-日，如 2026-10-17');
+  if (outOn && O.travel_time !== undefined && !isClock(String(O.travel_time))) add('options.travel_time', '出发时间要写成 时:分（24 小时制），如 08:00');
   nonneg('options.max_detour_min', '默认最多绕路', O.max_detour_min);
   nonneg('options.max_stops', '每车最多停几次', O.max_stops);
-  nonneg('options.exit_buffer_min', '下车到上车', O.exit_buffer_min);
+  if (outOn) nonneg('options.exit_buffer_min', '下车到上车', O.exit_buffer_min);
   nonneg('options.station_access_min', '去车站+候车', O.station_access_min);
+  nonneg('options.taxi_pool_extra_min', '拼车最多多花的分钟数', O.taxi_pool_extra_min);
+  nonneg('options.taxi_wait_min', '拼一辆的时间差', O.taxi_wait_min);
+  if (O.taxi_mode !== undefined && !['save', 'fast'].includes(O.taxi_mode)) add('options.taxi_mode', '打车方式只能选「尽量拼车省钱」或「各人走自己最快的站」');
   if (R.enabled) {
     if (!R.depart_time) add('return.depart_time', '开了返程，还没填散场后几点出发（如 20:30）', { required: true });
     else if (!isClock(String(R.depart_time))) add('return.depart_time', '散场后出发的时间要写成 时:分（24 小时制），如 20:30');
     nonneg('return.security_min', '发车前到站的分钟数', R.security_min);
+    nonneg('return.max_wait_min', '乘客最多等车主的分钟数', R.max_wait_min);
     if (R.date !== undefined && !isDate(String(R.date))) add('return.date', '返程日期要写成 年-月-日，如 2026-10-18');
+    else if (!outOn && R.date === undefined) add('return.date', '只规划返程时要填返程日期（如 2026-10-18）', { required: true });
   }
   return out;
 }
@@ -1387,10 +1414,10 @@ async function suggestStations() {
     stopProgress();
     applyResolved(out.resolved);
     if (!out.stations.length) { $('#drawerBody').innerHTML = '<div class="c-empty">附近没找到火车站，可以手动添加。</div>'; return; }
-    $('#drawerBody').innerHTML = `<p class="muted">按「车主最少绕路」排序；绕路超过各自上限的车主不会去接。勾选后加入候选站。</p>
+    $('#drawerBody').innerHTML = `<p class="muted">按「车主最少绕路」排序；绕路超过各自上限的车主不会${outboundOn() ? '去接' : '去送'}。${outboundOn() ? '' : '只规划返程，顺路是指「目的地 → 站 → 车主家」。'}勾选后加入候选站。</p>
       ${out.stations.map((s, i) => `<label class="sug"><input type="checkbox" data-sug="${i}" ${i < 6 ? 'checked' : ''}>
         <span><b>${esc(s.name)}</b> <span class="muted">${esc(s.where)}</span>
-        <small>到目的地约 ${s.to_venue == null ? '?' : fmtMin(s.to_venue)}${s.best ? `；${esc(s.best.driver)} 顺路去接多绕 ${fmtMin(s.best.detour)}` : ''}</small></span></label>`).join('')}
+        <small>${outboundOn() ? '到目的地约' : '从目的地到站约'} ${s.to_venue == null ? '?' : fmtMin(s.to_venue)}${s.best ? `；${esc(s.best.driver)} 顺路${outboundOn() ? '去接' : '送'}多绕 ${fmtMin(s.best.detour)}` : ''}</small></span></label>`).join('')}
       <button class="c-btn c-btn--primary" id="addSug" style="margin-top:12px">加入选中的车站</button>`;
     $('#addSug').onclick = () => {
       const picked = [...document.querySelectorAll('[data-sug]:checked')].map((el) => out.stations[Number(el.dataset.sug)]);
@@ -1457,7 +1484,8 @@ let activeBack = 0, viewLeg = 'out'; // 返程方案的选择；地图正在画�
 
 function planStats(p) {
   const party = Object.fromEntries((cfg.people || []).map((x) => [x.name, Number(x.party) || 1]));
-  return { carried: p.carried ?? Object.keys(p.rides).length, detour: p.detour, taxi: Object.keys(p.taxi || {}).reduce((n, name) => n + (party[name] || 1), 0) };
+  return { carried: p.carried ?? Object.keys(p.rides).length, detour: p.detour, cars: p.taxi_cars || 0,
+    taxi: Object.keys(p.taxi || {}).reduce((n, name) => n + (party[name] || 1), 0) };
 }
 
 // 每个方案一张卡片，关键数字放在前面：搭车人数、车主多绕、打车人数；去程和返程分开
@@ -1470,18 +1498,21 @@ function renderTabs() {
       <span class="stats">
         <span class="stat"><b>${st.carried}<small>人</small></b><span>搭车</span></span>
         <span class="stat"><b>${fmtMin(st.detour)}</b><span>车主多绕</span></span>
-        <span class="stat"><b>${st.taxi}<small>人</small></b><span>打车</span></span>
+        <span class="stat"><b>${st.taxi}<small>人</small></b><span>打车${st.cars ? `（${st.cars} 辆）` : ''}</span></span>
       </span></button>`;
   };
   const group = (title, html) => `<div class="tabs-leg"><h3>${title}</h3><div class="tabs-grid">${html}</div></div>`;
-  $('#tabs').innerHTML = group('去程', result.plans.map((p, i) => tab(p, i, 'out', viewLeg === 'out' && i === active)).join(''))
+  const outOn = result.outbound !== false;
+  $('#tabs').innerHTML = (outOn && result.back ? '<p class="muted tabs-note">去程和返程可以分别选，方案页按你选的组合生成。</p>' : '')
+    + (outOn ? group('去程', result.plans.map((p, i) => tab(p, i, 'out', viewLeg === 'out' && i === active)).join('')) : '')
     + (result.back ? group('返程', result.back.plans.map((p, i) => tab(p, i, 'back', viewLeg === 'back' && i === activeBack)).join('')) : '');
 }
 
 function renderResults(fit) {
   if (!result.back) { viewLeg = 'out'; activeBack = 0; }
+  if (result.outbound === false) { viewLeg = 'back'; active = 0; }
   renderTabs();
-  $('#sharebtn').hidden = mode === 'try' || !result.plans.length;
+  $('#sharebtn').hidden = mode === 'try' || !(result.plans.length || result.back?.plans.length);
   $('#warn').innerHTML = result.warnings.map((w) => `<div class="c-alert c-alert--warn"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>${esc(w)}</div></div>`).join('');
   $('#report').innerHTML = hasMarked ? marked.parse(result.report) : `<pre class="plain">${esc(result.report)}</pre>`; // marked 没加载出来：退化成纯文本
   $('#report').querySelectorAll('a').forEach((a) => { a.target = '_blank'; a.rel = 'noopener'; });
@@ -1897,7 +1928,8 @@ $('#form').addEventListener('input', (e) => {
   const t = e.target;
   if (t.dataset.bind) {
     const emptySeats = /^people\.\d+\.car_seats$/.test(t.dataset.bind); // 空座清空不能删掉这个字段，否则这位车主会变成「不开车」
-    setPath(t.dataset.bind, t.dataset.type === 'number' ? (t.value === '' ? (emptySeats ? 0 : '') : Number(t.value)) : t.value);
+    const value = t.dataset.type === 'number' ? (t.value === '' ? (emptySeats ? 0 : '') : Number(t.value)) : t.value;
+    setPath(t.dataset.bind, t.dataset.bind === 'options.taxi_mode' && value === 'save' ? '' : value); // 默认的「省钱」不写进配置
     markDirty();
   } else if (t.dataset.stationName !== undefined) {
     cfg.stations[Number(t.dataset.stationName)].name = t.value.trim();
@@ -1916,8 +1948,14 @@ $('#form').addEventListener('change', (e) => {
   if (t.dataset.stationName !== undefined) renameStation(Number(t.dataset.stationName), t);
   else if (t.dataset.car !== undefined) toggleCar(Number(t.dataset.car), t.checked);
   else if (t.dataset.returnToggle !== undefined) {
+    if (!t.checked && !outboundOn()) { t.checked = true; toast('去程已经关了，返程要留着：至少规划一段'); return; }
     cfg.return ??= {};
     cfg.return.enabled = t.checked;
+    markDirty();
+    renderForm();
+  } else if (t.dataset.outboundToggle !== undefined) {
+    if (!t.checked && !cfg.return?.enabled) { t.checked = true; toast('返程没开，去程要留着：至少规划一段'); return; }
+    if (t.checked) delete cfg.options.outbound; else cfg.options.outbound = false;
     markDirty();
     renderForm();
   } else if (t.dataset.backdrive !== undefined) {
@@ -1929,7 +1967,7 @@ $('#form').addEventListener('change', (e) => {
     const p = cfg.people[Number(t.dataset.home)];
     if (t.checked) delete p.pickup_at_home; else p.pickup_at_home = false;
     markDirty();
-  } else if (t.dataset.bind && /^(options\.|return\.date$|people\.\d+\.(name|from)$)/.test(t.dataset.bind)) {
+  } else if (t.dataset.bind && /^(options\.|return\.(date|depart_time)$|people\.\d+\.(name|from)$)/.test(t.dataset.bind)) {
     refreshDerived(); // 默认值提示、12306 链接、步骤条、校验提示：只更新受影响的部分，不重建表单（否则会吞掉紧接着的点击）
   }
 });
@@ -2027,14 +2065,16 @@ $('#sharebtn').addEventListener('click', async () => {
   if (isStale() && !await confirmDialog('配置改过了，当前方案可能过期。', { title: '仍然发布这个方案？', okText: '仍然发布' })) return;
   const win = window.open('', '_blank'); // 先开窗口，避免异步之后被拦截
   try {
-    const r = await backend.share(active, activeBack);
+    const outOn = result?.outbound !== false;
+    const r = await backend.share(outOn ? active : -1, activeBack); // 只规划返程时没有去程方案可选
+    const combo = [outOn ? `去程方案 ${active + 1}` : '', result?.back ? `返程方案 ${activeBack + 1}` : ''].filter(Boolean).join(' + ');
     const link = new URL(mode === 'online' ? r.share.url : r.url, location.href).href;
     if (mode === 'online') {
       trip.share = r.share;
       navigator.clipboard?.writeText(link).catch(() => {});
-      toast(`方案 ${active + 1} 已发布，链接已复制。重新发布会更新同一个链接`, 4000);
+      toast(`${combo} 已发布，链接已复制。重新发布会更新同一个链接`, 4000);
     } else {
-      toast(`方案 ${active + 1} 已生成：${r.file}`);
+      toast(`${combo} 已生成：${r.file}`);
     }
     if (win) win.location = link; else location.href = link;
   } catch (e) {

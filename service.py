@@ -44,14 +44,15 @@ def compute(cfg: dict, amap) -> dict:
 def _back_payload(trip, T, paths) -> dict | None:
     if not trip.back:
         return None
+    people = {p.name: p for p in trip.people}
     out = []
     for plan in trip.back_plans:
         routes = [{"driver": r.driver, "stops": list(r.stops), "minutes": round(r.minutes), "detour": round(r.detour),
                    "path": paths.get(("back", r.driver, r.stops)),
                    "direct_path": paths.get(("back", r.driver, ())) if r.stops else None,
-                   "depart": carpool.clock(trip.back.depart)} for r in plan.routes]
+                   "depart": carpool.clock(carpool.leave_of(people[r.driver], trip.back))} for r in plan.routes]
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi, "stranded": plan.stranded,
-                    "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
+                    "detour": round(plan.detour), "carried": plan.carried, "taxi_cars": plan.taxi_cars, "routes": routes})
     return {"depart": carpool.clock(trip.back.depart), "plans": out}
 
 
@@ -69,9 +70,10 @@ def plan_payload(state: dict) -> dict:
                            "direct_path": paths[(r.driver, ())] if r.stops else None,
                            "depart": carpool.clock(sched["depart"]) if sched else None})
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi,
-                    "stranded": plan.stranded, "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
+                    "stranded": plan.stranded, "detour": round(plan.detour), "carried": plan.carried, "taxi_cars": plan.taxi_cars, "routes": routes})
     return {
         "report": carpool.render(trip, pts, T, plans),
+        "outbound": trip.outbound,  # false：只规划返程，plans 为空
         "warnings": trip.warnings,
         "resolved": trip.resolved,  # 这次按文字定位到的坐标，界面写回配置，下次不再请求
         "points": {k: {"name": p.name, "lat": p.lat, "lng": p.lng} for k, p in pts.items()},
@@ -91,6 +93,58 @@ def _samples(path: list[list[float]], every_km: float) -> list[carpool.Place]:
     return out
 
 
+def _rows_out(amap, venue, drivers, stations, found) -> list[dict]:
+    """去程：各站到目的地的车程，以及车主「家 → 站 → 目的地」比直达多绕多久。"""
+    # 到目的地车程：一次查完；车主到各站：每站一次（批量预取）
+    origins = stations + [d.home for d in drivers]
+    to_venue = dict(zip([st.name for st in stations] + [f"car:{d.name}" for d in drivers],
+                        amap.drive_minutes(origins, venue)))
+    carpool.report("测算各站顺不顺路", 0, len(stations))
+    carpool.prefetch(amap, lambda: [amap.distance_query([d.home for d in drivers], st) for st in stations] if drivers else [])
+    rows = []
+    for i, st in enumerate(stations):
+        carpool.report("测算各站顺不顺路", i, len(stations))
+        best = None
+        if drivers:
+            for d, m in zip(drivers, amap.drive_minutes([d.home for d in drivers], st)):
+                direct = to_venue.get(f"car:{d.name}")
+                if m is None or direct is None or to_venue.get(st.name) is None:
+                    continue
+                detour = max(0.0, m + to_venue[st.name] - direct)
+                if best is None or detour < best["detour"]:
+                    best = {"driver": d.name, "detour": round(detour)}
+        rows.append(_row(st, found, to_venue.get(st.name), best))
+    return rows
+
+
+def _rows_back(amap, venue, drivers, stations, found) -> list[dict]:
+    """返程：目的地到各站的车程，以及车主「目的地 → 站 → 家」比直接回家多绕多久。"""
+    carpool.report("测算各站顺不顺路", 0, len(stations))
+    carpool.prefetch(amap, lambda: [*(amap.distance_query([venue], st) for st in stations), *(amap.distance_query([venue], d.home) for d in drivers),
+                                    *(amap.distance_query(stations, d.home) for d in drivers if len(stations) <= 100)])
+    from_venue = {st.name: amap.drive_minutes([venue], st)[0] for st in stations}
+    direct = {d.name: amap.drive_minutes([venue], d.home)[0] for d in drivers}
+    home_legs = {d.name: dict(zip([st.name for st in stations], amap.drive_minutes(stations, d.home))) for d in drivers}
+    rows = []
+    for i, st in enumerate(stations):
+        carpool.report("测算各站顺不顺路", i, len(stations))
+        best = None
+        for d in drivers:
+            m, back = home_legs[d.name].get(st.name), direct.get(d.name)
+            if m is None or back is None or from_venue.get(st.name) is None:
+                continue
+            detour = max(0.0, from_venue[st.name] + m - back)
+            if best is None or detour < best["detour"]:
+                best = {"driver": d.name, "detour": round(detour)}
+        rows.append(_row(st, found, from_venue.get(st.name), best))
+    return rows
+
+
+def _row(st, found, minutes, best) -> dict:
+    return {"name": st.name, "location": st.loc, "city": st.city, "where": found[st.name][1],
+            "to_venue": None if minutes is None else round(minutes), "best": best}
+
+
 def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit: int = 15) -> dict:
     """推荐候选车站：目的地周边、各车主出发地附近、沿各车主路线找火车站，
     用 12306 站名过滤掉不办客运的站，按「车主最少绕路」和「到目的地车程」排序。"""
@@ -98,10 +152,12 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit
     venue, people = carpool.load_places(cfg, amap, resolved)
     drivers = [p for p in people if p.drives]
     existing = {s.get("name") for s in cfg.get("stations") or []}
+    back_only = (cfg.get("options") or {}).get("outbound") is False  # 只规划返程：顺路是指「目的地 → 站 → 车主家」
 
     # 车主直达路线，沿途取点
     carpool.report("获取车主路线，沿途取点")
-    carpool.prefetch(amap, lambda: [amap.driving_query([d.home, venue]) for d in drivers])
+    ways = (lambda d: [venue, d.home]) if back_only else (lambda d: [d.home, venue])
+    carpool.prefetch(amap, lambda: [amap.driving_query(ways(d)) for d in drivers])
     # 高德周边搜索半径最大 50 公里：目的地本身搜 50 公里，再在周围 60 公里处补一圈，覆盖到约 100 公里
     centers: list[tuple[carpool.Place, float, str]] = [(venue, 50, "目的地附近")]
     for k in range(6):
@@ -112,7 +168,7 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit
     for d in drivers:
         centers.append((d.home, 30, f"{d.name}出发地附近"))
         try:
-            path = amap.drive_path([d.home, venue])
+            path = amap.drive_path(ways(d))
         except carpool.QuotaError:
             raise
         except (carpool.AmapError, KeyError, IndexError):
@@ -134,28 +190,9 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, limit
         return {"stations": [], "resolved": resolved}
 
     stations = [st for st, _ in found.values()]
-    # 到目的地车程：一次查完；车主到各站：每站一次（批量预取）
-    origins = stations + [d.home for d in drivers]
-    to_venue = dict(zip([st.name for st in stations] + [f"car:{d.name}" for d in drivers],
-                        amap.drive_minutes(origins, venue)))
-    carpool.report("测算各站顺不顺路", 0, len(stations))
-    carpool.prefetch(amap, lambda: [amap.distance_query([d.home for d in drivers], st) for st in stations] if drivers else [])
-    rows = []
-    for i, st in enumerate(stations):
-        carpool.report("测算各站顺不顺路", i, len(stations))
-        best = None
-        if drivers:
-            for d, m in zip(drivers, amap.drive_minutes([d.home for d in drivers], st)):
-                direct = to_venue.get(f"car:{d.name}")
-                if m is None or direct is None or to_venue.get(st.name) is None:
-                    continue
-                detour = max(0.0, m + to_venue[st.name] - direct)
-                if best is None or detour < best["detour"]:
-                    best = {"driver": d.name, "detour": round(detour)}
-        rows.append({
-            "name": st.name, "location": st.loc, "city": st.city, "where": found[st.name][1],
-            "to_venue": None if to_venue.get(st.name) is None else round(to_venue[st.name]),
-            "best": best,
-        })
+    if back_only:
+        rows = _rows_back(amap, venue, drivers, stations, found)
+    else:
+        rows = _rows_out(amap, venue, drivers, stations, found)
     rows.sort(key=lambda r: ((r["best"] or {}).get("detour", math.inf), r["to_venue"] or math.inf))
     return {"stations": rows[:limit], "resolved": resolved}
