@@ -1402,12 +1402,30 @@ class TryAmapTest(unittest.TestCase):
             cfg["return"]["enabled"] = enabled
             out = check(cfg, f"返程 {enabled}")
             self.assertEqual(bool(out.get("back")), enabled)
+        for outbound in (True, False):  # 开关去程：关掉就只规划返程
+            cfg = copy.deepcopy(base)
+            if not outbound:
+                cfg["options"]["outbound"] = False
+            out = check(cfg, f"去程 {outbound}")
+            self.assertEqual(bool(out["plans"]), outbound)
+            self.assertTrue(out["back"]["plans"])
+            self.assertEqual(out["outbound"], outbound)
+        cfg = copy.deepcopy(base)
+        cfg["options"]["outbound"], cfg["return"]["enabled"] = False, False  # 两段都关：提示要选一段，不是 Python 异常
+        self.assertIn("至少要规划一段", check(cfg, "两段都关")["error"])
+        for mode in ("save", "fast"):  # 切换打车方式
+            cfg = copy.deepcopy(base)
+            cfg["options"]["taxi_mode"] = mode
+            check(cfg, f"打车 {mode}")
         for i in range(len(names)):  # 删成员
             cfg = copy.deepcopy(base)
             del cfg["people"][i]
             check(cfg, f"删成员 {names[i]}")
         out = check(copy.deepcopy(base), "示例原样")
         self.assertGreater(out["plans"][0]["carried"], 0)  # 初始示例本身要能搭上人
+        leaves = {p["name"]: p["leave_time"] for p in base["people"] if p.get("leave_time")}
+        self.assertTrue(leaves and all(t != base["return"]["depart_time"] for t in leaves.values()))  # 示例里有人的离场时间和散场时间不同
+        self.assertIn("等 15分钟", out["report"])
 
     def test_real_trip_report_unchanged(self):
         browser.amap = FakeAmap()
