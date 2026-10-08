@@ -103,6 +103,7 @@ async function newTrip(body = {}) {
 }
 
 const roomOf2 = (id) => env.ROOM.get(env.ROOM.idFromName(id));
+const sha256hex = async (text) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 const save = (t, body) => call(`${t.base}/config`, { method: 'POST', cookie: t.cookie, body });
 
 test('新建行程：口令、自带 Key、什么都不填', async () => {
@@ -167,7 +168,14 @@ test('高德代理：只放行白名单，按行程用对应的 Key', async () =
   const owner = await newTrip(), own = await newTrip({ amapKey: OWN_KEY });
   upstream = [];
   assert.equal((await call(`${owner.base}/amap/v3/ip`, { cookie: owner.cookie })).status, 403);
-  await call(`${owner.base}/amap/v3/distance?origins=1,1&key=client-key`, { cookie: owner.cookie });
+  // 查询里自带 key（任何大小写）直接拒绝，不对外请求
+  for (const q of ['key=client-key', 'KEY=client-key', 'Key=x&a=1']) {
+    assert.equal((await (await call(`${owner.base}/amap/v3/distance?origins=1,1&${q}`, { cookie: owner.cookie })).json()).info, 'PARAM_NOT_ALLOWED');
+  }
+  assert.equal(upstream.length, 0);
+  await call(`${owner.base}/amap/v3/distance?origins=1,1&callback=x&output=xml`, { cookie: owner.cookie });
+  assert.equal(new URL(upstream[0]).searchParams.get('callback'), null, '改变返回格式的参数被去掉');
+  assert.equal(new URL(upstream[0]).searchParams.get('output'), null);
   await call(`${own.base}/amap-batch`, { method: 'POST', cookie: own.cookie, body: { requests: [{ path: '/v3/distance', query: 'a=1' }] } });
   assert.deepEqual(upstream.map((u) => new URL(u).searchParams.getAll('key').join()), ['server-key', OWN_KEY]);
   assert.equal((await call(`${owner.base}/amap/v3/distance`)).status, 401);
@@ -276,6 +284,134 @@ test('费用护栏：不是自带 Key 的行程一律走公共额度的全部护
   const res = await (await call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie, body: { requests: [{ path: '/v3/distance', query: 'a=1' }] } })).json();
   assert.equal(res.results[0].info, 'PUBLIC_PAUSED');
   assert.equal(upstream.length, 0, '暂停时不能有任何对外请求');
+});
+
+// ---------- v3.3 交叉审计确认的问题：每条一个防回归测试 ----------
+
+test('审计 S-4/D-6：管理登录并发试错也不会超过单来源上限；口令对了退还那次尝试', async () => {
+  const tries = await Promise.all(Array.from({ length: 20 }, () => call('/api/admin/login', { method: 'POST', body: { code: 'wrong' }, ip: '9.9.9.9' })));
+  const passed = tries.filter((r) => r.status !== 429).length;
+  assert.ok(passed <= 5, `放行了 ${passed} 次`);
+  // 另一个来源：错 4 次、对 1 次，之后还能再登录（对的那次退还了）
+  for (let i = 0; i < 4; i += 1) assert.equal((await call('/api/admin/login', { method: 'POST', body: { code: 'x' }, ip: '8.8.8.8' })).status, 401);
+  assert.equal((await call('/api/admin/login', { method: 'POST', body: { code: 'open-sesame' }, ip: '8.8.8.8' })).status, 200);
+  assert.equal((await call('/api/admin/login', { method: 'POST', body: { code: 'open-sesame' }, ip: '8.8.8.8' })).status, 200);
+});
+
+test('审计 S-5/D-4：没登录不能拿 /key 对外验 Key；自带 Key 新建先过限速再验 Key', async () => {
+  upstream = [];
+  const r = await call('/api/t/aaaaaaaaaa/key', { method: 'POST', cookie: 'tk_aaaaaaaaaa=junk', body: { amapKey: OWN_KEY } });
+  assert.notEqual(r.status, 200);
+  assert.equal(upstream.length, 0, '没鉴权就不能对外请求');
+  // 同一来源每天 10 次新建：第 11 次在验 Key 之前就被拒
+  globalThis.nextAmapReply = { status: '0', info: 'INVALID_USER_KEY' };
+  for (let i = 0; i < 10; i += 1) await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '7.7.7.7' });
+  upstream = [];
+  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '7.7.7.7' })).status, 429);
+  assert.equal(upstream.length, 0);
+});
+
+test('审计 S-7/D-8：邀请码不对或 Key 不对，不占全站每天的新建名额', async () => {
+  const usage = env.USAGE.get();
+  const total = async () => ((await usage.storage.get('create')) || {}).total || 0;
+  const before = await total();
+  for (let i = 0; i < 3; i += 1) await call('/api/trips', { method: 'POST', body: { code: 'zzzzzzzz' }, ip: `6.6.6.${i}` });
+  globalThis.nextAmapReply = { status: '0', info: 'INVALID_USER_KEY' };
+  await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '6.6.6.9' });
+  assert.equal(await total(), before);
+});
+
+test('审计 D-5：保存的大小按实际内容算，不看 Content-Length（分块上传也拦得住）', async () => {
+  const t = await newTrip();
+  const big = JSON.stringify({ config: { venue: { name: 'x'.repeat(200 * 1024) } }, base_version: 1 });
+  const stream = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(big)); c.close(); } });
+  const res = await worker.fetch(new Request(`https://carpool.test${t.base}/config`, {
+    method: 'POST', body: stream, duplex: 'half', headers: { cookie: t.cookie, 'cf-connecting-ip': '1.1.1.1' },
+  }), env, { waitUntil: (p) => background.push(p) });
+  assert.equal(res.status, 413);
+  assert.equal((await save(t, { config: [1, 2], base_version: 1 })).status, 400, '配置只能是对象');
+});
+
+test('审计 D-11：公共额度没给的，不扣行程自己当天的计数', async () => {
+  const t = await newTrip();
+  await env.USAGE.get().fetch(new Request('https://internal/flags', { method: 'POST', body: JSON.stringify({ publicPaused: true }) }));
+  await call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie, body: { requests: [{ path: '/v3/distance', query: 'a=1' }, { path: '/v3/distance', query: 'a=2' }] } });
+  assert.equal((await (await call(`${t.base}/config`, { cookie: t.cookie })).json()).usage, 0);
+});
+
+test('审计 S-11/D-9：方案页口令至少 4 位；按来源限次，别人试错锁不住你', async () => {
+  const t = await newTrip();
+  const { url } = (await publish(t, '<!doctype html>x')).share;
+  assert.equal((await call(`${t.base}/share`, { method: 'POST', cookie: t.cookie, body: { action: 'code', code: '12' } })).status, 400);
+  await shareAction(t, { action: 'code', code: '2468' });
+  for (let i = 0; i < 11; i += 1) await call(url, { method: 'POST', form: { code: '0000' }, ip: '5.5.5.5' });
+  assert.equal((await call(url, { method: 'POST', form: { code: '0000' }, ip: '5.5.5.5' })).status, 429, '同一来源超过上限');
+  assert.equal((await call(url, { method: 'POST', form: { code: '2468' }, ip: '4.4.4.4' })).status, 303, '别的来源不受影响');
+});
+
+test('审计 D-10：编辑口令按最近一小时滑动计数，提示还要等几分钟', async () => {
+  const t = await newTrip();
+  await call(`${t.base}/edit-code`, { method: 'POST', cookie: t.cookie, body: { code: 'abcd1234' } });
+  const tryCode = (code) => call(`${t.base}/session`, { method: 'POST', body: { key: t.key, code } });
+  for (let i = 0; i < 10; i += 1) assert.equal((await tryCode('wrong')).status, 401);
+  const locked = await tryCode('abcd1234');
+  assert.equal(locked.status, 429);
+  assert.match((await locked.json()).error, /\d+ 分钟后再试/);
+});
+
+test('审计 S-8：配额标记自动过期；删除行程后全站名单里不再有它', async () => {
+  const t = await newTrip();
+  await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie }); // 用一次公共额度，进全站名单
+  assert.ok(((await env.USAGE.get().storage.get('trips')) || []).some((x) => x.id === t.id));
+  globalThis.nextAmapReply = { status: '0', info: 'DAILY_QUERY_OVER_LIMIT' };
+  await call(`${t.base}/amap/v3/distance?a=2`, { cookie: t.cookie });
+  const flag = [...env.DATA.kv.entries()].find(([k]) => k.startsWith('amap_quota_until:'));
+  assert.ok(flag && flag[1].expiration > Date.now() / 1000, '配额标记要有过期时间');
+  globalThis.nextAmapReply = null;
+  assert.equal((await call(`${t.base}/delete`, { method: 'POST', cookie: t.cookie })).status, 200);
+  assert.ok(!((await env.USAGE.get().storage.get('trips')) || []).some((x) => x.id === t.id));
+});
+
+test('审计 D-7：环境变量能强制暂停公共额度和新建，不依赖管理页登录', async () => {
+  const t = await newTrip();
+  const usage = env.USAGE.get();
+  usage.env = { FORCE_PUBLIC_PAUSED: '1', FORCE_CREATION_PAUSED: '1' };
+  upstream = [];
+  assert.equal((await (await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie })).json()).info, 'PUBLIC_PAUSED');
+  assert.equal(upstream.length, 0);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '3.3.3.3' })).status, 503);
+  assert.equal((await (await call('/api/status')).json()).public.level, 'paused');
+  usage.env = {};
+});
+
+test('审计 S-6/D-15：行程级限频（保存、发布）和实时连接上限', async () => {
+  const t = await newTrip();
+  let version = 1, last;
+  for (let i = 0; i < 61; i += 1) {
+    last = await save(t, { config: { venue: { name: `v${i}` } }, base_version: version });
+    if (last.status === 200) version = (await last.json()).version;
+  }
+  assert.equal(last.status, 429, '每分钟保存次数有上限');
+  const room = rooms.get(t.id);
+  room.windows = {}; // 换一个时间窗
+  for (let i = 0; i < 30; i += 1) await publish(t, '<!doctype html>x');
+  assert.equal((await call(`${t.base}/page`, { method: 'POST', cookie: t.cookie, body: { html: '<!doctype html>x' } })).status, 429);
+  // 实时连接：消息太大直接忽略
+  const ws = fakeSocket();
+  room.webSocketMessage(ws, JSON.stringify({ type: 'join', clientId: 'x'.repeat(3000) }));
+  assert.ok(!ws.deserializeAttachment()?.clientId, '超长消息不处理');
+});
+
+test('审计 S-9：同一行程的请求逐个处理，重置编辑链接不会被并发的改名盖掉', async () => {
+  for (let round = 0; round < 5; round += 1) {
+    const t = await newTrip();
+    const [rotated] = await Promise.all([
+      call(`${t.base}/rotate-key`, { method: 'POST', cookie: t.cookie, body: { clientId: 'a' } }).then((r) => r.json()),
+      call(`${t.base}/rename`, { method: 'POST', cookie: t.cookie, body: { name: `改名${round}` } }),
+    ]);
+    const meta = await rooms.get(t.id).storage.get('meta');
+    assert.equal(meta.keyHash, await sha256hex(rotated.key), '新密钥必须生效');
+  }
 });
 
 test('批量里被限流的等一下再试一次', async () => {
@@ -410,10 +546,16 @@ test('数据保留期：出行日期后 60 天和最后编辑后 180 天取较�
   await publish(t, '<!doctype html>方案');
   const day = 86400e3;
   assert.ok(Math.abs(room.ctx.storage.alarm - (Date.now() + 180 * day)) < 60e3); // 没填出行日期：按 180 天没人编辑
-  await save(t, { config: { options: { travel_date: '2099-01-10' } }, base_version: 1 });
-  const travel = Date.UTC(2099, 0, 10) - 8 * 3600e3;
+  // 出行日期在一年后：按出行日期后 60 天
+  const future = new Date(Date.now() + 365 * day + 8 * 3600e3).toISOString().slice(0, 10);
+  await save(t, { config: { options: { travel_date: future } }, base_version: 1 });
+  const travel = Date.UTC(+future.slice(0, 4), +future.slice(5, 7) - 1, +future.slice(8, 10)) - 8 * 3600e3;
   assert.equal(room.ctx.storage.alarm, travel + 60 * day);
   assert.equal((await (await call(`${t.base}/config`, { cookie: t.cookie })).json()).expiresAt, travel + 60 * day);
+  // 出行日期填得很远（2099 年）：最多保留到最后编辑后 2 年
+  await save(t, { config: { options: { travel_date: '2099-01-10' } }, base_version: 2 });
+  assert.ok(Math.abs(room.ctx.storage.alarm - (Date.now() + 730 * day)) < 60e3);
+  await save(t, { config: { options: { travel_date: future } }, base_version: 3 });
   await room.alarm(); // 还没到期：顺延，不删
   assert.equal((await call(`${t.base}/config`, { cookie: t.cookie })).status, 200);
   const realNow = Date.now;
@@ -955,7 +1097,7 @@ test('Worker 生成的响应都带安全头', async () => {
   assert.equal(page.headers.get('x-frame-options'), 'DENY');
   assert.equal(page.headers.get('strict-transport-security'), 'max-age=15552000');
   // 口令页
-  await shareAction(t, { action: 'code', code: 'abc' });
+  await shareAction(t, { action: 'code', code: 'abcd' });
   assertSecure(await call(share.url));
 });
 
@@ -980,10 +1122,10 @@ test('改动状态的请求：跨站 Origin 被拒，同源和不带 Origin 的�
   assert.equal((await call(`${t.base}/share`, { method: 'DELETE', cookie: t.cookie, origin: evil })).status, 403);
   // 口令表单
   const url = (await publish(t, '<!doctype html><p>hi</p>')).share.url;
-  await shareAction(t, { action: 'code', code: 'abc' });
-  assert.equal((await call(url, { method: 'POST', form: { code: 'abc' }, origin: evil })).status, 403);
-  assert.equal((await call(url, { method: 'POST', form: { code: 'abc' }, origin: same })).status, 303);
-  assert.equal((await call(url, { method: 'POST', form: { code: 'abc' } })).status, 303);
+  await shareAction(t, { action: 'code', code: 'abcd' });
+  assert.equal((await call(url, { method: 'POST', form: { code: 'abcd' }, origin: evil })).status, 403);
+  assert.equal((await call(url, { method: 'POST', form: { code: 'abcd' }, origin: same })).status, 303);
+  assert.equal((await call(url, { method: 'POST', form: { code: 'abcd' } })).status, 303);
   // 读请求不受影响
   assert.equal((await call('/api/env', { origin: evil })).status, 200);
 });

@@ -108,3 +108,9 @@ test('12306 链接始终渲染，由 refreshDerived 更新 href', () => {
   assert.match(ui, /data-link12306="\$\{i\}"/);
   assert.match(ui, /a\.href = href/);
 });
+
+test('地图提示框里的名字都经过转义（审计 S-13）', () => {
+  const html = readFileSync(new URL('../ui.html', import.meta.url), 'utf8');
+  const raw = [...html.matchAll(/bindTooltip\(`\$\{(?!esc\()[^}]*\}/g)].map((m) => m[0]);
+  assert.deepEqual(raw, []);
+});

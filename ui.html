@@ -1542,19 +1542,19 @@ function drawPlan(fit) {
     // 先画不接人时的直达路线（灰色虚线），接人的彩色路线盖在上面，分岔的那段就是绕的路
     if (!r.stops.length) return;
     L.polyline(r.direct_path || [seq({ driver: r.driver, stops: [] })].flat().map(ll), { color: themeVar('--taxi'), weight: 4, opacity: 0.8, dashArray: '6 8' })
-      .bindTooltip(`${r.driver} ${back ? '不送人直接回家' : '不接人'}的直达路线`, { sticky: true }).addTo(planLayer);
+      .bindTooltip(`${esc(r.driver)} ${back ? '不送人直接回家' : '不接人'}的直达路线`, { sticky: true }).addTo(planLayer);
     (stopNotes[r.stops[0]] ??= []).push(`${r.driver} 多绕 ${fmtMin(r.detour)}`);
   });
   (plan?.routes || []).forEach((r, i) => {
     r.stops.forEach((s) => used.add(s));
     const line = r.path || seq(r).map(ll);
     L.polyline(line, { color: COLORS[i % COLORS.length], weight: 5, opacity: 0.85, dashArray: r.path ? null : '8 8' })
-      .bindTooltip(`${r.driver}：${r.stops.length ? '多绕 ' + fmtMin(r.detour) : '直达'}，全程约 ${fmtMin(r.minutes)}`, { sticky: true })
+      .bindTooltip(`${esc(r.driver)}：${r.stops.length ? '多绕 ' + fmtMin(r.detour) : '直达'}，全程约 ${fmtMin(r.minutes)}`, { sticky: true })
       .addTo(planLayer);
   });
   Object.entries(plan?.taxi || {}).forEach(([who, s]) => {
     used.add(s);
-    L.polyline([ll(s), ll('venue')], { color: themeVar('--taxi'), weight: 3, dashArray: '4 6' }).bindTooltip(`${who} 打车`, { sticky: true }).addTo(planLayer);
+    L.polyline([ll(s), ll('venue')], { color: themeVar('--taxi'), weight: 3, dashArray: '4 6' }).bindTooltip(`${esc(who)} 打车`, { sticky: true }).addTo(planLayer);
   });
   for (const [id, p] of Object.entries(pts)) {
     const kind = id === 'venue' ? 'venue' : id.split(':')[0];

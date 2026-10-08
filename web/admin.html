@@ -80,6 +80,7 @@
           <li>确认没问题后，把暂停的开关恢复。</li>
         </ol>
         <p class="c-muted">登录失败有次数限制（同一网络 15 分钟 5 次、全站每小时 30 次），登录后 24 小时自动退出。</p>
+        <p class="c-muted"><b>登不进管理页时</b>（比如有人故意试错把全站登录锁了一小时）：在本机运行 <code>npx wrangler secret put FORCE_PUBLIC_PAUSED</code> 和 <code>npx wrangler secret put FORCE_CREATION_PAUSED</code>，值都填 <code>1</code>，一两分钟内生效，不需要登录。恢复时运行 <code>npx wrangler secret delete FORCE_PUBLIC_PAUSED</code>（另一个同理）。</p>
       </details>
     </div>
 
@@ -209,10 +210,12 @@ const meter = (label, used, budget) => {
   return `<div>${label}：<b>${used}</b> / ${budget}（${pct}%）<div class="c-progress${level}" style="--value:${pct}%"><i></i></div></div>`;
 };
 
-function renderSwitch(el, title, on, onText, offText, name) {
+// forcedBy：被环境变量强制打开时的变量名；这时管理页的按钮改不了它，要去 Cloudflare 里删掉变量
+function renderSwitch(el, title, on, onText, offText, name, forcedBy) {
   el.className = `switch c-card ${on ? 'is-on' : ''}`;
   el.innerHTML = `<div><b>${title}</b> <span class="c-tag ${on ? 'c-tag--danger' : 'c-tag--ok'}">${on ? onText : offText}</span></div>
-    <button class="c-btn c-btn--sm ${on ? '' : 'c-btn--danger'}" data-flag="${name}" data-to="${on ? '' : '1'}" style="margin-top:6px">${on ? '恢复' : '暂停'}</button>`;
+    ${forcedBy ? `<p class="c-muted" style="margin:6px 0 0">由环境变量 <code>${forcedBy}</code> 强制暂停；要恢复，在 Cloudflare 里删掉这个变量。</p>`
+      : `<button class="c-btn c-btn--sm ${on ? '' : 'c-btn--danger'}" data-flag="${name}" data-to="${on ? '' : '1'}" style="margin-top:6px">${on ? '恢复' : '暂停'}</button>`}`;
 }
 
 // ---------- 流量统计面板：SVG 手绘柱状图，不引入图表库 ----------
@@ -297,9 +300,9 @@ async function load() {
   }
   $('#login').hidden = true;
   $('#panel').hidden = false;
-  const { quota, flags } = data;
-  renderSwitch($('#swPublic'), '公共额度', flags.publicPaused, '已暂停', '正常', 'publicPaused');
-  renderSwitch($('#swCreate'), '新建行程', flags.creationPaused, '已暂停', '正常', 'creationPaused');
+  const { quota, flags, forced = {} } = data;
+  renderSwitch($('#swPublic'), '公共额度', flags.publicPaused, '已暂停', '正常', 'publicPaused', forced.publicPaused && 'FORCE_PUBLIC_PAUSED');
+  renderSwitch($('#swCreate'), '新建行程', flags.creationPaused, '已暂停', '正常', 'creationPaused', forced.creationPaused && 'FORCE_CREATION_PAUSED');
   $('#stats').innerHTML = `${meter('今天全站合计', data.ownerUsedToday, data.ownerLimit)}
     <div class="quota">
       <div><b>路线和测距</b>${meter('今天', quota.today.lbs)}${meter('本月', quota.month.lbs, quota.budgets.lbs)}</div>

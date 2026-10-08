@@ -400,6 +400,8 @@ document.getElementById('printBtn').addEventListener('click', function () { wind
 (function () {
   if (!window.L) { document.getElementById('map').style.display = 'none'; return; }
   var data = JSON.parse(document.getElementById('data').textContent);
+  // 提示框里的文字（含成员名字）一律当纯文本，不当 HTML 解析
+  function text(s) { var el = document.createElement('span'); el.textContent = s; return el; }
   // 标记颜色取自页面的设计变量，深色模式下自动换成深色的值
   var css = getComputedStyle(document.documentElement);
   function v(name) { return css.getPropertyValue(name).trim(); }
@@ -410,13 +412,13 @@ document.getElementById('printBtn').addEventListener('click', function () { wind
   var bounds = [];
   data.routes.forEach(function (r) {
     (r.direct || []).forEach(function (seg) {
-      L.polyline(seg, { color: v('--taxi'), weight: 4, opacity: 0.8, dashArray: '6 8' }).bindTooltip(r.label + ' 不接人的直达路线', { sticky: true }).addTo(map);
+      L.polyline(seg, { color: v('--taxi'), weight: 4, opacity: 0.8, dashArray: '6 8' }).bindTooltip(text(r.label + ' 不接人的直达路线'), { sticky: true }).addTo(map);
       bounds = bounds.concat(seg);
     });
   });
   data.routes.forEach(function (r) {
     r.path.forEach(function (seg) {
-      L.polyline(seg, { color: r.color, weight: 5, opacity: 0.85 }).bindTooltip(r.label, { sticky: true }).addTo(map);
+      L.polyline(seg, { color: r.color, weight: 5, opacity: 0.85 }).bindTooltip(text(r.label), { sticky: true }).addTo(map);
       bounds = bounds.concat(seg);
     });
   });

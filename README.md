@@ -81,6 +81,16 @@
 
 登录失败有次数限制（同一网络 15 分钟 5 次、全站每小时 30 次）。
 
+**登不进管理页时**（比如有人故意试错，把全站登录锁了一小时），可以用环境变量直接暂停，不需要登录：
+
+```bash
+npx wrangler secret put FORCE_PUBLIC_PAUSED     # 值填 1：暂停公共额度
+npx wrangler secret put FORCE_CREATION_PAUSED   # 值填 1：暂停新建行程
+npx wrangler secret delete FORCE_PUBLIC_PAUSED  # 恢复（另一个同理）
+```
+
+管理页会标出哪些开关是被环境变量强制打开的。
+
 ## 本地版
 
 需要 Python 3.11+，只用标准库。高德 Key 放在环境变量 `AMAP_KEY` 里，或者存进同目录的 `.amap_key`（已加入 `.gitignore`）。
@@ -163,6 +173,9 @@ npm run deploy                             # 构建 dist/ 并部署
 - 方案页的 HTML 由编辑者的浏览器上传，所以放进 CSP 沙箱（独立的匿名来源）：读不到本站的存储和 Cookie，也不能发请求。
 - 改动状态的请求（`/api/*` 的 POST 和 DELETE、方案页口令表单）校验 Origin，跨站来源会被拒；WebSocket 也校验 Origin；500 错误不返回内部错误原文。
 - 流量统计在服务端做，只记按天汇总的次数（页面访问、爬虫、外站来源的域名和 `?from=` 参数、新建行程、发布和打开方案页的次数），不记 IP 和完整地址，不用 Cookie，保留 35 天；管理接口 `/api/admin/stats` 返回近 30 天。
+- 行程实例（Durable Object）的内部接口只接受 Worker 自己发起的请求；客户端请求只有白名单里的路径（配置、同步、历史、恢复、改名）会转给行程实例。不是自带 Key 的行程一律经过公共额度的全部护栏。
+- 限次：管理登录（检查和记录是一次原子操作）、编辑口令（最近一小时）、方案页口令（按来源和按页各有上限）、新建行程（按来源和全站）；来源 IP 只存加盐、按天轮换的哈希。每个行程的保存、发布和实时连接也有频率或数量上限。
+- 免费套餐的额度（Workers 请求、Durable Object、KV 写入）在代码里没法完全防住恶意刷量；用完时当天报错、不扣费（前提是 Workers Free 套餐）。需要的话在 Cloudflare 后台给站点加一条速率限制规则。
 - Cloudflare 的 Web Analytics 会自动往页面里注入统计脚本，和「网页里没有统计脚本」不一致，而且会被 CSP 拦下。自己部署时请在 Cloudflare 后台关掉。
 
 ## 已知限制

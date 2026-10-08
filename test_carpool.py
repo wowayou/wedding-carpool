@@ -428,6 +428,28 @@ class BrowserBridgeTest(unittest.TestCase):
             amap.prefetch([amap.geocode_query("某地")])
         self.assertEqual(amap.cache, {})
 
+    def test_share_tooltips_are_plain_text(self):
+        # 地图提示框里的成员名字不能当 HTML 解析（审计 S-13）
+        self.assertNotIn(".bindTooltip(r.label", share.TEMPLATE)
+        self.assertIn("function text(s)", share.TEMPLATE)
+
+    def test_browser_single_request_posts_query_in_body(self):
+        # 单个请求也走 POST 批量接口：地点文字不出现在网址上（审计 S-12/D-14）
+        amap = browser.BrowserAmap("/api/t/abc", pause=0)
+        sent = []
+        def fake_post(url, payload):
+            sent.append((url, payload))
+            return {"results": [{"status": "1", "info": "OK", "geocodes": []}]}
+        with mock.patch.object(amap, "_post_json", side_effect=fake_post):
+            data = amap._fetch(amap._url("/v3/geocode/geo", "address=%E5%AE%8F%E6%9D%91"))
+        self.assertEqual(data["info"], "OK")
+        self.assertEqual(sent, [("/api/t/abc/amap-batch", {"requests": [{"path": "/v3/geocode/geo", "query": "address=%E5%AE%8F%E6%9D%91"}]})])
+        with mock.patch.object(amap, "_post_json", return_value={"results": [{"status": "0", "info": "NETWORK_ERROR", "error": "连不上"}]}):
+            with self.assertRaises(ConnectionError):
+                amap._fetch(amap._url("/v3/distance", "a=1"))
+        with mock.patch.object(amap, "_post_json", return_value={"error": "需要用编辑链接打开", "info": "UNAUTHORIZED"}):
+            self.assertEqual(amap._fetch(amap._url("/v3/distance", "a=1"))["info"], "UNAUTHORIZED")
+
     def test_browser_urls_go_through_proxy_without_key(self):
         self.assertEqual(browser.BrowserAmap("/api/t/abc")._url("/v3/distance", "a=1"), "/api/t/abc/amap/v3/distance?a=1")
 

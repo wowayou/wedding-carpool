@@ -3,6 +3,9 @@
   "name": "wedding-carpool",
   "main": "web/worker.js",
   "compatibility_date": "2026-09-01",
+  // 只通过自己的域名访问：关掉 *.workers.dev 子域名和预览地址（同一份服务不该有第二个入口）
+  "workers_dev": false,
+  "preview_urls": false,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

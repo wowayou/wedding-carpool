@@ -34,13 +34,18 @@ class BrowserAmap(carpool.Amap):
         return f"{self.base}/amap{path}?{query}"
 
     def _fetch(self, url: str) -> dict:
-        from pyodide.http import open_url  # 同步 XHR，只能在 Web Worker 里用
-
+        # 单个请求也走 POST 批量接口（一批一个）：地点文字放在请求体里，不出现在网址上，也就不会进访问日志
+        path, _, query = url[len(f"{self.base}/amap"):].partition("?")
         try:
-            text = open_url(url).getvalue()
-        except Exception as e:  # noqa: BLE001 —— 浏览器网络错误统一当作可重试的连接错误
+            data = self._post_json(f"{self.base}/amap-batch", {"requests": [{"path": path, "query": query}]})
+        except ValueError as e:  # 返回的不是 JSON（比如网关出错页）
             raise ConnectionError(str(e)) from e
-        return json.loads(text)
+        if "results" not in data:  # 整个请求被拒（未登录、格式不对等），把原因交给上层
+            return {"status": "0", "info": str(data.get("info") or "REQUEST_FAILED"), "error": data.get("error")}
+        result = data["results"][0]
+        if result.get("info") == "NETWORK_ERROR":  # Worker 连不上高德：当作可重试的连接错误
+            raise ConnectionError(str(result.get("error") or "NETWORK_ERROR"))
+        return result
 
     def prefetch(self, queries: list[tuple[str, dict]]) -> None:
         """把一组请求一次发给 Worker 并发去取，结果放进缓存；之后逐个调用直接命中。

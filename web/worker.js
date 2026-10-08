@@ -52,8 +52,15 @@ const CREATE_PER_IP_PER_DAY = 10;
 // 数据保留期：出行日期后 60 天、最后一次编辑后 180 天，取较晚的那个；到期由行程实例的定时任务删除
 const RETAIN_AFTER_TRAVEL_MS = 60 * 86400e3;
 const RETAIN_IDLE_MS = 180 * 86400e3;
-const SHARE_ATTEMPTS_PER_HOUR = 20; // 方案页访问口令每个方案页每小时最多试 20 次
-const EDIT_CODE_TRIES_PER_HOUR = 10; // 编辑口令每个行程每小时最多试错 10 次
+const SHARE_ATTEMPTS_PER_HOUR = 200; // 方案页访问口令每个方案页每小时的总上限（各来源合计）
+const EDIT_CODE_TRIES_PER_HOUR = 10; // 编辑口令每个行程最近一小时内最多试错 10 次（滑动窗口）
+const SHARE_ATTEMPTS_PER_IP_PER_HOUR = 10; // 方案页访问口令：同一来源每页每小时最多试 10 次（另有每页总上限，见 SHARE_ATTEMPTS_PER_HOUR）
+const SHARE_CODE_MIN = 4; // 方案页访问口令最短 4 个字符
+const SAVES_PER_MINUTE = 60; // 每个行程每分钟最多保存 60 次（正常自动保存远低于此），防一个行程刷爆存储写入额度
+const PUBLISHES_PER_HOUR = 30; // 每个行程每小时最多发布 30 次方案页（KV 每天只有 1000 次免费写入）
+const MAX_SOCKETS_PER_TRIP = 30; // 每个行程最多同时 30 个实时连接
+const MAX_WS_MESSAGE = 2048; // 实时连接的单条消息上限（只用于在线名单和正在编辑的格子）
+const RETAIN_TRAVEL_CAP_MS = 730 * 86400e3; // 出行日期再远，按它算的保留期最多到最后编辑后 2 年
 const EDIT_CODE_LENGTH = [4, 20];
 // 管理页登录：同一 IP 15 分钟内最多试错 5 次，全站每小时最多试错 30 次；会话令牌 24 小时过期
 const ADMIN_FAILS_PER_IP = 5, ADMIN_IP_WINDOW_MS = 15 * 60e3;
@@ -121,6 +128,9 @@ async function readJson(request, limit) {
   try { return JSON.parse(text || '{}'); } catch { throw new HttpError(400, '请求格式不对'); }
 }
 
+// 来源 IP 只用于按天计数限速：加盐（站点密钥）并按北京时间日期轮换后取哈希，存下来的值不能反推 IP，也不能跨天关联
+const ipHashOf = (request, env) => sha256(`${env.IP_SALT || env.ACCESS_CODE || 'carpool'}:${beijingDay()}:${request.headers.get('cf-connecting-ip') || 'unknown'}`);
+
 function getCookie(request, name) {
   const cookie = request.headers.get('cookie') || '';
   return cookie.split(/;\s*/).find((c) => c.startsWith(`${name}=`))?.slice(name.length + 1) || '';
@@ -143,7 +153,7 @@ const FORWARDABLE = [
   ['GET', /^\/history$/], ['GET', /^\/history\/\d+$/], ['POST', /^\/restore$/], ['POST', /^\/rename$/],
 ];
 // 行程实例里只接受内部请求的路径
-const ROOM_INTERNAL_ONLY = new Set(['/init', '/auth', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/set-key', '/delete']);
+const ROOM_INTERNAL_ONLY = new Set(['/init', '/auth', '/whoami', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/amap-refund', '/set-key', '/delete']);
 const TRIP_MODES = new Set(['owner', 'own']);
 
 // ---------- 流量统计：写入 Usage 实例，不拖慢响应 ----------
@@ -218,23 +228,25 @@ async function createTrip(request, env, ctx) {
     mode = 'owner'; // 邀请码：用站点的公共额度（站长口令只能登录管理页，不能当邀请码）
   } else if (body.amapKey) {
     amapKey = String(body.amapKey).trim();
-    const open = await usageOf(env).fetch(internal('/create-check', {})); // 暂停新建时不用再去验 Key
-    if (!open.ok) return open;
-    const problem = await amapKeyProblem(amapKey);
-    if (problem) return json({ error: problem }, 400);
     mode = 'own';
   } else {
     return json({ error: '要么填邀请码，要么填自己的高德 Key' }, 400);
   }
-  const ip = await sha256(request.headers.get('cf-connecting-ip') || 'unknown');
-  const gate = await usageOf(env).fetch(internal('/create', { ip }));
+  // 先过新建限速（暂停新建、单个来源每天、全站每天），再验 Key 或邀请码：没通过的不对外请求，也不能拿它无限验 Key
+  const usage = usageOf(env);
+  const gate = await usage.fetch(internal('/create', { ip: await ipHashOf(request, env) }));
   if (!gate.ok) return gate;
+  const refund = () => usage.fetch(internal('/create-refund', {})); // 没建成：退还全站名额（单个来源的计数保留，用来限制乱试）
+  if (mode === 'own') {
+    const problem = await amapKeyProblem(amapKey);
+    if (problem) { await refund(); return json({ error: problem }, 400); }
+  }
   const id = randomId(10), key = randomId(24);
   let invite = null, tripLimit = null;
   if (code) {
     // 邀请码：检查有效、未过期、没用满，并占一个名额
-    const res = await usageOf(env).fetch(internal('/invite-use', { code, tripId: id }));
-    if (!res.ok) { await sleep(800); return res; } // 拖慢猜邀请码
+    const res = await usage.fetch(internal('/invite-use', { code, tripId: id }));
+    if (!res.ok) { await refund(); await sleep(800); return res; } // 拖慢猜邀请码
     ({ invite, tripLimit } = await res.json());
   }
   await roomOf(env, id).fetch(internal('/init', { id, name, mode, amapKey, invite, tripLimit, keyHash: await sha256(key) }));
@@ -266,17 +278,17 @@ async function adminApi(request, env, url, ctx) {
   const cookie = (value, maxAge) => `adm=${value}; Path=/api/admin; HttpOnly;${secure} SameSite=Strict; Max-Age=${maxAge}`;
   if (sub === '/login' && request.method === 'POST') {
     const { code = '' } = await readJson(request, 1024);
-    const ip = await sha256(request.headers.get('cf-connecting-ip') || 'unknown');
-    const gate = await usage.fetch(internal('/admin-gate', { ip }));
+    const ip = await ipHashOf(request, env);
+    // 先记一次尝试再比较口令（同一次调用里检查加记录，并发也不会多放行）；口令对了在 /admin-login 里退还
+    const gate = await usage.fetch(internal('/admin-attempt', { ip }));
     if (!gate.ok) return gate;
     if (!(await safeEqual(code, env.ACCESS_CODE))) {
-      await usage.fetch(internal('/admin-fail', { ip }));
       await sleep(800);
       return json({ error: '口令不对' }, 401);
     }
     // 登录成功发随机令牌；服务端只存令牌的哈希和过期时间
     const token = randomId(32);
-    await usage.fetch(internal('/admin-login', { hash: await sha256(token), expiresAt: Date.now() + ADMIN_SESSION_SECONDS * 1000 }));
+    await usage.fetch(internal('/admin-login', { hash: await sha256(token), expiresAt: Date.now() + ADMIN_SESSION_SECONDS * 1000, ip }));
     return json({ ok: true }, 200, { 'set-cookie': cookie(token, ADMIN_SESSION_SECONDS) });
   }
   const token = getCookie(request, 'adm');
@@ -355,6 +367,8 @@ async function tripApi(request, env, url, id, sub, ctx) {
   if (sub === '/edit-code' && request.method === 'POST') return editCodeSettings(request, room, secure, auth, id);
   if (sub === '/key' && request.method === 'POST') { // 改用自己的高德 Key：公共额度用完时可以接着算
     const amapKey = String((await readJson(request, 1024)).amapKey || '').trim();
+    const who = await room.fetch(internal('/whoami', {}, auth)); // 先确认是这个行程的编辑者，再对外验 Key
+    if (!who.ok) return who;
     const problem = await amapKeyProblem(amapKey);
     if (problem) return json({ error: problem }, 400);
     return room.fetch(internal('/set-key', { amapKey }, auth));
@@ -369,10 +383,14 @@ async function tripApi(request, env, url, id, sub, ctx) {
   }
   // 其余只有白名单里的（配置、同步、历史、恢复、改名）交给行程实例；init、amap-take 这类内部接口不能从外面到达
   if (!FORWARDABLE.some(([method, re]) => method === request.method && re.test(sub))) return json({ error: 'not found' }, 404);
-  if (request.method === 'POST' && Number(request.headers.get('content-length') || 0) > MAX_CONFIG_BYTES) {
-    return json({ error: '内容太大' }, 413);
+  let forward;
+  if (request.method === 'POST') { // 按实际读到的字节数限制大小（只看 Content-Length 会被分块上传绕过）
+    const text = await request.text();
+    if (new TextEncoder().encode(text).length > MAX_CONFIG_BYTES) return json({ error: '内容太大' }, 413);
+    forward = new Request(`https://internal${sub}${url.search}`, { method: 'POST', headers: request.headers, body: text });
+  } else {
+    forward = new Request(`https://internal${sub}${url.search}`, request);
   }
-  const forward = new Request(`https://internal${sub}${url.search}`, request);
   forward.headers.delete(INTERNAL_HEADER); // 客户端不能冒充内部请求
   forward.headers.set('x-trip-key', auth.key);
   forward.headers.set('x-trip-code', auth.code); // 总是覆盖，不接受客户端自己带的
@@ -486,7 +504,7 @@ async function sharePage(request, env, url, id, ctx) {
   }
   const codeHash = metadata?.codeHash;
   if (codeHash && request.method === 'POST') {
-    const gate = await usageOf(env).fetch(internal('/share-attempt', { id }));
+    const gate = await usageOf(env).fetch(internal('/share-attempt', { id, ip: await ipHashOf(request, env) }));
     if (!gate.ok) return codePage(id, '试得太多了，请一小时后再试', 429);
     const form = await request.formData().catch(() => null);
     const code = String(form?.get('code') || '').trim();
@@ -533,7 +551,8 @@ async function fetchAmap(origin, item, apiKey, quotaKey, env) { // quotaKey：�
     return { status: '0', info: 'NETWORK_ERROR', error: `连不上高德：${err.message}` };
   }
   if (QUOTA_RE.test(String(data.info || ''))) {
-    await env.DATA.put(quotaKey, String(nextBeijingMidnight()));
+    const until = nextBeijingMidnight();
+    await env.DATA.put(quotaKey, String(until), { expiration: Math.floor(until / 1000) + 3600 }); // 过了次日零点就没用了，自动删除
   } else if (String(data.status) === '1' && globalThis.caches?.default) {
     await caches.default.put(cacheKeyOf(origin, item.path, item.query), new Response(JSON.stringify(data), {
       headers: { 'content-type': 'application/json', 'cache-control': `max-age=${CACHE_SECONDS[item.path] ?? 7 * 86400}` },
@@ -564,10 +583,20 @@ async function tripAmap(request, env, url, room, auth, sub) {
     items = [{ path: sub.slice('/amap'.length), query: url.search.slice(1) }];
   } else {
     const { requests } = await readJson(request, 200 * 1024);
-    if (!Array.isArray(requests) || requests.length > BATCH_LIMIT) return json({ error: `一次最多 ${BATCH_LIMIT} 个请求` }, 400);
-    items = requests.map((r) => ({ path: String(r.path), query: String(r.query || '') }));
+    if (!Array.isArray(requests)) return json({ error: '请求格式不对：requests 要是数组' }, 400);
+    if (requests.length > BATCH_LIMIT) return json({ error: `一次最多 ${BATCH_LIMIT} 个请求` }, 400);
+    items = requests.map((r) => (r && typeof r === 'object' ? { path: String(r.path), query: String(r.query ?? '') } : { path: '', query: '' }));
   }
-  const results = items.map((r) => (AMAP_PATHS.has(r.path) ? null : { status: '0', info: 'PATH_NOT_ALLOWED' }));
+  // 查询参数：不允许自带 key（任何大小写），去掉会改变返回格式或签名的参数（返回一律是 JSON）
+  const STRIP = new Set(['callback', 'output', 'sig']);
+  const paramProblem = (query) => [...new URLSearchParams(query).keys()].some((k) => k.toLowerCase() === 'key');
+  for (const r of items) {
+    const params = new URLSearchParams(r.query);
+    for (const k of [...params.keys()]) if (STRIP.has(k.toLowerCase())) params.delete(k);
+    r.query = params.toString();
+  }
+  const results = items.map((r) => (!AMAP_PATHS.has(r.path) ? { status: '0', info: 'PATH_NOT_ALLOWED' }
+    : paramProblem(r.query) ? { status: '0', info: 'PARAM_NOT_ALLOWED' } : null));
   await Promise.all(items.map(async (r, i) => { if (!results[i]) results[i] = await fromCache(url.origin, r.path, r.query); }));
   const misses = results.map((r, i) => (r === null ? i : -1)).filter((i) => i >= 0);
 
@@ -608,12 +637,15 @@ async function tripAmap(request, env, url, room, auth, sub) {
     }));
     const { granted: ownerGranted, reasons } = await res.json();
     const given = { lbs: 0, search: 0 };
+    const before = todo.length;
     todo = todo.filter((i) => {
       const cls = quotaClass(items[i].path);
       if (given[cls] < ownerGranted[cls]) { given[cls] += 1; return true; }
       results[i] = ownerLimitError(reasons[cls], cls);
       return false;
     });
+    // 公共额度没给的，行程当天的计数也退回去（不然暂停或全站用满时，行程自己的额度会被白白扣掉）
+    if (todo.length < before) await room.fetch(internal('/amap-refund', { n: before - todo.length }, auth));
   }
   // 没命中缓存的按每秒 AMAP_QPS 个发；被限流的等一会儿再试一次
   for (const round of [0, 1]) {
@@ -656,10 +688,34 @@ export class ConfigRoom {
 
   get storage() { return this.ctx.storage; }
 
+  // 同一个行程的请求逐个处理：读 meta、算哈希、读请求体之间有 await，并发时另一个请求可能插进来，
+  // 用旧的 meta 写回去会盖掉别人的改动（比如重置编辑链接后的新密钥被并发的改名盖回旧的）。实时同步连接不排队
+  exclusive(fn) {
+    const run = (this.queue || Promise.resolve()).then(fn, fn);
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
   async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (ROOM_INTERNAL_ONLY.has(path) && request.headers.get(INTERNAL_HEADER) !== '1') return json({ error: 'not found' }, 404);
+    return path === '/sync' ? this.handle(request) : this.exclusive(() => this.handle(request));
+  }
+
+  // 每分钟、每小时这类限频只放在实例内存里（不额外写存储）；实例被回收后重新计，够用
+  overLimit(name, windowMs, max) {
+    const now = Date.now();
+    this.windows ||= {};
+    const list = (this.windows[name] || []).filter((t) => now - t < windowMs);
+    if (list.length >= max) { this.windows[name] = list; return true; }
+    list.push(now);
+    this.windows[name] = list;
+    return false;
+  }
+
+  async handle(request) {
     const url = new URL(request.url);
     const path = url.pathname;
-    if (ROOM_INTERNAL_ONLY.has(path) && request.headers.get(INTERNAL_HEADER) !== '1') return json({ error: 'not found' }, 404);
     if (path === '/init') return this.init(await request.json());
     const meta = await this.storage.get('meta');
     if (!meta) { // 行程已删除或到期：和「密钥不对」分开，让编辑页能提示。行程 id 是 10 位随机串，说出「存在与否」不会帮人猜到什么
@@ -678,9 +734,13 @@ export class ConfigRoom {
     }
     const body = request.method === 'POST' ? await request.json().catch(() => ({})) : null;
     if (path === '/auth') return this.auth(meta, body);
+    if (path === '/whoami') return json({ ok: true });
     if (path === '/sync') return this.connect(request);
     if (path === '/config' && request.method === 'GET') return this.read(meta);
-    if (path === '/config') return this.save(body);
+    if (path === '/config') {
+      if (this.overLimit('save', 60e3, SAVES_PER_MINUTE)) return json({ error: '保存得太频繁了，稍等一下再试' }, 429);
+      return this.save(body);
+    }
     if (path === '/history') return json({ history: [...((await this.storage.get('hindex')) || [])].reverse() });
     const version = path.match(/^\/history\/(\d+)$/)?.[1];
     if (version) {
@@ -690,6 +750,7 @@ export class ConfigRoom {
     if (path === '/restore') return this.restore(body);
     if (path === '/rename') return this.rename(meta, body);
     if (path === '/published') {
+      if (this.overLimit('publish', 3600e3, PUBLISHES_PER_HOUR)) return json({ error: `每小时最多发布 ${PUBLISHES_PER_HOUR} 次方案页，稍后再试` }, 429);
       meta.shareId ||= randomId(10);
       meta.pageAt = Date.now();
       await this.storage.put('meta', meta);
@@ -698,7 +759,11 @@ export class ConfigRoom {
     if (path === '/share') {
       meta.shareId ||= randomId(10);
       const extra = { action: body.action };
-      if (body.action === 'code') meta.shareCode = String(body.code || '').trim().slice(0, 20) || null;
+      if (body.action === 'code') {
+        const code = String(body.code || '').trim().slice(0, 20);
+        if (code && code.length < SHARE_CODE_MIN) return json({ error: `访问口令至少 ${SHARE_CODE_MIN} 个字符` }, 400);
+        meta.shareCode = code || null;
+      }
       if (body.action === 'stop') meta.pageAt = null;
       if (body.action === 'new-link') { extra.oldShareId = meta.shareId; meta.shareId = randomId(10); }
       await this.storage.put('meta', meta);
@@ -713,6 +778,12 @@ export class ConfigRoom {
     }
     if (path === '/edit-code') return this.setEditCode(meta, body);
     if (path === '/amap-take') return this.take(meta, body);
+    if (path === '/amap-refund') { // 公共额度没给的那部分，退回行程当天的计数
+      const today = beijingDay();
+      const usage = await this.storage.get('usage');
+      if (usage?.day === today) await this.storage.put('usage', { day: today, count: Math.max(0, usage.count - (Number(body.n) || 0)) });
+      return json({ ok: true });
+    }
     if (path === '/set-key') {
       Object.assign(meta, { mode: 'own', amapKey: body.amapKey });
       await this.storage.put('meta', meta);
@@ -721,9 +792,12 @@ export class ConfigRoom {
       return json({ mode: 'own' });
     }
     if (path === '/delete') {
+      if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       this.broadcast({ type: 'deleted' });
+      if (meta.shareId) await this.env.DATA.delete(`page:${meta.shareId}`); // 方案页在实例里就删，不依赖外层
       await this.storage.deleteAlarm?.();
       await this.storage.deleteAll(); // 配置、历史、用量都清掉；实例没有数据后由平台回收
+      await this.forget(meta.id);
       return json({ deleted: true, shareId: meta.shareId || null });
     }
     return json({ error: 'not found' }, 404);
@@ -734,12 +808,15 @@ export class ConfigRoom {
     if (meta.editCodeHash) {
       code = String(code).trim();
       if (!code) return json({ error: '这个行程设了编辑口令，请输入', status: '0', info: 'EDIT_CODE_REQUIRED' }, 401);
-      const hour = Math.floor(Date.now() / 3600e3);
+      const now = Date.now();
       const saved = await this.storage.get('codeTries');
-      const tries = saved?.hour === hour ? saved.count : 0;
-      if (tries >= EDIT_CODE_TRIES_PER_HOUR) return json({ error: '试得太多了，请一小时后再试', status: '0', info: 'TOO_MANY_TRIES' }, 429);
+      const tries = (Array.isArray(saved) ? saved : []).filter((t) => now - t < 3600e3); // 最近一小时内的试错
+      if (tries.length >= EDIT_CODE_TRIES_PER_HOUR) {
+        const wait = Math.ceil((tries[0] + 3600e3 - now) / 60e3);
+        return json({ error: `试错太多了，请 ${wait} 分钟后再试`, status: '0', info: 'TOO_MANY_TRIES' }, 429);
+      }
       if ((await sha256(`${meta.id}:edit:${code}`)) !== meta.editCodeHash) {
-        await this.storage.put('codeTries', { hour, count: tries + 1 });
+        await this.storage.put('codeTries', [...tries, now]);
         return json({ error: '编辑口令不对', status: '0', info: 'EDIT_CODE_WRONG' }, 401);
       }
     }
@@ -793,7 +870,8 @@ export class ConfigRoom {
   deadlineOf(config, lastEdit) {
     const m = String(config?.options?.travel_date || '').match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
     const travel = m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) - 8 * 3600e3 : NaN; // 北京时间当天零点
-    return Math.max(Number.isFinite(travel) ? travel + RETAIN_AFTER_TRAVEL_MS : 0, lastEdit + RETAIN_IDLE_MS);
+    const byTravel = Number.isFinite(travel) ? Math.min(travel + RETAIN_AFTER_TRAVEL_MS, lastEdit + RETAIN_TRAVEL_CAP_MS) : 0; // 出行日期填得再远也有上限
+    return Math.max(byTravel, lastEdit + RETAIN_IDLE_MS);
   }
 
   async schedule(meta, config, lastEdit) {
@@ -804,7 +882,15 @@ export class ConfigRoom {
     await this.storage.setAlarm(deadline);
   }
 
-  async alarm() {
+  // 行程删除或到期后，全站计数里「最近用过公共额度的行程」也去掉它
+  async forget(id) {
+    try { await this.env.USAGE.get(this.env.USAGE.idFromName('global')).fetch(internal('/trip-forget', { id })); }
+    catch (err) { console.error('通知全站计数失败', err); }
+  }
+
+  alarm() { return this.exclusive(() => this.expire()); }
+
+  async expire() {
     const meta = await this.storage.get('meta');
     const state = await this.storage.get('state');
     if (!meta || !state) return;
@@ -818,6 +904,7 @@ export class ConfigRoom {
     if (meta.shareId) await this.env.DATA.delete(`page:${meta.shareId}`);
     this.broadcast({ type: 'deleted' });
     await this.storage.deleteAll();
+    await this.forget(meta.id);
   }
 
   async read(meta) {
@@ -833,7 +920,8 @@ export class ConfigRoom {
   }
 
   async save({ config, base_version: base, client_id: clientId, author = '', note = '' }) {
-    if (!config || typeof config !== 'object') return json({ error: '配置格式不对' }, 400);
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return json({ error: '配置格式不对' }, 400);
+    if (new TextEncoder().encode(JSON.stringify(config)).length > MAX_CONFIG_BYTES) return json({ error: '配置太大' }, 413);
     const state = await this.storage.get('state');
     if (base !== undefined && base !== state.version) {
       // 别人先保存了：把最新的给回去，由浏览器合并后再存
@@ -914,6 +1002,7 @@ export class ConfigRoom {
 
   async connect(request) {
     if (request.headers.get('upgrade') !== 'websocket') return json({ error: '需要 WebSocket 连接' }, 426);
+    if (this.ctx.getWebSockets().length >= MAX_SOCKETS_PER_TRIP) return json({ error: '这个行程同时打开的人太多了' }, 429);
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({});
@@ -922,6 +1011,7 @@ export class ConfigRoom {
   }
 
   webSocketMessage(ws, message) {
+    if (typeof message !== 'string' || message.length > MAX_WS_MESSAGE) return;
     let msg;
     try { msg = JSON.parse(message); } catch { return; }
     const me = ws.deserializeAttachment() || {};
@@ -962,7 +1052,16 @@ function bumpName(map, name) {
 // ---------- 全站计数：新建行程的频率、站长 Key 的用量、邀请码、管理会话和应急开关 ----------
 
 export class Usage {
-  constructor(ctx) { this.ctx = ctx; }
+  constructor(ctx, env = {}) { this.ctx = ctx; this.env = env; }
+
+  // 应急开关：管理页存的值，加上环境变量强制打开的（FORCE_PUBLIC_PAUSED、FORCE_CREATION_PAUSED 设为 1）。
+  // 环境变量不依赖管理页登录：管理页登不进去时（比如被人试错锁住）也能在 Cloudflare 后台或用 wrangler 打开
+  async flagsOf() {
+    const flags = { ...((await this.storage.get('flags')) || {}) };
+    const forced = { publicPaused: this.env.FORCE_PUBLIC_PAUSED === '1', creationPaused: this.env.FORCE_CREATION_PAUSED === '1' };
+    for (const [k, v] of Object.entries(forced)) if (v) flags[k] = true;
+    return { flags, forced };
+  }
 
   get storage() { return this.ctx.storage; }
 
@@ -998,8 +1097,13 @@ export class Usage {
     const path = new URL(request.url).pathname;
     const body = await request.json();
     const today = beijingDay();
+    if (path === '/create-refund') { // 没建成（Key 不对、邀请码不对）：退还全站名额
+      const saved = (await this.storage.get('create')) || {};
+      if (saved.day === today && saved.total > 0) { saved.total -= 1; await this.storage.put('create', saved); }
+      return json({ ok: true });
+    }
     if (path === '/create' || path === '/create-check') {
-      const flags = (await this.storage.get('flags')) || {};
+      const { flags } = await this.flagsOf();
       if (flags.creationPaused && !body.admin) return json({ error: '站点暂停了新建行程', info: 'CREATION_PAUSED' }, 503);
       if (path === '/create-check') return json({ ok: true });
       const saved = (await this.storage.get('create')) || {};
@@ -1012,38 +1116,51 @@ export class Usage {
       return json({ ok: true });
     }
     if (path === '/share-attempt') {
+      // 每个来源每页每小时 SHARE_ATTEMPTS_PER_IP_PER_HOUR 次，每页各来源合计 SHARE_ATTEMPTS_PER_HOUR 次：
+      // 只按页计的话，知道链接的人故意试错就能让所有人这一小时都打不开
       const hour = Math.floor(Date.now() / 3600e3);
       const saved = (await this.storage.get('attempts')) || {};
-      const attempts = saved.hour === hour ? saved : { hour, counts: {} };
+      const attempts = saved.hour === hour && saved.byIp ? saved : { hour, counts: {}, byIp: {} };
+      const who = `${body.id}:${body.ip || ''}`;
       attempts.counts[body.id] = (attempts.counts[body.id] || 0) + 1;
+      attempts.byIp[who] = (attempts.byIp[who] || 0) + 1;
       await this.storage.put('attempts', attempts);
-      return attempts.counts[body.id] > SHARE_ATTEMPTS_PER_HOUR ? json({ error: 'too many' }, 429) : json({ ok: true });
+      const over = attempts.byIp[who] > SHARE_ATTEMPTS_PER_IP_PER_HOUR || attempts.counts[body.id] > SHARE_ATTEMPTS_PER_HOUR;
+      return over ? json({ error: 'too many' }, 429) : json({ ok: true });
+    }
+    if (path === '/trip-forget') {
+      const trips = (await this.storage.get('trips')) || [];
+      const left = trips.filter((t) => t.id !== body.id);
+      if (left.length !== trips.length) await this.storage.put('trips', left);
+      return json({ ok: true });
     }
     if (path === '/hit') return this.hit(body, today);
     if (path === '/owner-take') return this.ownerTake(body, today);
     if (path === '/public-status') return this.publicStatus(body, today);
     // ---- 管理会话 ----
-    if (path === '/admin-gate') { // 登录前检查：试错次数超了就直接拒绝，连口令对不对都不判断
-      const now = Date.now();
-      const fails = (await this.storage.get('adminFails')) || { ips: {}, all: [] };
-      const recent = (list, ms) => (list || []).filter((t) => now - t < ms);
-      if (recent(fails.ips[body.ip], ADMIN_IP_WINDOW_MS).length >= ADMIN_FAILS_PER_IP) return json({ error: '登录试错太多了，请 15 分钟后再试' }, 429);
-      if (recent(fails.all, ADMIN_GLOBAL_WINDOW_MS).length >= ADMIN_FAILS_GLOBAL) return json({ error: '站点登录试错太多了，请一小时后再试' }, 429);
-      return json({ ok: true });
-    }
-    if (path === '/admin-fail') {
+    if (path === '/admin-attempt') {
+      // 登录前：试错超了就直接拒绝；没超就先记一次尝试（检查和记录在同一次调用里，并发也不会多放行），口令对了再在 /admin-login 退还
       const now = Date.now();
       const fails = (await this.storage.get('adminFails')) || { ips: {}, all: [] };
       for (const [ip, list] of Object.entries(fails.ips)) {
         const recent = list.filter((t) => now - t < ADMIN_IP_WINDOW_MS);
         if (recent.length) fails.ips[ip] = recent; else delete fails.ips[ip];
       }
+      fails.all = fails.all.filter((t) => now - t < ADMIN_GLOBAL_WINDOW_MS);
+      if ((fails.ips[body.ip] || []).length >= ADMIN_FAILS_PER_IP) return json({ error: '登录试错太多了，请 15 分钟后再试' }, 429);
+      if (fails.all.length >= ADMIN_FAILS_GLOBAL) return json({ error: '站点登录试错太多了，请一小时后再试；急需停用公共额度时，见管理页应急手册里的环境变量开关' }, 429);
       fails.ips[body.ip] = [...(fails.ips[body.ip] || []), now];
-      fails.all = [...fails.all.filter((t) => now - t < ADMIN_GLOBAL_WINDOW_MS), now];
+      fails.all.push(now);
       await this.storage.put('adminFails', fails);
       return json({ ok: true });
     }
     if (path === '/admin-login') {
+      const fails = (await this.storage.get('adminFails')) || { ips: {}, all: [] };
+      if (fails.ips[body.ip]?.length) { // 口令对了：退还刚才预先记下的那次尝试
+        fails.ips[body.ip].pop();
+        fails.all.pop();
+        await this.storage.put('adminFails', fails);
+      }
       const sessions = (await this.storage.get('admin')) || {};
       for (const [hash, until] of Object.entries(sessions)) if (until < Date.now()) delete sessions[hash];
       sessions[body.hash] = body.expiresAt;
@@ -1143,7 +1260,7 @@ export class Usage {
       return json({
         ownerUsedToday: used.lbs + used.search, ownerLimit: body.ownerLimit,
         createdToday: create.day === today ? create.total : 0, invites, trips,
-        flags: (await this.storage.get('flags')) || {}, ops: (await this.storage.get('ops')) || [],
+        ...(await this.flagsOf()), ops: (await this.storage.get('ops')) || [], // flags 含环境变量强制的；forced 标出哪些是环境变量强制的
         quota: { today: used, month, budgets: body.budgets, days },
         traffic: await this.traffic(today),
       });
@@ -1200,7 +1317,7 @@ export class Usage {
 
   // 站长 Key 按类别领取调用次数。顺序：应急开关 → 行程是否被停用 → 邀请码 → 八成预留 → 每日总上限和每月预算
   async ownerTake(body, today) {
-    const flags = (await this.storage.get('flags')) || {};
+    const { flags } = await this.flagsOf();
     const daily = await this.loadDaily(today);
     const { today: used, month } = this.usageOf(daily, today);
     const total = used.lbs + used.search;
@@ -1256,7 +1373,7 @@ export class Usage {
 
   // 公开状态：粗粒度的百分比，不含具体次数、行程、邀请码
   async publicStatus({ ownerLimit, budgets }, today) {
-    const flags = (await this.storage.get('flags')) || {};
+    const { flags } = await this.flagsOf();
     const { today: used, month } = this.usageOf(await this.loadDaily(today), today);
     const total = used.lbs + used.search;
     const pct = (n, of) => Math.min(100, Math.round((100 * n) / of));
