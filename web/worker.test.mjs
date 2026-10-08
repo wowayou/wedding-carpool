@@ -102,6 +102,7 @@ async function newTrip(body = {}) {
   return { ...trip, cookie: cookie.split(';')[0], base: `/api/t/${trip.id}` };
 }
 
+const roomOf2 = (id) => env.ROOM.get(env.ROOM.idFromName(id));
 const save = (t, body) => call(`${t.base}/config`, { method: 'POST', cookie: t.cookie, body });
 
 test('新建行程：口令、自带 Key、什么都不填', async () => {
@@ -216,6 +217,65 @@ test('配额按接口类别分别停：搜索配额用完不影响测距和路�
     body: { requests: [{ path: '/v5/place/text', query: 'q=6' }, { path: '/v3/distance', query: 'q=7' }] } })).json();
   assert.deepEqual(again.results.map((r) => r.info), ['DAILY_QUERY_OVER_LIMIT', 'OK']);
   assert.deepEqual(upstream.map((u) => new URL(u).pathname), ['/v3/distance']);
+});
+
+test('安全（审计 S-1/S-2/S-3）：行程实例的内部接口不能从外面到达', async () => {
+  const t = await newTrip();
+  const shared = await call(`${t.base}/page`, { method: 'POST', cookie: t.cookie, body: { html: '<!doctype html>x' } });
+  assert.equal(shared.status, 200);
+  const before = JSON.stringify(await rooms.get(t.id).storage.get('meta'));
+  const probes = [
+    ['POST', '/init'], ['GET', '/init'], ['POST', '/amap-take'], ['POST', '/set-key'], ['POST', '/published'], ['GET', '/published'],
+    ['POST', '/rotate'], ['POST', '/auth'], ['GET', '/share'], ['GET', '/edit-code'], ['GET', '/delete'], ['GET', '/rotate-key'],
+    ['GET', '/page'], ['POST', '/nothing'], ['DELETE', '/config'],
+  ];
+  for (const [method, path] of probes) {
+    const res = await call(`${t.base}${path}`, { method, cookie: t.cookie, body: method === 'GET' ? undefined : { n: 0, mode: 'x', amapKey: OWN_KEY } });
+    assert.equal(res.status, 404, `${method} ${path} 应该 404`);
+    assert.doesNotMatch(await res.text(), /[0-9a-f]{32}/, `${method} ${path} 不能返回 Key`);
+  }
+  assert.equal(JSON.stringify(await rooms.get(t.id).storage.get('meta')), before, '行程元数据不能被改动');
+  assert.ok(env.DATA.kv.has(`page:${(await rooms.get(t.id).storage.get('meta')).shareId}`), '方案页还在（GET /delete 没有删行程）');
+  // 客户端冒充内部请求头也没用
+  const spoof = await call(`${t.base}/amap-take`, { method: 'POST', cookie: t.cookie, body: { n: 0 } });
+  assert.equal(spoof.status, 404);
+});
+
+test('安全（审计 S-1）：不能用任意 Cookie 在空 id 上自己初始化行程', async () => {
+  const id = 'abcdefghjk';
+  const res = await call(`/api/t/${id}/init`, {
+    method: 'POST', cookie: `tk_${id}=x`,
+    body: { id, name: 'x', mode: 'bogus', tripLimit: 1e9, keyHash: 'a'.repeat(64), amapKey: null },
+  });
+  assert.equal(res.status, 404);
+  assert.equal(await rooms.get(id)?.storage.get('meta'), undefined);
+});
+
+test('安全：行程实例的内部接口必须带内部标记；init 校验参数', async () => {
+  const t = await newTrip();
+  const room = rooms.get(t.id);
+  const bare = await room.fetch(new Request('https://internal/amap-take', { method: 'POST', headers: { 'x-trip-key': t.key }, body: '{"n":0}' }));
+  assert.equal(bare.status, 404);
+  const init = (body) => roomOf2(body.id).fetch(new Request('https://internal/init', { method: 'POST', headers: { 'x-carpool-internal': '1' }, body: JSON.stringify(body) }));
+  const ok = { id: 'kmnpqrstuv', name: 'x', mode: 'owner', amapKey: null, keyHash: 'b'.repeat(64), invite: null, tripLimit: null };
+  for (const bad of [{ mode: 'bogus' }, { mode: 'own' }, { keyHash: 'nothex' }, { tripLimit: 1e9 }, { tripLimit: -1 }, { amapKey: OWN_KEY }]) {
+    assert.equal((await init({ ...ok, ...bad })).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await init(ok)).status, 200);
+});
+
+test('费用护栏：不是自带 Key 的行程一律走公共额度的全部护栏（模式字段被篡改也一样）', async () => {
+  const t = await newTrip();
+  const storage = rooms.get(t.id).storage;
+  const meta = await storage.get('meta');
+  meta.mode = 'bogus'; meta.tripLimit = 1e9;
+  await storage.put('meta', meta);
+  const usage = env.USAGE.get();
+  await usage.fetch(new Request('https://internal/flags', { method: 'POST', body: JSON.stringify({ publicPaused: true }) }));
+  upstream = [];
+  const res = await (await call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie, body: { requests: [{ path: '/v3/distance', query: 'a=1' }] } })).json();
+  assert.equal(res.results[0].info, 'PUBLIC_PAUSED');
+  assert.equal(upstream.length, 0, '暂停时不能有任何对外请求');
 });
 
 test('批量里被限流的等一下再试一次', async () => {

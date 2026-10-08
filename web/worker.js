@@ -130,11 +130,21 @@ const limitOf = (env, name, fallback) => Number(env[name]) || fallback;
 const roomOf = (env, id) => env.ROOM.get(env.ROOM.idFromName(id));
 const usageOf = (env) => env.USAGE.get(env.USAGE.idFromName('global'));
 // auth：{ key, code }，编辑密钥和编辑口令哈希（来自 Cookie），由 Worker 填写，不能让客户端自己带
+// INTERNAL_HEADER 标记「Worker 自己发起的内部请求」：转发客户端请求时会删掉同名请求头，行程实例的内部接口没有它一律拒绝
+const INTERNAL_HEADER = 'x-carpool-internal';
 const internal = (path, body, auth) => new Request(`https://internal${path}`, {
   method: body === undefined ? 'GET' : 'POST',
-  headers: auth === undefined ? {} : { 'x-trip-key': auth.key, 'x-trip-code': auth.code || '' },
+  headers: { [INTERNAL_HEADER]: '1', ...(auth === undefined ? {} : { 'x-trip-key': auth.key, 'x-trip-code': auth.code || '' }) },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
+// 客户端请求能直接转给行程实例的路径（其余内部接口只能由 Worker 自己调用）：方法 + 路径
+const FORWARDABLE = [
+  ['GET', /^\/config$/], ['POST', /^\/config$/], ['GET', /^\/sync$/],
+  ['GET', /^\/history$/], ['GET', /^\/history\/\d+$/], ['POST', /^\/restore$/], ['POST', /^\/rename$/],
+];
+// 行程实例里只接受内部请求的路径
+const ROOM_INTERNAL_ONLY = new Set(['/init', '/auth', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/set-key', '/delete']);
+const TRIP_MODES = new Set(['owner', 'own']);
 
 // ---------- 流量统计：写入 Usage 实例，不拖慢响应 ----------
 
@@ -357,11 +367,13 @@ async function tripApi(request, env, url, id, sub, ctx) {
     }
     return res;
   }
-  // 其余（配置、同步、历史、改名）交给行程实例
+  // 其余只有白名单里的（配置、同步、历史、恢复、改名）交给行程实例；init、amap-take 这类内部接口不能从外面到达
+  if (!FORWARDABLE.some(([method, re]) => method === request.method && re.test(sub))) return json({ error: 'not found' }, 404);
   if (request.method === 'POST' && Number(request.headers.get('content-length') || 0) > MAX_CONFIG_BYTES) {
     return json({ error: '内容太大' }, 413);
   }
   const forward = new Request(`https://internal${sub}${url.search}`, request);
+  forward.headers.delete(INTERNAL_HEADER); // 客户端不能冒充内部请求
   forward.headers.set('x-trip-key', auth.key);
   forward.headers.set('x-trip-code', auth.code); // 总是覆盖，不接受客户端自己带的
   return room.fetch(forward);
@@ -586,7 +598,7 @@ async function tripAmap(request, env, url, room, auth, sub) {
   for (const i of misses) if (spent.has(quotaClass(items[i].path))) results[i] = blockedOf(i);
   for (const i of open.slice(tripGranted)) results[i] = tripLimitError;
   let todo = open.slice(0, tripGranted);
-  if (mode === 'owner' && todo.length) {
+  if (mode !== 'own' && todo.length) { // 不是自带 Key 的一律走公共额度的全部护栏（宁可拦错，不能放过）
     // 站长 Key：按类别向全站计数领取（每日总上限、每月预算、应急开关都在那边判断）
     const want = { lbs: 0, search: 0 };
     for (const i of todo) want[quotaClass(items[i].path)] += 1;
@@ -647,6 +659,7 @@ export class ConfigRoom {
   async fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
+    if (ROOM_INTERNAL_ONLY.has(path) && request.headers.get(INTERNAL_HEADER) !== '1') return json({ error: 'not found' }, 404);
     if (path === '/init') return this.init(await request.json());
     const meta = await this.storage.get('meta');
     if (!meta) { // 行程已删除或到期：和「密钥不对」分开，让编辑页能提示。行程 id 是 10 位随机串，说出「存在与否」不会帮人猜到什么
@@ -755,6 +768,10 @@ export class ConfigRoom {
 
   async init({ id, name, mode, amapKey, keyHash, invite = null, tripLimit = null }) {
     if (await this.storage.get('meta')) return json({ error: '行程已存在' }, 409);
+    const limitOk = tripLimit === null || (Number.isInteger(tripLimit) && tripLimit > 0 && tripLimit <= 100000);
+    if (!TRIP_MODES.has(mode) || !/^[0-9a-f]{64}$/.test(String(keyHash)) || !limitOk || (mode === 'own') !== Boolean(amapKey)) {
+      return json({ error: '行程参数不对' }, 400);
+    }
     const now = Date.now();
     const meta = { id, name, mode, amapKey, keyHash, invite, tripLimit, createdAt: now, pageAt: null, shareId: randomId(10), shareCode: null };
     await this.storage.put('meta', meta);
