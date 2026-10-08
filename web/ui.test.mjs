@@ -126,3 +126,66 @@ test('成员的出发地下面有提示，目的地没有', () => {
   assert.match(ui, /placeField\('出发地', base, 'from', [^\n]*'不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。'\)/);
   assert.match(ui, /placeField\('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准'\)/);
 });
+
+// ---------- 试玩模式（/try）：示例行程，不保存、不联网查地点 ----------
+test('试玩模式：只在在线站点的 /try 或 /try.html 启用，加载示例文件而不是行程接口', () => {
+  const code = scripts(ui).at(-1);
+  assert.match(code, /mode === 'online' && \/\^\\\/try\(\\\.html\)\?\$\/\.test\(location\.pathname\)\) mode = 'try'/);
+  const load = /async function loadTryTrip\(\) \{[\s\S]*?\n\}\n/.exec(code);
+  assert.ok(load);
+  assert.match(load[0], /api\('\/try-trip\.json'\)/);
+  assert.doesNotMatch(load[0], /API|\/api\/t\//);
+  assert.match(code, /mode === 'try' \? await loadTryTrip\(\)/);
+  // 试玩不连实时同步，也不保存
+  assert.match(code, /function connectSync\(\) \{\n  if \(mode !== 'online'/);
+  assert.match(code, /async function save\(quiet\) \{\n  if \(mode === 'try'\) return;/);
+  assert.match(code, /args: mode === 'try' \? \{ try: true \}/);
+});
+
+test('试玩模式：隐藏发布按钮，只留「看示例方案页」', () => {
+  assert.match(ui, /body\.try \.local-only, body\.try \.online-only, body\.try #sharebtn \{ display: none; \}/);
+  assert.match(ui, /id="demoLink" href="\/demo"/);
+  assert.match(ui, /\$\('#sharebtn'\)\.hidden = mode === 'try' \|\| !result\.plans\.length;/);
+});
+
+function loadWith(names, ctx) {
+  const code = scripts(ui).at(-1);
+  const pick = names.map((n) => {
+    const m = new RegExp(`function ${n}\\b[\\s\\S]*?\\n\\}\\n`).exec(code); // 只取 function，避免和同名的局部 const 混淆
+    assert.ok(m, `找不到 ${n}`);
+    return m[0];
+  }).join('\n');
+  return vm.runInNewContext(`${pick}\n({ ${names.join(', ')} })`, ctx);
+}
+
+test('试玩模式：地址只读、没有搜索按钮和清除坐标，车站只能删除', () => {
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ctx = (mode) => ({ mode, esc, getPath: (p) => (p.endsWith('location') ? '118.0,30.0' : '<示例>') });
+  const names = ['field', 'locLine', 'placeField', 'stationRow'];
+  const on = loadWith(names, ctx('try'));
+  const place = on.placeField('出发地', 'people.0', 'from', '', '提示');
+  assert.match(place, /<input[^>]*readonly/);
+  assert.doesNotMatch(place, /data-search|data-clearloc|data-cands/);
+  assert.match(place, /&lt;示例&gt;/); // 文字照常转义
+  const row = on.stationRow({ name: '黄山北站', city: '黄山市', location: '118.1,29.8' }, 0);
+  assert.doesNotMatch(row, /data-search|data-clearloc/);
+  assert.match(row, /data-del="stations\.0"/);
+  assert.equal((row.match(/readonly/g) || []).length, 2);
+  const off = loadWith(names, ctx('online'));
+  assert.match(off.placeField('出发地', 'people.0', 'from', ''), /data-search="people\.0"/);
+  assert.match(off.stationRow({ name: '黄山北站', city: '', location: '' }, 0), /data-search="stations\.0"/);
+});
+
+test('试玩模式：不能加成员和车站、不能推荐车站，横幅有恢复示例和新建行程', () => {
+  const code = scripts(ui).at(-1);
+  for (const guard of ['function addItem(kind) {\n  if (mode === \'try\') return;', 'async function suggestStations() {\n  if (mode === \'try\') return;', 'async function importConfig(file) {\n  if (mode === \'try\') return;']) {
+    assert.ok(code.includes(guard), `缺少试玩守卫：${guard.split('\n')[0]}`);
+  }
+  const form = /function renderForm\(\) \{[\s\S]*?\n\}\n/.exec(code)[0];
+  assert.match(form, /\$\{isTry \? '' : ' <span class="adders">/g); // 成员和车站的“添加/推荐”按钮在试玩里不渲染
+  assert.match(form, /试玩模式：虚构的行程，行车时间按直线距离估算，不保存。想规划你们自己的出行，请新建行程（需要邀请码或高德 Key）。/);
+  assert.match(form, /data-try-reset>恢复示例<\/button>/);
+  assert.match(form, /href="\/#create">新建行程<\/a>/);
+  assert.match(code, /else if \(t\.dataset\.tryReset !== undefined\) resetTry\(\);/);
+  assert.doesNotMatch(code, /onclick="/); // 没有内联事件处理器
+});

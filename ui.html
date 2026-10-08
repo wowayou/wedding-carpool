@@ -18,6 +18,10 @@
   button { font: inherit; }
   .app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   .online-only { display: none; } body.online .online-only { display: revert; } body.online .local-only { display: none; }
+  /* 试玩模式（/try）：没有保存、历史、发布；只留「看示例方案页」 */
+  .try-only { display: none; } body.try .try-only { display: revert; } body.try .local-only, body.try .online-only, body.try #sharebtn { display: none; }
+  .try-banner { margin: var(--sp-3) var(--sp-4) 0; }
+  .try-banner .row { margin-top: var(--sp-2); }
 
   /* 精简页头：标志、行程名称、操作；第二行是同步状态、保留期、在线的人 */
   .ed-bar { flex-wrap: wrap; row-gap: 2px; padding: 8px var(--sp-4); min-height: 52px; flex: none; position: relative; z-index: 30; }
@@ -213,6 +217,7 @@
       <button class="c-btn c-btn--sm" id="menuBtn" title="分享、导入导出">更多</button>
       <button class="c-btn c-btn--sm local-only" id="save">保存</button>
       <button class="c-btn c-btn--sm" id="sharebtn" hidden>发布方案页</button>
+      <a class="c-btn c-btn--sm try-only" id="demoLink" href="/demo" target="_blank" rel="noopener">看示例方案页</a>
       <button class="c-btn c-btn--sm c-btn--primary" id="plan">计算方案</button>
     </div>
     <div class="ed-sub"><span><span id="status"></span> <button class="c-tag expiry" id="expiryChip" title="这个行程到期会自动删除，点开看说明" hidden></button></span><span class="peers" id="peers"></span></div>
@@ -319,7 +324,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
 const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 隐私模式 */ } } };
 
-let mode = 'local', API = '/api', tripId = null, trip = {};
+let mode = 'local', API = '/api', tripId = null, trip = {}; // mode：local 本地版；online 在线版；try 试玩（/try，示例数据，不保存、不调用高德）
 let cfg = null, result = null, resultHash = null, active = 0, dirty = false, map, planLayer, previewLayer, fitted = false;
 let peers = [];
 const candidates = {};
@@ -622,25 +627,33 @@ function merge3(base, mine, theirs, path = '', conflicts = null) {
 }
 
 // ---------- 表单 ----------
-function field(label, path, { type = 'text', placeholder = '', min = null } = {}) {
+function field(label, path, { type = 'text', placeholder = '', min = null, readonly = false } = {}) {
   return `<label class="f"><span>${esc(label)}</span><input class="c-input" data-bind="${path}" data-type="${type}"
-    type="${type === 'number' ? 'number' : 'text'}"${min !== null ? ` min="${min}"` : ''}${type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(getPath(path))}" placeholder="${esc(placeholder)}"></label>`;
+    type="${type === 'number' ? 'number' : 'text'}"${readonly ? ' readonly' : ''}${min !== null ? ` min="${min}"` : ''}${type === 'number' ? ' inputmode="decimal"' : ''} value="${esc(getPath(path))}" placeholder="${esc(placeholder)}"></label>`;
 }
 
 function locLine(base) {
   const loc = getPath(base + '.location');
+  if (mode === 'try') return loc ? `<div class="loc">示意坐标 ${esc(loc)}</div>` : ''; // 试玩不能改地点，也就没有「清除」
   return loc
     ? `<div class="loc">已定位 ${esc(loc)}${getPath(base + '.city') ? ' · ' + esc(getPath(base + '.city')) : ''} <button class="c-btn c-btn--link" data-clearloc="${base}">清除</button></div>`
     : `<div class="loc missing">还没定位：点「搜索」选一个；不选的话，计算时会按文字自动定位并记下来</div>`;
 }
 
 function placeField(label, base, textKey, placeholder, hint = '') {
+  if (mode === 'try') return `<div class="place">${field(label, `${base}.${textKey}`, { placeholder, readonly: true })}</div>${locLine(base)}`; // 试玩：地址只读，没有搜索
   return `<div class="place">${field(label, `${base}.${textKey}`, { placeholder })}
     <button class="c-btn c-btn--sm" data-search="${base}" data-text="${textKey}">搜索</button></div>
     ${hint ? `<div class="place-hint">${esc(hint)}</div>` : ''}${locLine(base)}<div class="cands" data-cands="${base}"></div>`;
 }
 
 function stationRow(s, i) {
+  if (mode === 'try') return `<div class="station">
+    <input class="c-input" data-station-name="${i}" data-old="${esc(s.name)}" value="${esc(s.name)}" aria-label="站名" readonly>
+    <input class="c-input" data-bind="stations.${i}.city" value="${esc(s.city)}" aria-label="城市" readonly>
+    <button class="c-btn c-btn--link is-danger" data-del="stations.${i}">删除</button>
+    ${s.location ? `<div class="loc">示意坐标 ${esc(s.location)}</div>` : ''}
+  </div>`;
   return `<div class="station">
     <input class="c-input" data-station-name="${i}" data-old="${esc(s.name)}" value="${esc(s.name)}" placeholder="站名，如 杭州东站" aria-label="站名">
     <input class="c-input" data-bind="stations.${i}.city" value="${esc(s.city)}" placeholder="城市" aria-label="城市">
@@ -698,7 +711,7 @@ function personCard(p, i) {
           <input class="c-input" data-train="${i}" data-station="${esc(s.name)}" value="${esc(trains[s.name])}" placeholder="车次 发车→到站" aria-label="${esc(s.name)}车次">
           <input class="c-input" type="number" min="0" inputmode="numeric" data-rail="${i}" data-station="${esc(s.name)}" value="${esc(rails[s.name])}" placeholder="分钟" aria-label="${esc(s.name)}用时（分钟）">
           ${railLinkHtml(p, i, s.name || '', false)}</div>`).join('') : '<div class="muted">先在上面添加候选车站</div>'}
-      ${Object.keys(rails).length || Object.keys(trains).length ? '' : '<div class="hint">全部留空时改用高德估算：不含火车换乘，可能很不准。</div>'}
+      ${Object.keys(rails).length || Object.keys(trains).length ? '' : `<div class="hint">${mode === 'try' ? `全部留空时，每个站都按默认的 ${DEFAULTS_STATION_COST} 分钟算。` : '全部留空时改用高德估算：不含火车换乘，可能很不准。'}</div>`}
     </div>${backPart}`;
   const driverPart = `<div class="row">${field('空座', base + '.car_seats', { type: 'number', min: 1 })}
     ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', min: 0, placeholder: detourHint() })}</div>
@@ -718,6 +731,7 @@ function personCard(p, i) {
 function railLinkHtml(p, i, stationName, back) {
   return `<a class="c-btn c-btn--sm" data-link12306="${i}" data-station="${esc(stationName)}"${back ? ' data-back' : ''} target="_blank" rel="noopener">查</a>`;
 }
+const DEFAULTS_STATION_COST = 60; // 与 carpool.DEFAULTS['station_cost_min'] 一致：查不到用时的站按这个估
 const detourHint = () => '默认 ' + (cfg.options?.max_detour_min ?? 30);
 const returnDatePlaceholder = () => cfg.options?.travel_date || 'YYYY-MM-DD';
 
@@ -752,16 +766,18 @@ function refreshDerived() {
 function renderForm() {
   cfg.venue ??= {}; cfg.options ??= {}; cfg.stations ??= []; cfg.people ??= [];
   const left = trip.expiresAt ? Math.ceil((trip.expiresAt - Date.now()) / 864e5) : Infinity;
-  $('#form').innerHTML = `${left <= 7 ? `<div class="c-alert c-alert--warn" style="margin:var(--sp-3) var(--sp-4) 0"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>这个行程 ${left <= 0 ? '即将' : `${left} 天后`}自动删除（出行日期过后 60 天、或 180 天没人编辑）。需要留存的话，在「更多」里导出配置。</div></div>` : ''}
+  const isTry = mode === 'try';
+  $('#form').innerHTML = `${isTry ? `<div class="c-alert c-alert--info try-banner" id="tryBanner"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>试玩模式：虚构的行程，行车时间按直线距离估算，不保存。想规划你们自己的出行，请新建行程（需要邀请码或高德 Key）。<div class="row"><button class="c-btn c-btn--sm" data-try-reset>恢复示例</button><a class="c-btn c-btn--sm c-btn--primary" href="/#create">新建行程</a></div></div></div>` : ''}${left <= 7 ? `<div class="c-alert c-alert--warn" style="margin:var(--sp-3) var(--sp-4) 0"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>这个行程 ${left <= 0 ? '即将' : `${left} 天后`}自动删除（出行日期过后 60 天、或 180 天没人编辑）。需要留存的话，在「更多」里导出配置。</div></div>` : ''}
     <section id="sec-venue"><h2>① 目的地</h2>
       ${field('名称', 'venue.name', { placeholder: '如 某某大酒店' })}
       ${placeField('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准')}
     </section>
-    <section id="sec-people"><h2>② 成员 <span class="adders"><button class="c-btn c-btn--link" data-add="driver">+ 开车的</button><button class="c-btn c-btn--link" data-add="rider">+ 不开车的</button></span></h2>
+    <section id="sec-people"><h2>② 成员${isTry ? '' : ' <span class="adders"><button class="c-btn c-btn--link" data-add="driver">+ 开车的</button><button class="c-btn c-btn--link" data-add="rider">+ 不开车的</button></span>'}</h2>
       ${cfg.people.map(personCard).join('') || '<div class="muted">先加几位成员：开车的填空座，不开车的之后填车次。</div>'}
     </section>
-    <section id="sec-stations"><h2>③ 候选车站 <span class="adders"><button class="c-btn c-btn--link" data-suggest>推荐车站</button><button class="c-btn c-btn--link" data-add="station">+ 手动添加</button></span></h2>
-      ${cfg.stations.map(stationRow).join('') || '<div class="muted">点「推荐车站」：在目的地周边、车主出发地附近和沿途找火车站，按顺路程度排好。</div>'}
+    <section id="sec-stations"><h2>③ 候选车站${isTry ? '' : ' <span class="adders"><button class="c-btn c-btn--link" data-suggest>推荐车站</button><button class="c-btn c-btn--link" data-add="station">+ 手动添加</button></span>'}</h2>
+      ${cfg.stations.map(stationRow).join('') || (isTry ? '<div class="muted">候选站都删光了：点上面的「恢复示例」。</div>' : '<div class="muted">点「推荐车站」：在目的地周边、车主出发地附近和沿途找火车站，按顺路程度排好。</div>')}
+      ${isTry ? '<div class="muted">试玩里的候选站是固定的，只能删除。自己的行程可以用「推荐车站」，在目的地周边和车主沿途找火车站，按顺路程度排好。</div>' : ''}
     </section>
     <section id="sec-return"><h2>④ 返程（可选）</h2>
       <label class="toggle"><input type="checkbox" data-return-toggle ${cfg.return?.enabled ? 'checked' : ''}> 也规划返程：散场后谁顺路把谁送到车站</label>
@@ -867,6 +883,7 @@ function applyResolved(list) {
 
 // ---------- 增删改 ----------
 function addItem(kind) {
+  if (mode === 'try') return;
   if (kind === 'station') cfg.stations.push({ name: '' });
   if (kind === 'driver') cfg.people.push({ name: '', from: '', car_seats: 3 });
   if (kind === 'rider') cfg.people.push({ name: '', from: '' });
@@ -877,7 +894,7 @@ function addItem(kind) {
 async function deleteItem(path) {
   const [list, idx] = path.split('.');
   const item = cfg[list][Number(idx)];
-  if (!await confirmDialog(`在线版可以在「历史」里找回。`, { title: `删除${list === 'people' ? '成员' : '车站'}「${item?.name || '未命名'}」？`, okText: '删除', danger: true })) return;
+  if (!await confirmDialog(mode === 'try' ? '点页面上方的「恢复示例」可以找回。' : `在线版可以在「历史」里找回。`, { title: `删除${list === 'people' ? '成员' : '车站'}「${item?.name || '未命名'}」？`, okText: '删除', danger: true })) return;
   cfg[list].splice(Number(idx), 1);
   if (list === 'stations') cfg.people.forEach((p) => ['rail_min', 'trains', 'return_trains'].forEach((k) => p[k] && delete p[k][item.name]));
   markDirty();
@@ -1037,8 +1054,7 @@ async function problemsDialog(list) {
 
 // ---------- 保存与同步 ----------
 function markDirty() {
-  dirty = true;
-  $('#save').textContent = '保存*';
+  if (mode !== 'try') { dirty = true; $('#save').textContent = '保存*'; } // 试玩不保存，也就没有「未保存的修改」
   if (mode === 'online') scheduleSync();
   renderSteps();
   updateStale();
@@ -1050,7 +1066,8 @@ let synced = null, version = null, syncTimer = null, syncing = null, socket = nu
 
 function setStatus() {
   const parts = [];
-  if (mode === 'local') parts.push(trip.file ? `本地 · ${trip.file}` : '本地');
+  if (mode === 'try') parts.push('试玩 · 改动不保存，刷新后回到示例');
+  else if (mode === 'local') parts.push(trip.file ? `本地 · ${trip.file}` : '本地');
   else if (!socket || socket.readyState !== 1) parts.push('连接断开，正在重连…改动会在恢复后保存');
   else if (lastError) parts.push(lastError);
   else if (syncing || syncTimer) parts.push('同步中…');
@@ -1109,6 +1126,7 @@ async function syncSave() {
 }
 
 async function save(quiet) {
+  if (mode === 'try') return;
   if (mode === 'online') {
     await syncSave();
     if (!quiet) toast('已同步');
@@ -1235,7 +1253,7 @@ function markPeers() {
 // ---------- 进度：长操作分阶段显示（在线版由 Pyodide 里的计算报告阶段，本地版只显示已用时间） ----------
 let progressState = null, progressTimer = null;
 function startProgress(title) {
-  progressState = { title, label: mode === 'online' ? '准备中' : '计算中', done: null, total: null, start: Date.now() };
+  progressState = { title, label: mode !== 'local' ? '准备中' : '计算中', done: null, total: null, start: Date.now() };
   $('#progress').hidden = false;
   clearInterval(progressTimer);
   progressTimer = setInterval(renderProgress, 1000);
@@ -1287,7 +1305,7 @@ function py(method, args) {
       if (out && /^计算环境出错/.test(out.error || '')) { pending.reject(Object.assign(new Error(out.error), { envFail: true })); resetPy(); return; }
       out && out.error ? pending.reject(new Error(out.error)) : pending.resolve(out);
     };
-    pyWorker.postMessage({ id: 0, method: 'init', args: { base: API } });
+    pyWorker.postMessage({ id: 0, method: 'init', args: mode === 'try' ? { try: true } : { base: API } }); // 试玩：计算环境用不联网的 TryAmap
   }
   return new Promise((resolve, reject) => {
     const id = ++pyCalls;
@@ -1297,21 +1315,21 @@ function py(method, args) {
 }
 
 const backend = {
-  plan: (config) => (mode === 'online' ? py('plan', { config }) : api('/api/plan', { config })),
+  plan: (config) => (mode !== 'local' ? py('plan', { config }) : api('/api/plan', { config })),
   search: (q, city, station) => {
-    if (mode === 'online') return py('search', { q, city, station });
+    if (mode !== 'local') return py('search', { q, city, station });
     const params = new URLSearchParams({ q });
     if (city) params.set('city', city);
     if (station) params.set('station', '1');
     return api('/api/search?' + params);
   },
   async suggest(config) {
-    if (mode !== 'online') return api('/api/suggest', { config });
+    if (mode === 'local') return api('/api/suggest', { config });
     const data = (await load12306()) || {};
     return py('suggest', { config, valid_names: Object.keys(data.stations || {}) });
   },
   async share(plan, backPlan) {
-    if (mode !== 'online') return api('/api/share', { plan, back_plan: backPlan });
+    if (mode === 'local') return api('/api/share', { plan, back_plan: backPlan });
     const { html } = await py('share', { plan, back_plan: backPlan, expires: trip.expiresAt || null }); // 方案页页脚写明自动删除日期
     return api(`${API}/page`, { html });
   },
@@ -1356,6 +1374,7 @@ async function reportError(action, e) {
 
 // ---------- 推荐车站 ----------
 async function suggestStations() {
+  if (mode === 'try') return;
   if (!cfg.people.some((p) => p.car_seats !== undefined) && !cfg.venue.location && !cfg.venue.address) {
     toast('先填目的地和开车的成员，推荐才有依据');
     return;
@@ -1461,7 +1480,7 @@ function renderTabs() {
 function renderResults(fit) {
   if (!result.back) { viewLeg = 'out'; activeBack = 0; }
   renderTabs();
-  $('#sharebtn').hidden = !result.plans.length;
+  $('#sharebtn').hidden = mode === 'try' || !result.plans.length;
   $('#warn').innerHTML = result.warnings.map((w) => `<div class="c-alert c-alert--warn"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>${esc(w)}</div></div>`).join('');
   $('#report').innerHTML = hasMarked ? marked.parse(result.report) : `<pre class="plain">${esc(result.report)}</pre>`; // marked 没加载出来：退化成纯文本
   $('#report').querySelectorAll('a').forEach((a) => { a.target = '_blank'; a.rel = 'noopener'; });
@@ -1677,8 +1696,9 @@ function openMenu() {
     <h3 class="sec">关于</h3>
     <p class="muted">这个工具是非商业的个人项目，免费、无广告。作者主页：<a href="https://eigentime.org/" target="_blank" rel="noopener">eigentime.org</a></p>
     <h3 class="sec">备份</h3>
-    <div class="row"><button class="c-btn" id="exportBtn">导出配置（JSON）</button><button class="c-btn" id="importBtn">导入配置</button></div>
-    <p class="muted">导入会替换现在的配置${mode === 'online' ? '，旧内容留在「历史」里' : ''}。</p>
+    ${mode === 'try' ? `<div class="row"><button class="c-btn" id="exportBtn">导出配置（JSON）</button></div>
+    <p class="muted">试玩里的内容不保存、不能导入。想规划自己的出行，<a href="/#create">新建行程</a>。</p>` : `<div class="row"><button class="c-btn" id="exportBtn">导出配置（JSON）</button><button class="c-btn" id="importBtn">导入配置</button></div>
+    <p class="muted">导入会替换现在的配置${mode === 'online' ? '，旧内容留在「历史」里' : ''}。</p>`}
     ${mode === 'online' ? `<p><a href="/">← 回首页（新建或切换行程）</a></p>
     <h3 class="sec" style="color:var(--danger)">删除行程</h3>
     <p class="muted">配置、历史版本和方案页都会删掉，所有人的编辑链接和方案页链接都会失效，不能恢复。</p>
@@ -1753,7 +1773,7 @@ function openMenu() {
       location.href = '/';
     };
   }
-  $('#importBtn').onclick = () => $('#importFile').click();
+  if ($('#importBtn')) $('#importBtn').onclick = () => $('#importFile').click();
   if ($('#renameBtn')) {
     $('#renameBtn').onclick = async () => {
       const { name } = await api(`${API}/rename`, { name: $('#tripName').value });
@@ -1775,6 +1795,7 @@ function exportConfig() {
 }
 
 async function importConfig(file) {
+  if (mode === 'try') return;
   try {
     const data = JSON.parse(await file.text());
     const next = data.config || data;
@@ -1811,7 +1832,7 @@ function renderExpiry() {
 }
 
 function renderTitle() {
-  const name = mode === 'online' ? trip.name || '未命名行程' : '拼车出行规划';
+  const name = mode === 'online' ? trip.name || '未命名行程' : mode === 'try' ? '试玩：拼车出行规划' : '拼车出行规划';
   $('#title').textContent = name;
   document.title = `${name} · 拼车出行规划`;
 }
@@ -1831,13 +1852,39 @@ function askName() {
   });
 }
 
+// ---------- 试玩：读 /try-trip.json（虚构行程），日期设成下一个周六和周日；恢复示例就是重新来一遍 ----------
+async function loadTryTrip() {
+  const { config } = await api('/try-trip.json');
+  const dow = bj(Date.now()).getUTCDay(); // 0 周日 … 6 周六，北京时间
+  const days = (6 - dow + 7) % 7 || 7; // 今天是周六也取下周六，保证日期还没过
+  config.options.travel_date = bjDate(Date.now() + days * 864e5);
+  if (config.return) config.return.date = bjDate(Date.now() + (days + 1) * 864e5);
+  return { config };
+}
+
+async function resetTry() {
+  const { config } = await loadTryTrip();
+  cfg = config;
+  synced = clone(cfg);
+  result = resultHash = null;
+  active = activeBack = 0;
+  viewLeg = 'out';
+  fitted = false;
+  $('#tabs').innerHTML = '';
+  $('#warn').innerHTML = '';
+  renderEmptyPlan();
+  updateStale();
+  renderForm();
+  toast('已恢复示例');
+}
+
 async function loadConfig(keepFocus) {
-  const data = await api(mode === 'online' ? `${API}/config` : '/api/config');
+  const data = mode === 'try' ? await loadTryTrip() : await api(mode === 'online' ? `${API}/config` : '/api/config');
   cfg = data.config;
   synced = clone(cfg);
   version = data.version ?? null;
   if (mode === 'online') Object.assign(trip, { name: data.name, mode: data.mode, share: data.share, usage: data.usage, expiresAt: data.expiresAt, editCode: data.editCode });
-  else trip.file = data.file;
+  else if (mode === 'local') trip.file = data.file;
   renderTitle();
   renderExpiry();
   if (keepFocus) rerenderKeepingFocus(); else renderForm();
@@ -1905,6 +1952,7 @@ $('#form').addEventListener('click', (e) => {
   else if (t.dataset.add) addItem(t.dataset.add);
   else if (t.dataset.del) deleteItem(t.dataset.del);
   else if (t.dataset.suggest !== undefined) suggestStations();
+  else if (t.dataset.tryReset !== undefined) resetTry();
 });
 
 $('#steps').addEventListener('click', (e) => {
@@ -2001,7 +2049,9 @@ window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); 
   renderEmptyPlan();
   load12306().then((data) => { rail12306.data = data; if (cfg) refreshDerived(); });
   mode = (await api('/api/env').catch(() => ({ mode: 'local' }))).mode;
+  if (mode === 'online' && /^\/try(\.html)?$/.test(location.pathname)) mode = 'try'; // 在线站点的 /try：示例行程，不连行程接口
   document.body.classList.toggle('online', mode === 'online');
+  document.body.classList.toggle('try', mode === 'try');
   $('#sharebtn').textContent = mode === 'online' ? '发布方案页' : '生成方案页';
   try {
     if (mode === 'online') {

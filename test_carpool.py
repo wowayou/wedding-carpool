@@ -995,6 +995,65 @@ class TryAmapTest(unittest.TestCase):
         self.assertIn("试玩模式：地点和车次都是虚构的示意", report)
         self.assertIn("试玩里的车次和时刻都是示意", report)
 
+    def test_every_edit_the_page_allows_still_plans(self):
+        """试玩页允许的改法（谁开车、空座、删站、开关返程、删成员）逐一试：能算出方案，或给出正常的提示，不能崩。"""
+        import copy
+        import itertools
+        base = json.loads((Path(__file__).with_name("web") / "try-trip.json").read_text(encoding="utf-8"))["config"]
+        base["options"].update(travel_date="2026-10-17")
+        base["return"]["date"] = "2026-10-18"
+        self.call("init", **{"try": True})
+        names = [p["name"] for p in base["people"]]
+
+        def check(cfg, label):
+            out = self.call("plan", config=cfg)
+            if "error" in out:  # 提示要是人话，不是 Python 的异常
+                self.assertNotRegex(out["error"], r"^\w*(Error|Exception)\b", label)
+                self.assertNotIn("Traceback", out["error"], label)
+            else:
+                self.assertIn("## 说明", out["report"], label)
+                self.assertNotIn("来自高德", out["report"], label)
+            return out
+
+        for drives in itertools.product([False, True], repeat=len(names)):  # 谁开车：2^4 种
+            cfg = copy.deepcopy(base)
+            for p, d in zip(cfg["people"], drives):
+                if d:  # 与页面的 toggleCar 一致：开车 → 空座 3，不再有同行人数和返程车次
+                    p.update(car_seats=3)
+                    for k in ("party", "return_trains"):
+                        p.pop(k, None)
+                else:
+                    p.pop("car_seats", None)
+                    p.pop("max_detour_min", None)
+            check(cfg, f"开车 {drives}")
+        for seats in (1, 2, 5):  # 改空座
+            cfg = copy.deepcopy(base)
+            for p in cfg["people"]:
+                if "car_seats" in p:
+                    p["car_seats"] = seats
+            check(cfg, f"空座 {seats}")
+        for i in range(len(base["stations"])):  # 删站（同时清掉乘客对这个站的车次）
+            cfg = copy.deepcopy(base)
+            gone = cfg["stations"].pop(i)["name"]
+            for p in cfg["people"]:
+                for k in ("trains", "return_trains", "rail_min"):
+                    p.get(k, {}).pop(gone, None)
+            check(cfg, f"删站 {gone}")
+        cfg = copy.deepcopy(base)
+        cfg["stations"] = []  # 站删光
+        check(cfg, "站删光")
+        for enabled in (True, False):  # 开关返程
+            cfg = copy.deepcopy(base)
+            cfg["return"]["enabled"] = enabled
+            out = check(cfg, f"返程 {enabled}")
+            self.assertEqual(bool(out.get("back")), enabled)
+        for i in range(len(names)):  # 删成员
+            cfg = copy.deepcopy(base)
+            del cfg["people"][i]
+            check(cfg, f"删成员 {names[i]}")
+        out = check(copy.deepcopy(base), "示例原样")
+        self.assertGreater(out["plans"][0]["carried"], 0)  # 初始示例本身要能搭上人
+
     def test_real_trip_report_unchanged(self):
         browser.amap = FakeAmap()
         out = self.call("plan", config=self.cfg)
