@@ -69,6 +69,10 @@ for (const [name, opts] of Object.entries(PAGES)) {
   const html = readFileSync(file, 'utf8');
   const csp = buildCsp(html, opts);
   if (/'unsafe-(inline|eval)'/.test(csp.split('; ').find((d) => d.startsWith('script-src ')))) throw new Error(`${name}：script-src 不能放开 unsafe-inline/eval`);
+  // 隐私页说本站不用统计脚本、Cloudflare 自动注入的统计脚本会被拦下：脚本只能来自本站、cdnjs 和内嵌脚本的哈希
+  const scriptSrc = csp.split('; ').find((d) => d.startsWith('script-src ')).split(' ').slice(1);
+  const other = scriptSrc.filter((s) => !["'self'", "'wasm-unsafe-eval'", "'none'", CDNJS].includes(s) && !s.startsWith("'sha256-"));
+  if (other.length) throw new Error(`${name}：script-src 只能放行本站、cdnjs 和内嵌脚本的哈希，多了 ${other.join(' ')}`);
   const charset = /<meta\s+charset=[^>]*>/i.exec(html);
   if (!charset) throw new Error(`${name} 缺少 <meta charset>`);
   const at = charset.index + charset[0].length;

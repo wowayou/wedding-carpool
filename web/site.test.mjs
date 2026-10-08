@@ -42,6 +42,14 @@ test('官方构建：可收录页面没有 noindex，有 sitemap 和 llms，robo
   } finally { rmSync(b.dir, { recursive: true, force: true }); }
 });
 
+// 静态页面的 CSP 在构建时（web/build.mjs）检查：script-src 只能是本站、cdnjs 和内嵌脚本的哈希
+test('方案页的 CSP 不放行第三方统计脚本（隐私页写了 Cloudflare 自动注入的会被拦下）', () => {
+  const worker = readFileSync('web/worker.js', 'utf8');
+  const share = worker.slice(worker.indexOf('const SHARE_CSP'), worker.indexOf('];', worker.indexOf('const SHARE_CSP')));
+  assert.match(share, /"script-src 'unsafe-inline' https:\/\/cdnjs\.cloudflare\.com"/);
+  assert.doesNotMatch(worker, /cloudflareinsights/);
+});
+
 test('自部署（换了域名、没设 SITE_INDEXABLE）：全部 noindex、robots 全禁、没有 sitemap 和 llms', () => {
   const b = build({ SITE_ORIGIN: 'https://example.com/' }); // 末尾的斜杠会被去掉
   try {
