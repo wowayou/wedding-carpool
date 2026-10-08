@@ -353,6 +353,44 @@ async function api(path, body) {
   return data;
 }
 
+// ---------- 整页遮罩的焦点管理：取名、编辑口令、打不开、已删除、额度 ----------
+// 打开：记住原来的焦点，把焦点放到第一个输入框或主按钮，背景（主区域、侧边面板、冲突提示）设 inert，Tab 键只在遮罩里循环。
+// 关闭：恢复 inert，焦点还给原来的元素。只有额度遮罩可以关闭，支持 Esc；取名和口令必须完成，不支持 Esc。
+const OVERLAY_IDS = ['nameBox', 'codeBox', 'denied', 'gone', 'quotaBox'];
+const openOverlays = () => OVERLAY_IDS.map((id) => $(`#${id}`)).filter((el) => !el.hidden);
+let overlayReturn = null;
+function syncInert() {
+  const on = openOverlays().length > 0;
+  for (const sel of ['#app', '#drawer', '#conflicts']) $(sel).inert = on;
+}
+function showOverlay(id, focusSel) {
+  if (!openOverlays().length) overlayReturn = document.activeElement;
+  const el = $(`#${id}`);
+  el.hidden = false;
+  syncInert();
+  (focusSel ? el.querySelector(focusSel) : el.querySelector('input, button, a[href]'))?.focus();
+}
+function hideOverlay(id) {
+  $(`#${id}`).hidden = true;
+  syncInert();
+  if (openOverlays().length) return;
+  const back = overlayReturn;
+  overlayReturn = null;
+  if (back && back !== document.body && back.isConnected && !back.disabled) back.focus({ preventScroll: true });
+}
+document.addEventListener('keydown', (e) => {
+  const open = [...document.querySelectorAll('dialog[open]')].at(-1) || openOverlays().at(-1); // 页内弹窗（<dialog>）也让 Tab 在里面循环，Esc 由弹窗自己处理
+  if (!open) return;
+  if (e.key === 'Escape' && open.id === 'quotaBox') { e.preventDefault(); hideOverlay('quotaBox'); return; }
+  if (e.key !== 'Tab') return;
+  const items = [...open.querySelectorAll('input, button, a[href], textarea, select, [tabindex]')].filter((x) => !x.disabled && x.tabIndex >= 0 && x.getClientRects().length);
+  if (!items.length) { e.preventDefault(); return; }
+  const first = items[0], last = items.at(-1);
+  if (!open.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+
 // ---------- 编辑口令：设了口令的行程，新设备（或口令被换后）要输入口令才能换到会话 ----------
 const editKey = () => new URLSearchParams(location.hash.slice(1)).get('k') || store.get('carpool_trips', []).find((t) => t.id === tripId)?.key;
 let codePrompt = null;
@@ -361,13 +399,12 @@ function askCode(message = '这个行程设了编辑口令，问一下发给你�
     $('#codeMsg').textContent = message;
     $('#codeErr').textContent = '';
     $('#codeInput').value = '';
-    $('#codeBox').hidden = false;
-    $('#codeInput').focus();
+    showOverlay('codeBox', '#codeInput');
     $('#codeForm').onsubmit = async (e) => {
       e.preventDefault();
       try {
         await api(`${API}/session`, { key: editKey(), code: $('#codeInput').value });
-        $('#codeBox').hidden = true;
+        hideOverlay('codeBox');
         codePrompt = null;
         resolve();
       } catch (err) {
@@ -472,13 +509,12 @@ function tripGone() {
   if (socket) { socket.onclose = null; try { socket.close(); } catch { /* 已经断了 */ } }
   store.set('carpool_trips', store.get('carpool_trips', []).filter((t) => t.id !== tripId));
   for (const id of ['nameBox', 'codeBox', 'denied', 'quotaBox']) $(`#${id}`).hidden = true;
-  $('#gone').hidden = false;
-  $('#goneHome').focus();
+  showOverlay('gone', '#goneHome');
 }
 
 function deny(text) {
   $('#deniedText').textContent = `${text}。编辑链接只发给一起规划的人；如果你是发起人，可以在首页「我打开过的行程」里找到它。`;
-  $('#denied').hidden = false;
+  showOverlay('denied', 'a[href]');
 }
 
 // ---------- 配置路径 ----------
@@ -1289,10 +1325,9 @@ function showQuota(message, proactive = false) {
     : `${message} 已经停下，没有继续调用。`;
   $('#quotaErr').textContent = '';
   $('#quotaKey').value = '';
-  $('#quotaBox').hidden = false;
-  $('#quotaKey').focus();
+  showOverlay('quotaBox', '#quotaKey');
 }
-$('#quotaClose').addEventListener('click', () => { $('#quotaBox').hidden = true; });
+$('#quotaClose').addEventListener('click', () => hideOverlay('quotaBox'));
 $('#quotaKeyBtn').addEventListener('click', async () => {
   const btn = $('#quotaKeyBtn');
   btn.disabled = true;
@@ -1300,7 +1335,7 @@ $('#quotaKeyBtn').addEventListener('click', async () => {
   try {
     await api(`${API}/key`, { amapKey: $('#quotaKey').value.trim() });
     trip.mode = 'own';
-    $('#quotaBox').hidden = true;
+    hideOverlay('quotaBox');
     toast('已改用你的高德 Key，可以接着算了', 4000);
   } catch (e) {
     $('#quotaErr').textContent = e.message;
@@ -1783,14 +1818,13 @@ function renderTitle() {
 function askName() {
   return new Promise((resolve) => {
     $('#nameInput').value = me.name;
-    $('#nameBox').hidden = false;
-    $('#nameInput').focus();
+    showOverlay('nameBox', '#nameInput');
     $('#nameForm').onsubmit = (e) => {
       e.preventDefault();
       me.name = $('#nameInput').value.trim().slice(0, 20);
       if (!me.name) return;
       store.set('carpool_name', me.name);
-      $('#nameBox').hidden = true;
+      hideOverlay('nameBox');
       resolve();
     };
   });

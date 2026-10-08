@@ -94,6 +94,16 @@ test('表单 change 监听里不重建表单，只调用 refreshDerived', () => 
   assert.match(code, /function refreshDerived\(\)/);
 });
 
+test('整页遮罩都经过 showOverlay / hideOverlay（焦点、inert、还原）', () => {
+  const code = scripts(ui).at(-1);
+  for (const id of ['nameBox', 'codeBox', 'denied', 'gone', 'quotaBox']) {
+    assert.match(code, new RegExp(`showOverlay\\('${id}'`), `${id} 要用 showOverlay 打开`);
+    assert.doesNotMatch(code, new RegExp(`\\$\\('#${id}'\\)\\.hidden = false`), `${id} 不能绕过 showOverlay`);
+  }
+  assert.match(code, /\.inert = on/);
+  assert.match(code, /e\.key === 'Escape' && open\.id === 'quotaBox'/); // 只有额度遮罩支持 Esc
+});
+
 test('12306 链接始终渲染，由 refreshDerived 更新 href', () => {
   assert.match(ui, /data-link12306="\$\{i\}"/);
   assert.match(ui, /a\.href = href/);
