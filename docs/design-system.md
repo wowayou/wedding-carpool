@@ -70,7 +70,7 @@
 
 ## 页面模板和构建
 
-大字标 `c-wordmark`：页脚底部内嵌 SVG，单线画小写 carpool，桌面一行（`__svg--wide`），640px 以下分两行（`__svg--stack`），两份都带 `aria-hidden="true"`、`focusable="false"`。颜色规则：线条 `c-wordmark__line` 用 `--ink`，两个 o 是圆盘（`--station`、`--drive`）加中心小圆点（`--dest`、`--ride`），一条路线从 c 的起笔贯穿到 l 的收笔（两个 o 像站点串在路线上），只在起点和终点放 `--accent` 小圆点，手机版两行各一条路线；**只用语义变量，SVG 里不写死色值**（深色模式自动跟着变），构建测试会检查。静态，不加动画。
+大字标 `c-wordmark`：页脚底部内嵌 SVG，单线画小写 carpool，桌面一行（`__svg--wide`），640px 以下分两行（`__svg--stack`），两份都带 `aria-hidden="true"`、`focusable="false"`。颜色规则：线条 `c-wordmark__line` 用 `--ink`，两个 o 是圆盘（`--station`、`--drive`）加中心小圆点（`--dest`、`--ride`），一条路线从 c 的起笔贯穿到 l 的收笔（两个 o 像站点串在路线上），只在起点和终点放 `--accent` 小圆点，p 的下伸部分绕一个 U 形回环；手机版两行各一条路线，终点分别在 r 的肩端和 l 顶，起点在 p 的下伸底端，整幅字标没有十字交叉；**只用语义变量，SVG 里不写死色值**（深色模式自动跟着变），构建测试会检查。静态，不加动画。
 
 页头页脚只写一份，在 `web/partials/`：`header.html`、`footer.html`、`header-lite.html`（编辑页和管理页的精简页头，参数 `title`、`actions`）、`head-common.html`、`site-script.html`（页头交互，内嵌脚本，构建时算哈希放进 CSP）。页面源文件里写占位，`web/site.mjs` 在构建时替换：
 
