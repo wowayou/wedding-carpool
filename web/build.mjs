@@ -13,7 +13,6 @@ cpSync('web/stations12306.json', 'dist/stations12306.json');
 // 图标和首屏示例：站点根目录；/demo 是静态的示例方案页（虚构行程，由 demo 流程生成，不经过 Worker）
 for (const name of ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'demo-shot.webp']) cpSync(`web/${name}`, `dist/${name}`);
 cpSync('web/demo-shot.png', 'dist/demo-shot.png');
-cpSync('web/robots.txt', 'dist/robots.txt'); // 搜索引擎和 AI 问答用；sitemap.xml、llms.txt、llms-full.txt 由 buildSite 生成
 // 静态站点：首页、示例、指南、场景页、关于、更新记录、隐私、管理页、样式指南、404。
 // 页面、页头页脚、结构化数据、sitemap 和设计系统的构建都在 web/site.mjs，页面清单在 web/site-data.mjs
 const site = buildSite('dist');

@@ -130,6 +130,11 @@ npm run deploy                             # 构建 dist/ 并部署
 - 在 `wrangler.jsonc` 的 `vars` 里设 `TRIP_DAILY_LIMIT`、`OWN_TRIP_DAILY_LIMIT`、`OWNER_DAILY_LIMIT`，调整每日上限；设 `OWNER_MONTHLY_LBS_BUDGET`、`OWNER_MONTHLY_SEARCH_BUDGET`，调整站点公共额度的月预算（默认 140000 和 4500）；
 - 在 `routes` 里绑定自己的域名。`workers.dev` 域名在国内不翻墙常常打不开。
 - `wrangler.jsonc` 的 `assets.run_worker_first` 里的页面路径（`/`、`/demo`、`/guide`、`/for/*` 等）让 Worker 先处理再转给静态文件，用来统计页面访问；`not_found_handling: "404-page"` 让不存在的地址返回 `404.html`。这两处和 `web/worker.js` 配套，不要删。
+- 站点地址和搜索引擎收录（构建时读环境变量，在 `npm run build` / `npm run deploy` 前设好）：
+  - `SITE_ORIGIN`：站点的完整地址，如 `https://carpool.example.com`（不带路径）。用在页面的 canonical、Open Graph、结构化数据、`sitemap.xml`、`robots.txt` 和 `llms*.txt` 里。不设就是官方站 `https://carpool.eigentime.org`。
+  - `SITE_INDEXABLE`：设成 `1` 才允许搜索引擎收录。**换了域名又没设它的话，默认不收录**：所有页面加 `<meta name="robots" content="noindex">`，`robots.txt` 只有 `Disallow: /`，不生成 `sitemap.xml`、`llms.txt`、`llms-full.txt`。这样自部署的副本不会和官方站抢搜索结果；想让自己的站被收录再设 `SITE_INDEXABLE=1`。
+  - 例：`SITE_ORIGIN=https://carpool.example.com SITE_INDEXABLE=1 npm run deploy`。
+  - 自部署的站点请用你自己的名字、域名和标识，不要冒充官方服务：「拼车出行规划」、Eigentime 的名称和标识不授权给分叉使用，见 [`LICENSING.md`](LICENSING.md) 第 5 节。别忘了改 `wrangler.jsonc` 里 `routes` 的域名。
 - 不设 `AMAP_KEY` 和 `ACCESS_CODE` 的话，就只能自带 Key 新建行程。
 - 高德 Key 的使用条款和配额以[高德开放平台](https://lbs.amap.com/)为准。按 2025 年 5 月起的定价，个人认证开发者「非商业目的」的免费月配额是：路线、测距、地理编码等基础服务 15 万次，关键字、周边等搜索服务 5000 次，只有认证后的第一年；用于商业目的要另外购买许可。部署前请自己确认你的用途符合条款。
 
@@ -173,7 +178,7 @@ npm run deploy                             # 构建 dist/ 并部署
 ## 测试
 
 ```bash
-npm test     # Worker、页面合并逻辑、编辑页静态检查（node --test）和 Python（unittest），都离线运行
+npm test     # Worker、页面合并逻辑、编辑页静态检查、站点构建（node --test）和 Python（unittest），都离线运行
 ```
 
 编辑页和管理页的交互（弹窗、手机分页签、加载失败等）在浏览器里验证：`npm run build` 后 `npx wrangler dev`，用 Playwright 走一遍。编辑页里所有确认、提示、输入都是页内弹窗（`<dialog>`）和轻提示，没有原生 `alert` / `confirm` / `prompt`；自动化脚本用稳定的选择器：确认 `[data-dialog-ok]`、取消 `[data-dialog-cancel]`、输入框 `[data-dialog-input]`、错误提示 `[data-dialog-error]`。

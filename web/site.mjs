@@ -13,11 +13,12 @@
 //   {{curclass:/路径/}}               同上，但输出 " is-current"，给下拉分组用
 //   {{version_html}}                  页脚的版本号，package.json 没有 version 就是空
 //   <!-- notext -->…<!-- /notext -->  这一段不进 llms-full.txt
+// 环境变量 SITE_ORIGIN、SITE_INDEXABLE 见 web/site-data.mjs：自部署（换了域名且没设 SITE_INDEXABLE=1）时全部加 noindex，robots.txt 全禁，不生成 sitemap.xml 和 llms*.txt。
 // 校验（失败就让构建报错）：所有 JSON-LD 必须能 JSON.parse；FAQPage 的问答要和页面可见文字逐字一致；占位不能残留；站内链接要能打开；设计变量对比度要达标。
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { checkContrast } from './check-contrast.mjs';
-import { AUTHOR, FAQS, HOWTO, IMAGE, ORIGIN, PAGES, REPO, SITE_NAME } from './site-data.mjs';
+import { AUTHOR, FAQS, HOWTO, IMAGE, INDEXABLE, OFFICIAL_ORIGIN, ORIGIN, PAGES, REPO, SITE_NAME } from './site-data.mjs';
 
 const read = (p) => readFileSync(p, 'utf8');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -152,9 +153,15 @@ function expand(html, page, params = {}, depth = 0) {
   return out;
 }
 
+// 把文件里写死的官方地址换成 SITE_ORIGIN（官方构建时是原样）
+const withOrigin = (text) => (ORIGIN === OFFICIAL_ORIGIN ? text : text.replaceAll(OFFICIAL_ORIGIN, ORIGIN));
+
 export function render(src, page) {
   let html = src.replace(/<!--\s*head\s*-->/, () => headHtml(page));
   html = expand(html, page);
+  if (page.ownHead) html = html.replace(/(<link rel="canonical" href=")[^"]*(")/, (_, a, b) => `${a}${abs(page.path)}${b}`); // 示例页自己写了 <head>，规范地址跟着 SITE_ORIGIN
+  // 自部署默认不收录：每个页面（包括自己写 <head> 的示例页）都要有 noindex
+  if (!INDEXABLE && !/<meta name="robots" content="noindex"/.test(html)) html = html.replace(/(<meta charset="utf-8">)/, '$1\n<meta name="robots" content="noindex">');
   const v = version();
   html = html
     .replace(/<!--\s*crumbs\s*-->/g, () => crumbsHtml(page))
@@ -199,8 +206,9 @@ function validate(page, html) {
     if (type === 'howto' && !html.includes('<ol class="c-steps">')) throw new Error(`${where}声明了 howto:${key}，但页面上没有放 <!-- howto:${key} -->`);
   }
   if (!/<main\b[^>]*id="main"/.test(html)) throw new Error(`${where}缺少 <main id="main">`);
-  if (page.index === false && !/<meta name="robots" content="noindex"/.test(html)) throw new Error(`${where}不收录的页面要有 noindex`);
-  if (page.index && /noindex/.test(html)) throw new Error(`${where}可收录的页面不能有 noindex`);
+  if ((page.index === false || !INDEXABLE) && !/<meta name="robots" content="noindex"/.test(html)) throw new Error(`${where}不收录的页面要有 noindex`);
+  if (page.index && INDEXABLE && /<meta name="robots"[^>]*noindex/.test(html)) throw new Error(`${where}可收录的页面不能有 noindex`);
+  if (page.index && !html.includes(`rel="canonical" href="${abs(page.path)}"`)) throw new Error(`${where}规范地址要是 ${abs(page.path)}`);
 }
 
 // 站内链接：以 / 开头的 href 和 src 必须指向 dist 里存在的页面或文件（/t/、/p/、/api/ 由 Worker 处理，不查）
@@ -267,12 +275,18 @@ export function buildSite(dist = 'dist') {
   }
   checkLinks(dist, PAGES);
 
+  // 自部署默认不收录：robots.txt 全禁，不生成 sitemap.xml、llms.txt、llms-full.txt
+  if (!INDEXABLE) {
+    writeFileSync(`${dist}/robots.txt`, 'User-agent: *\nDisallow: /\n');
+    return { csp };
+  }
+  writeFileSync(`${dist}/robots.txt`, withOrigin(read('web/robots.txt')));
   // sitemap：所有可收录的页面，lastmod 取构建日期（北京时间）
   const urls = PAGES.filter((p) => p.index).map((p) => `  <url><loc>${abs(p.path)}</loc><lastmod>${today}</lastmod></url>`).join('\n');
   writeFileSync(`${dist}/sitemap.xml`, read('web/sitemap.xml').replace('<!-- urls -->', urls));
-  // llms.txt 原样复制；llms-full.txt 里的 {{text:/路径}} 换成该页正文，{{faq:键}} 换成问答全文
-  cpSync('web/llms.txt', `${dist}/llms.txt`);
-  const full = read('web/llms-full.txt')
+  // llms.txt 里的官方地址换成 SITE_ORIGIN；llms-full.txt 里的 {{text:/路径}} 换成该页正文，{{faq:键}} 换成问答全文
+  writeFileSync(`${dist}/llms.txt`, withOrigin(read('web/llms.txt')));
+  const full = withOrigin(read('web/llms-full.txt'))
     .replace(/\{\{text:([^}]+)\}\}/g, (_, p) => { if (!(p in texts)) throw new Error(`llms-full.txt：没有页面 ${p}`); return texts[p]; })
     .replace(/\{\{faq:(\w+)\}\}/g, (_, k) => FAQS[k].map(([q, a]) => `### ${q}\n\n${a}`).join('\n\n'))
     .replace(/\{\{date\}\}/g, today);

@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 静态站点的页面清单、常见问题和指南步骤。页面上看得见的文字和结构化数据（JSON-LD）都从这里生成，
-// 所以两边一定一致；构建时（web/site.mjs）还会再校验一遍。换了域名只改这一处。
+// 所以两边一定一致；构建时（web/site.mjs）还会再校验一遍。
 
-export const ORIGIN = 'https://carpool.eigentime.org';
+// 站点地址：构建时用环境变量 SITE_ORIGIN 指定（自部署用自己的域名），默认是官方站。
+// 不是官方域名时，默认不让搜索引擎收录（noindex、robots 全禁、不生成 sitemap 和 llms*.txt），
+// 免得自部署的副本和官方站抢搜索结果；确实要收录的话再设 SITE_INDEXABLE=1。
+export const OFFICIAL_ORIGIN = 'https://carpool.eigentime.org';
+export const ORIGIN = (process.env.SITE_ORIGIN || OFFICIAL_ORIGIN).trim().replace(/\/+$/, '');
+if (!/^https?:\/\/[^/\s?#]+$/.test(ORIGIN)) throw new Error(`SITE_ORIGIN 要写成 https://域名（不带路径），现在是：${ORIGIN}`);
+export const INDEXABLE = ORIGIN === OFFICIAL_ORIGIN || process.env.SITE_INDEXABLE === '1';
 export const SITE_NAME = '拼车出行规划';
 export const REPO = 'https://github.com/wowayou/wedding-carpool';
 export const AUTHOR = { name: 'eigentime', url: 'https://eigentime.org/' };
