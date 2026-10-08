@@ -27,6 +27,7 @@ from service import compute, plan_payload, suggest_stations
 
 HERE = Path(__file__).parent
 STATIONS_12306 = HERE / "web" / "stations12306.json"
+CONFIG_FIELDS = HERE / "config-fields.json"  # 配置项定义：编辑页取占位、范围、中文名
 VALID_STATIONS = set(json.loads(STATIONS_12306.read_text(encoding="utf-8"))["stations"]) if STATIONS_12306.exists() else None
 # 页面用到的静态文件：设计系统样式、图标集、站点图标（网页版由 Cloudflare 的静态资源提供，本地版由这里提供）
 STATIC_FILES = {
@@ -111,6 +112,8 @@ def make_handler(app: App):
                 self._send(200, path.read_bytes(), ctype)
             elif url.path == "/stations12306.json" and STATIONS_12306.exists():
                 self._send(200, STATIONS_12306.read_bytes(), "application/json; charset=utf-8")
+            elif url.path == "/config-fields.json" and CONFIG_FIELDS.exists():
+                self._send(200, CONFIG_FIELDS.read_bytes(), "application/json; charset=utf-8")
             elif url.path == "/share":
                 if app.share_path.exists():
                     self._send(200, app.share_path.read_bytes(), "text/html; charset=utf-8")
