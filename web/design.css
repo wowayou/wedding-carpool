@@ -333,8 +333,8 @@ dialog.c-drawer { position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); 
 .c-wordmark__svg { display: block; width: 100%; height: auto; overflow: visible; }
 .c-wordmark__svg--stack { display: none; max-width: 420px; margin: 0 auto; }
 @media (max-width: 639px) { .c-wordmark__svg--wide { display: none; } .c-wordmark__svg--stack { display: block; } }
-.c-wordmark__line { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-.c-wordmark__disc { stroke: var(--ink); stroke-width: 3; }
+.c-wordmark__line { fill: none; stroke: var(--ink); stroke-width: 3.8; stroke-linecap: round; stroke-linejoin: round; }
+.c-wordmark__disc { stroke: var(--ink); stroke-width: 3.8; }
 .c-wordmark__disc--a { fill: var(--station); }
 .c-wordmark__disc--b { fill: var(--drive); }
 .c-wordmark__hub--a { fill: var(--dest); }
