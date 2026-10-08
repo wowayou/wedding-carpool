@@ -42,6 +42,39 @@ test('官方构建：可收录页面没有 noindex，有 sitemap 和 llms，robo
   } finally { rmSync(b.dir, { recursive: true, force: true }); }
 });
 
+// v3.6 页眉页脚：大字标不占读屏、不写死颜色；页眉操作区有「试玩」和「新建行程」
+test('页脚大字标：SVG 不占读屏，fill 和 stroke 不写死色值', () => {
+  const b = build({});
+  try {
+    assert.equal(b.child.status, 0, b.child.stderr);
+    for (const f of ['index.html', 'guide.html', '404.html']) {
+      const html = b.read(f);
+      const svgs = [...html.slice(html.indexOf('<footer')).matchAll(/<svg\b[^>]*class="c-wordmark__svg[^>]*>[\s\S]*?<\/svg>/g)].map((m) => m[0]);
+      assert.equal(svgs.length, 2, `${f}：桌面和手机各一份大字标`);
+      for (const svg of svgs) {
+        assert.match(svg, /^<svg\b[^>]*aria-hidden="true"/, `${f}：大字标 SVG 要有 aria-hidden`);
+        assert.match(svg, /focusable="false"/);
+        assert.doesNotMatch(svg, /#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|\bstyle=/, `${f}：SVG 里不能写死颜色或内联样式`);
+        for (const [, v] of svg.matchAll(/\b(?:fill|stroke)="([^"]*)"/g)) assert.match(v, /^(currentColor|none|var\(--[\w-]+\))$/, `${f}：fill/stroke 只能用 currentColor 或变量，不能是 ${v}`);
+      }
+    }
+  } finally { rmSync(b.dir, { recursive: true, force: true }); }
+});
+
+test('页眉操作区有「试玩」(/try) 和「新建行程」(/#create)，页脚有试玩引导', () => {
+  const b = build({});
+  try {
+    assert.equal(b.child.status, 0, b.child.stderr);
+    for (const f of ['index.html', 'privacy.html', '404.html']) {
+      const html = b.read(f);
+      const actions = /<div class="c-nav__actions">([\s\S]*?)<\/div>/.exec(html)?.[1] || '';
+      assert.match(actions, /href="\/try"/, `${f}：页眉缺 /try`);
+      assert.match(actions, /href="\/#create"/, `${f}：页眉缺 /#create`);
+      assert.match(html, /class="c-site-footer__cta" href="\/try"/, `${f}：页脚缺试玩引导`);
+    }
+  } finally { rmSync(b.dir, { recursive: true, force: true }); }
+});
+
 // 静态页面的 CSP 在构建时（web/build.mjs）检查：script-src 只能是本站、cdnjs 和内嵌脚本的哈希
 test('方案页的 CSP 不放行第三方统计脚本（隐私页写了 Cloudflare 自动注入的会被拦下）', () => {
   const worker = readFileSync('web/worker.js', 'utf8');
