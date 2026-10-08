@@ -78,7 +78,7 @@
     </ul>
 
     <h2>默认值</h2>
-    <p>配置里没写的选项，用下面的值。这些写在配置的 <code>[options]</code> 里（返程提前到站在 <code>[return]</code> 里），编辑页的「选项」和成员卡片里能改其中一部分。</p>
+    <p>配置里没写的选项，用下面的值。这些写在配置的 <code>[options]</code> 里（返程提前到站、乘客最多等车主在 <code>[return]</code> 里），编辑页的「选项」和成员卡片里能改其中一部分。</p>
     <div class="c-table-wrap">
       <table class="c-table">
         <thead><tr><th>选项</th><th>默认值</th><th>含义</th></tr></thead>
@@ -89,6 +89,7 @@
           <tr><td>去车站和候车</td><td class="c-tnum" data-default="station_access_min">45 分钟</td><td>填了车次时，加在车上用时之外</td></tr>
           <tr><td>下车到上车</td><td class="c-tnum" data-default="exit_buffer_min">15 分钟</td><td>列车到站后出站、走到接人点</td></tr>
           <tr><td>返程提前到站</td><td class="c-tnum" data-default="security_min">40 分钟</td><td>回程车次发车前多久要到站</td></tr>
+          <tr><td>乘客最多等车主</td><td class="c-tnum" data-default="max_wait_min">30 分钟</td><td>返程时，乘客准备好后最多等车主多久</td></tr>
           <tr><td>公共交通估算的出发时刻</td><td class="c-tnum" data-default="travel_time">08:00</td><td>没填车次时，用这个时刻查高德</td></tr>
           <tr><td>自动找站的范围</td><td class="c-tnum" data-default="discover_radius_km">120 公里</td><td>一个候选站都没选就计算时，自动在目的地周边搜多远</td></tr>
           <tr><td>自动找站最多留几个</td><td class="c-tnum" data-default="discover_limit">10 个</td><td>同上</td></tr>

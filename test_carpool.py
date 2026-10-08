@@ -697,6 +697,94 @@ class ReturnOnlyTest(unittest.TestCase):
         self.assertEqual(tomllib.loads(carpool.dump_toml(cfg)), cfg)
 
 
+class LeaveTimeTest(unittest.TestCase):
+    """个人离场时间：车主几点走车就几点走；乘客准备好后最多等 max_wait_min；打车的人从自己的离场时间出发。"""
+
+    def cfg(self, driver=None, rider=None, train="G2 西站22:30→小陈家23:30", depart="18:00", **rider_kw):
+        driver_kw = {} if driver is None else {"leave_time": driver}
+        rider_kw = {**rider_kw, **({} if rider is None else {"leave_time": rider})}
+        c = config([person("老王", WANG, car_seats=3, **driver_kw), person("小陈", "114.0,34.0", return_trains={"西站": train}, **rider_kw)])
+        c["return"] = {"enabled": True, "depart_time": depart}
+        return c
+
+    def back(self, cfg):
+        trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
+        return trip, trip.back_plans[0], carpool.render(trip, pts, T, plans)
+
+    def test_same_as_depart_time_changes_nothing(self):
+        def key(cfg):
+            return [(p.rides, p.taxi, p.stranded, round(p.cost, 3)) for p in carpool.plan_trip(cfg, FakeAmap())[0].back_plans]
+        self.assertEqual(key(self.cfg()), key(self.cfg(driver="18:00", rider="18:00")))
+
+    def test_driver_leaving_earlier_cannot_take_the_rider(self):
+        _, plan, report = self.back(self.cfg(driver="17:30"))
+        self.assertEqual((plan.rides, plan.taxi), ({}, {"小陈": "st:西站"}))
+        self.assertIn("17:30 从目的地直接回家", report)
+
+    def test_waiting_over_the_limit_cannot_board(self):
+        _, plan, _ = self.back(self.cfg(driver="18:45"))  # 乘客 18:00 就绪，要等 45 分钟，超过默认的 30
+        self.assertEqual(plan.rides, {})
+        cfg = self.cfg(driver="18:45")
+        cfg["return"]["max_wait_min"] = 60
+        trip, plan, report = self.back(cfg)
+        self.assertEqual(trip.back.max_wait, 60)
+        self.assertEqual(plan.rides, {"小陈": ("老王", "st:西站")})
+        self.assertIn("18:45 从目的地出发", report)
+        self.assertIn("小陈等 45分钟", report)
+
+    def test_short_wait_is_fine_and_shown(self):
+        _, plan, report = self.back(self.cfg(driver="18:20"))
+        self.assertEqual(plan.rides, {"小陈": ("老王", "st:西站")})
+        self.assertIn("小陈等 20分钟", report)
+
+    def test_arrival_is_timed_from_the_drivers_leave_time(self):
+        # 车主 18:30 走，西站 96 分钟，20:06 到；乘客的车 20:30 发，要在 19:50 前到：赶不上
+        _, plan, _ = self.back(self.cfg(driver="18:30", train="G2 西站20:30→小陈家23:30"))
+        self.assertEqual(plan.rides, {})
+        _, plan, _ = self.back(self.cfg(driver="18:00", train="G2 西站20:30→小陈家23:30"))
+        self.assertEqual(plan.rides, {"小陈": ("老王", "st:西站")})
+
+    def test_taxi_leaves_at_own_time(self):
+        late = self.cfg(train="G2 西站19:30→小陈家22:30")
+        late["people"][0]["return_drives"] = False
+        self.assertEqual(self.back(late)[1].stranded, ["小陈"])  # 18:00 走赶不上 19:30 的车（和不填离场时间时一样）
+        early = self.cfg(train="G2 西站19:30→小陈家22:30", rider="17:00")
+        early["people"][0]["return_drives"] = False
+        trip, plan, report = self.back(early)
+        self.assertEqual((plan.stranded, plan.taxi), ([], {"小陈": "st:西站"}))
+        self.assertIn("17:00 从目的地一起打车去", report)
+
+    def test_taxi_group_with_different_times_goes_separately(self):
+        cfg = self.cfg(train="G2 西站22:30→a", rider="17:30", stations=["西站"])
+        cfg["people"][0]["return_drives"] = False
+        cfg["people"].append(person("小李", "113.0,35.0", return_trains={"西站": "G2 西站22:30→b"}, leave_time="19:00", stations=["西站"]))
+        _, plan, report = self.back(cfg)
+        self.assertEqual(plan.taxi, {"小陈": "st:西站", "小李": "st:西站"})
+        self.assertIn("各自离场后（小陈 17:30、小李 19:00）", report)
+
+    def test_party_uses_its_registered_time(self):
+        for driver, carried in (("18:00", 0), ("18:30", 2)):  # 同行的一组 18:30 就绪：车主 18:00 就走了，带不上
+            _, plan, _ = self.back(self.cfg(driver=driver, rider="18:30", party=2))
+            self.assertEqual(plan.carried, carried, driver)
+
+    def test_payload_and_share_page_show_each_cars_time(self):
+        state = service.compute(self.cfg(driver="18:20"), FakeAmap())
+        payload = service.plan_payload(state)
+        self.assertEqual(payload["back"]["plans"][0]["routes"][0]["depart"], "18:20")
+        html = share.render_share(state, 0, 0)
+        self.assertIn("返程 · 18:00 散场后出发", html)  # 标题仍是默认的散场时间
+        self.assertIn("你 18:00 离场，等 20分钟", html)
+        self.assertRegex(html, r'<span class="t">18:20</span><span>从目的地出发')
+
+    def test_bad_leave_time_is_rejected(self):
+        for bad in ("25:00", "八点", "18:7"):
+            with self.assertRaises(SystemExit, msg=bad) as ctx:
+                carpool.load_trip(self.cfg(rider=bad), FakeAmap())
+            self.assertIn("小陈的离场时间", str(ctx.exception))
+        carpool.load_trip(self.cfg(rider="8:05"), FakeAmap())
+        self.assertIsNone(carpool.load_trip(self.cfg(), FakeAmap()).people[1].leave)
+
+
 class PartyTest(unittest.TestCase):
     """同行人数：一组人要么一起上同一辆车，要么一起打车。"""
 
@@ -880,6 +968,7 @@ class MethodPageTest(unittest.TestCase):
         self.assertEqual(carpool.load_trip(cfg, FakeAmap()).people[0].rail_min, {"西站": 180 + d["station_access_min"]})
         cfg["return"] = {"enabled": True, "depart_time": "18:00"}
         self.assertEqual(carpool.load_trip(cfg, FakeAmap()).back.margin, d["security_min"])
+        self.assertEqual(carpool.load_trip(cfg, FakeAmap()).back.max_wait, d["max_wait_min"])
 
 
 class TomlTest(unittest.TestCase):

@@ -49,6 +49,7 @@ DEFAULTS = {
     "station_access_min": 45,   # 填了车次时，去车站和候车的时间
     "exit_buffer_min": 15,      # 列车到站后出站、走到接人点
     "security_min": 40,         # 返程：发车前多久到站
+    "max_wait_min": 30,         # 返程：乘客最多愿意等车主多久
     "discover_radius_km": 120,  # 自动找站的范围
     "discover_limit": 10,       # 自动找站最多留几个
     "travel_time": "08:00",     # 公交估算的出发时刻
@@ -325,6 +326,7 @@ class Person:
     back_rail_min: dict[str, float] = field(default_factory=dict)
     back_drives: bool = True
     back_max_detour: float | None = None
+    leave: float | None = None  # 返程：这个人想几点离开目的地（当天分钟数）；不填就是散场时间
     rail_est: dict[str, tuple[float, str]] = field(default_factory=dict)  # 高德估算的（分钟, 车次摘要）
 
     @property
@@ -392,6 +394,16 @@ def check_unique_names(people: list[dict]) -> None:
         seen[name] = i
 
 
+def leave_time(p: dict) -> float | None:
+    """成员的离场时间 leave_time（返程）：时:分，24 小时制；没填返回 None。"""
+    text = str(p.get("leave_time") or "").strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
+        raise SystemExit(f"{p.get('name') or '成员'}的离场时间「{text}」要写成 时:分（24 小时制），如 21:30")
+    return float(train_times(text)[0])
+
+
 def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
     """解析目的地和每个人的出发地；按文字定位到的结果记进 record。"""
     opt = cfg.get("options", {})
@@ -425,6 +437,7 @@ def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
             back_rail_min={k: float(m) for k, m in (p.get("return_rail_min") or {}).items()},
             back_drives=bool(p.get("return_drives", True)),
             back_max_detour=float(p["return_max_detour_min"]) if p.get("return_max_detour_min") is not None else None,
+            leave=leave_time(p),
         ))
     access = float(opt.get("station_access_min", DEFAULTS["station_access_min"]))
     for person in people:  # 填了车次没填分钟：按「首个发车 → 最后到站」加上去车站和候车的时间算
@@ -478,14 +491,16 @@ def load_trip(cfg: dict, amap) -> Trip:
 
 
 def back_leg(cfg: dict) -> "Leg | None":
-    """返程插件的设置：[return] enabled、depart_time（车主从目的地出发）、security_min（发车前多久到站）。"""
+    """返程插件的设置：[return] enabled、depart_time（散场时间，没填离场时间的人从这时走）、
+    security_min（发车前多久到站）、max_wait_min（乘客最多等车主多久）。"""
     r = cfg.get("return") or {}
     if not r.get("enabled"):
         return None
     times = train_times(str(r.get("depart_time") or ""))
     if not times:
         raise SystemExit("开了返程，但还没填散场后几点出发")
-    return Leg("back", "返程", reverse=True, depart=times[0], margin=float(r.get("security_min", DEFAULTS["security_min"])))
+    return Leg("back", "返程", reverse=True, depart=times[0], margin=float(r.get("security_min", DEFAULTS["security_min"])),
+               max_wait=float(r.get("max_wait_min", DEFAULTS["max_wait_min"])))
 
 
 def train_times(text: str) -> list[int]:
@@ -578,8 +593,9 @@ class Leg:
     key: str
     title: str
     reverse: bool = False
-    depart: float | None = None  # 返程：车主从目的地出发的时刻（当天分钟数）
+    depart: float | None = None  # 返程：散场时间（当天分钟数）；没填离场时间的人从这时出发
     margin: float = 40           # 返程：发车前多少分钟要到站
+    max_wait: float = 30         # 返程：乘客最多等车主多久
 
     def ends(self, driver: str) -> tuple[str, str]:
         car = f"car:{driver}"
@@ -670,9 +686,14 @@ def back_deadline(p: Person, stop: str, leg: Leg) -> float | None:
     return times[0] - leg.margin if times else None
 
 
-def stop_times(route: Route, T, leg: Leg) -> dict[str, float]:
-    """返程：车主按点出发，依次到各送人点的时刻。"""
-    t, out = leg.depart or 0.0, {}
+def leave_of(p: Person, leg: Leg) -> float:
+    """返程：这个人几点离开目的地。车主的离场时间就是车的出发时间。"""
+    return p.leave if p.leave is not None else leg.depart or 0.0
+
+
+def stop_times(route: Route, T, leg: Leg, depart: float | None = None) -> dict[str, float]:
+    """返程：车主从 depart（默认散场时间）出发，依次到各送人点的时刻。"""
+    t, out = leg.depart or 0.0 if depart is None else depart, {}
     seq = leg.sequence(route.driver, route.stops)
     for a, b in zip(seq, seq[1:]):
         t += T.get((a, b), INF)
@@ -772,10 +793,13 @@ def _assign_groups(routes, seats, riders, opts, usable) -> tuple[dict[str, tuple
 def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Person],
              opts: dict[str, dict[str, float]], T, leg: Leg = OUT) -> Plan | None:
     allowed = None
-    if leg.reverse:  # 返程：送到站的时刻要赶得上车次
-        times = {r.driver: stop_times(r, T, leg) for r in combo}
+    if leg.reverse:  # 返程：车主几点走车就几点走；乘客准备好后最多等 max_wait，送到站的时刻要赶得上车次
+        leaves = {d.name: leave_of(d, leg) for d in drivers}
+        times = {r.driver: stop_times(r, T, leg, leaves[r.driver]) for r in combo}
 
         def allowed(route: Route, stop: str, p: Person) -> bool:
+            if not 0 <= leaves[route.driver] - leave_of(p, leg) <= leg.max_wait:
+                return False
             deadline = back_deadline(p, stop, leg)
             return deadline is None or times[route.driver][stop] <= deadline
     rides, ride_cost = assign(combo, {d.name: d.seats or 0 for d in drivers}, riders, opts, allowed)
@@ -792,7 +816,7 @@ def evaluate(combo: tuple[Route, ...], drivers: list[Person], riders: list[Perso
                 continue
             ride = leg.station_to_venue(T, s)
             deadline = back_deadline(p, s, leg) if leg.reverse else None
-            if deadline is None or (leg.depart or 0) + ride <= deadline:
+            if deadline is None or leave_of(p, leg) + ride <= deadline:  # 打车的人从自己的离场时间出发
                 cands.append((c + ride, s))
         best = min(cands, default=(INF, ""))
         if best[0] == INF:
@@ -963,24 +987,27 @@ def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
 
 
 def describe_back(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
-    """返程（插件）：车主几点从目的地出发、几点送到哪、几点到家；打车组几点出发赶哪趟车。"""
+    """返程（插件）：车主几点从目的地出发、几点送到哪、几点到家；乘客等多久；打车组几点出发赶哪趟车。"""
     leg = trip.back
     seats = {p.name: p.seats for p in trip.people if p.drives}
     people = {p.name: p for p in trip.people}
     lines = []
     for r in plan.routes:
         home = f"car:{r.driver}"
+        depart = leave_of(people[r.driver], leg)
         if not r.stops:
-            lines.append(f"- **{r.driver}**：{clock(leg.depart)} 从目的地直接回家，约 {fmt_min(r.minutes)}，不送人。")
+            lines.append(f"- **{r.driver}**：{clock(depart)} 从目的地直接回家，约 {fmt_min(r.minutes)}，不送人。")
             continue
-        times = stop_times(r, T, leg)
+        times = stop_times(r, T, leg, depart)
         legs = []
         for s in r.stops:
             names = [n for n, (d, st) in plan.rides.items() if d == r.driver and st == s]
             trains = [people[n].back_trains.get(s[3:]) for n in names if s.startswith("st:")]
             catch = f"，赶 {'、'.join(t for t in trains if t)}" if any(trains) else ""
-            legs.append(f"{stop_label(s, pts)} {clock(times[s])}（送 {who(names, trip)}{catch}）")
-        lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{clock(leg.depart)} 从目的地出发 → {' → '.join(legs)} → "
+            waits = "".join(f"，{n}等 {fmt_min(depart - leave_of(people[n], leg))}" for n in names
+                            if depart - leave_of(people[n], leg) >= 1)
+            legs.append(f"{stop_label(s, pts)} {clock(times[s])}（送 {who(names, trip)}{catch}{waits}）")
+        lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{clock(depart)} 从目的地出发 → {' → '.join(legs)} → "
                      f"约 {clock(times[home])} 到家；全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。")
     groups: dict[str, list[str]] = {}
     for name, s in plan.taxi.items():
@@ -990,10 +1017,16 @@ def describe_back(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]
         trains = [people[n].back_trains.get(pts[s].name) for n in names]
         catch = f"，赶 {'、'.join(t for t in trains if t)}" if any(trains) else ""
         fare = taxi_fare(ride, sum(people[n].party for n in names))
-        lines.append(f"- **打车组**：{who(names, trip)} {clock(leg.depart)} 从目的地一起打车去 **{pts[s].name}**，"
-                     f"约 {clock(leg.depart + ride)} 到{catch}{fare}。")
+        leaves = {n: leave_of(people[n], leg) for n in names}
+        if len(set(leaves.values())) == 1:
+            when = f"{clock(leaves[names[0]])} 从目的地一起打车去"
+            arrive = f"约 {clock(leaves[names[0]] + ride)} 到"
+        else:  # 离场时间不同：各自从自己的离场时间出发
+            when = f"各自离场后（{'、'.join(f'{n} {clock(t)}' for n, t in leaves.items())}）从目的地打车去"
+            arrive = f"分别约 {'、'.join(clock(t + ride) for t in leaves.values())} 到"
+        lines.append(f"- **打车组**：{who(names, trip)} {when} **{pts[s].name}**，{arrive}{catch}{fare}。")
     for name in plan.stranded:
-        lines.append(f"- **{name}**：按 {clock(leg.depart)} 散场，赶不上任何一个候选站的车次，需要单独安排（提前离场或改签）。")
+        lines.append(f"- **{name}**：按 {clock(leave_of(people[name], leg))} 离场，赶不上任何一个候选站的车次，需要单独安排（提前离场或改签）。")
     return lines
 
 

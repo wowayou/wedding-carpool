@@ -240,3 +240,16 @@ test('只规划返程：隐藏去程的车次、出发日期时间，步骤条�
   assert.match(/function renderTabs[\s\S]*?\n\}\n/.exec(code)[0], /\(outOn \? group\('去程'/);
   assert.match(code, /backend\.share\(outOn \? active : -1, activeBack\)/);
 });
+
+test('返程：成员卡片有离场时间，返程一节有乘客最多等；离场时间要写成 时:分', () => {
+  const code = scripts(ui).at(-1);
+  const card = /function personCard[\s\S]*?\n\}\n/.exec(code)[0];
+  assert.equal((card.match(/base \+ '\.leave_time'/g) || []).length, 2, '车主和乘客的卡片里都有离场时间');
+  assert.match(card, /placeholder: leavePlaceholder\(\)/);
+  assert.match(/function renderForm[\s\S]*?\n\}\n/.exec(code)[0], /'return\.max_wait_min'/);
+  const run = (people, R) => pick(['isDate', 'isClock', 'trainProblem', 'collectProblems'], { cfg: { venue: { name: 'v' }, options: {}, stations: [], people, return: { enabled: true, depart_time: '20:30', ...R } } }).collectProblems();
+  const bad = run([{ name: '甲', from: 'x', leave_time: '25:00' }], {});
+  assert.ok(bad.some((p) => p.path === 'people.0.leave_time' && /时:分/.test(p.msg)));
+  assert.equal(run([{ name: '甲', from: 'x', leave_time: '21:30' }], {}).length, 0);
+  assert.ok(run([{ name: '甲', from: 'x' }], { max_wait_min: -5 }).some((p) => p.path === 'return.max_wait_min'));
+});

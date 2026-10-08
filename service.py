@@ -44,12 +44,13 @@ def compute(cfg: dict, amap) -> dict:
 def _back_payload(trip, T, paths) -> dict | None:
     if not trip.back:
         return None
+    people = {p.name: p for p in trip.people}
     out = []
     for plan in trip.back_plans:
         routes = [{"driver": r.driver, "stops": list(r.stops), "minutes": round(r.minutes), "detour": round(r.detour),
                    "path": paths.get(("back", r.driver, r.stops)),
                    "direct_path": paths.get(("back", r.driver, ())) if r.stops else None,
-                   "depart": carpool.clock(trip.back.depart)} for r in plan.routes]
+                   "depart": carpool.clock(carpool.leave_of(people[r.driver], trip.back))} for r in plan.routes]
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi, "stranded": plan.stranded,
                     "detour": round(plan.detour), "carried": plan.carried, "routes": routes})
     return {"depart": carpool.clock(trip.back.depart), "plans": out}
