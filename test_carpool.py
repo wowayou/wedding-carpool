@@ -576,6 +576,127 @@ class ReturnTripTest(unittest.TestCase):
             self.run_trip(cfg)
 
 
+class ReturnOnlyTest(unittest.TestCase):
+    """去程和返程各有开关：只规划返程时，不算去程，也不用去程的车次、日期。"""
+
+    def cfg(self, **options):
+        c = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站20:30→小陈家23:30"})],
+                   outbound=False, **options)
+        c["return"] = {"enabled": True, "depart_time": "18:00", "date": "2026-10-18"}
+        return c
+
+    def test_only_return_gets_plans(self):
+        trip, pts, T, plans = carpool.plan_trip(self.cfg(), FakeAmap())
+        self.assertEqual((plans, trip.outbound), ([], False))
+        self.assertEqual(trip.back_plans[0].rides, {"小陈": ("老王", "st:西站")})
+        self.assertEqual(trip.travel_date, "2026-10-18")  # 没有去程日期可借用，取返程日期
+
+    def test_same_return_plans_as_with_outbound(self):
+        both = self.cfg()
+        del both["options"]["outbound"]
+        both["options"]["travel_date"] = "2026-10-17"
+        only = carpool.plan_trip(self.cfg(), FakeAmap())[0].back_plans
+        also = carpool.plan_trip(both, FakeAmap())[0].back_plans
+        self.assertEqual([(p.rides, p.taxi, round(p.cost, 3)) for p in only], [(p.rides, p.taxi, round(p.cost, 3)) for p in also])
+
+    def test_matrix_only_asks_for_return_directions(self):
+        _, _, T, _ = carpool.plan_trip(self.cfg(), FakeAmap())
+        self.assertFalse([k for k in T if k[0] != k[1] and (k[0].startswith("car:") or k[1] == "venue")])  # 没有「从车主家出发」和「到目的地」
+        self.assertIn(("venue", "car:老王"), T)
+        self.assertIn(("st:西站", "car:老王"), T)
+        cfg = self.cfg()
+        del cfg["options"]["outbound"]
+        trip = carpool.load_trip(cfg, FakeAmap())  # 默认只查去程
+        out = carpool.build_matrix(FakeAmap(), carpool.points_of(trip), set())
+        self.assertFalse([k for k in out if k[0] != k[1] and (k[0] == "venue" or k[1].startswith("car:"))])
+
+    def test_both_off_is_rejected_before_any_amap_call(self):
+        amap = FakeAmap()
+        cfg = self.cfg()
+        del cfg["return"]
+        with self.assertRaises(SystemExit) as ctx:
+            carpool.plan_trip(cfg, amap)
+        self.assertIn("至少要规划一段", str(ctx.exception))
+        cfg["return"] = {"enabled": False, "depart_time": "18:00", "date": "2026-10-18"}
+        with self.assertRaises(SystemExit):
+            carpool.plan_trip(cfg, amap)
+        self.assertEqual(amap.calls, 0)
+
+    def test_return_only_needs_a_date(self):
+        cfg = self.cfg()
+        del cfg["return"]["date"]
+        with self.assertRaises(SystemExit) as ctx:
+            carpool.plan_trip(cfg, FakeAmap())
+        self.assertIn("返程日期", str(ctx.exception))
+
+    def test_report_has_no_outbound_wording(self):
+        trip, pts, T, plans = carpool.plan_trip(self.cfg(), FakeAmap())
+        report = carpool.render(trip, pts, T, plans)
+        self.assertTrue(report.startswith("# 返程方案："))
+        for word in ("去程", "## 结论", "## 推荐方案", "备选方案", "站→目的地", "不开车的人到各站要多久", "接人"):
+            self.assertNotIn(word, report)
+        self.assertIn("## 返程（18:00 散场后出发", report)
+        self.assertIn("目的地→站车程", report)
+        self.assertIn("送 小陈，赶 G2 西站20:30→小陈家23:30", report)
+
+    def test_payload_and_share_page_only_have_return(self):
+        state = service.compute(self.cfg(), FakeAmap())
+        payload = service.plan_payload(state)
+        self.assertEqual((payload["outbound"], payload["plans"]), (False, []))
+        self.assertEqual(payload["back"]["plans"][0]["rides"], {"小陈": ["老王", "st:西站"]})
+        html = share.render_share(state, 0, 0)
+        self.assertIn("返程方案 1", html)
+        self.assertIn("返程 · 18:00 散场后出发", html)
+        self.assertIn("坐 <b>G2 西站20:30→小陈家23:30</b>", html)
+        for word in ("<h2>开车的</h2>", "<h2>坐车的</h2>", "去程", "出发地出发"):
+            self.assertNotIn(word, html)
+        self.assertNotIn("116.000000,30.000000", html)  # 地图和链接都不指向车主家
+        self.assertNotIn("[30.0, 116.0]", html)
+        self.assertNotIn("@@", html)
+
+    def test_share_choice_is_checked(self):
+        state = service.compute(self.cfg(), FakeAmap())
+        with self.assertRaises(SystemExit) as ctx:
+            share.render_share(state, 0, 5)
+        self.assertIn("没有返程方案 6", str(ctx.exception))
+        both = service.compute(ReturnTripTest().cfg(), FakeAmap())
+        with self.assertRaises(SystemExit):
+            share.render_share(both, 3, 0)
+
+    def test_share_page_names_the_chosen_combination(self):
+        state = service.compute(ReturnTripTest().cfg(), FakeAmap())
+        self.assertIn("去程方案 2 + 返程方案 2", share.render_share(state, 1, 1))
+        no_back = service.compute(config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")]), FakeAmap())
+        self.assertIn("去程方案 1", share.render_share(no_back, 0))
+        self.assertNotIn("返程方案", share.render_share(no_back, 0))
+
+    def test_bridge_shares_return_only(self):
+        saved = browser.amap, browser._last
+        browser.amap, browser._last = FakeAmap(), None
+        try:
+            out = json.loads(browser.handle("plan", json.dumps({"config": self.cfg()})))
+            self.assertEqual(out["plans"], [])
+            html = json.loads(browser.handle("share", json.dumps({"plan": -1, "back_plan": 0})))["html"]
+            self.assertTrue(html.startswith("<!doctype html>"))
+            self.assertIn("没有返程方案", json.loads(browser.handle("share", json.dumps({"back_plan": 4})))["error"])
+        finally:
+            browser.amap, browser._last = saved
+
+    def test_suggest_stations_follows_the_way_home(self):
+        pois = [{"name": n, "location": loc, "typecode": "150200"} for n, loc in [("西站", WEST), ("近站", NEAR)]]
+        cfg = self.cfg()
+        cfg["stations"] = []
+        out = service.suggest_stations(cfg, FakeAmap(pois=pois))
+        self.assertEqual([s["name"] for s in out["stations"]][:2], ["西站", "近站"])  # 西站在老王回家的路上
+        self.assertEqual(out["stations"][0]["best"], {"driver": "老王", "detour": 0})
+        self.assertEqual(out["stations"][0]["to_venue"], round(km_between(Place("", 118, 30), Place("", 117, 30))))  # 目的地到站
+
+    def test_toml_keeps_the_return_table(self):
+        cfg = {"venue": {"name": "v"}, "options": {"outbound": False}, "return": {"enabled": True, "depart_time": "18:00", "date": "2026-10-18"},
+               "people": [{"name": "甲"}]}
+        self.assertEqual(tomllib.loads(carpool.dump_toml(cfg)), cfg)
+
+
 class PartyTest(unittest.TestCase):
     """同行人数：一组人要么一起上同一辆车，要么一起打车。"""
 

@@ -348,6 +348,7 @@ class Trip:
     resolved: list[dict] = field(default_factory=list)  # 这次按文字定位到的坐标，写回配置后下次就不用再查
     back: "Leg | None" = None  # 返程插件开启时的返程设置
     back_plans: list = field(default_factory=list)
+    outbound: bool = True  # 是否规划去程；关掉时只算返程（plans 为空）
     try_mode: bool = False  # 试玩模式（网页版 /try）：行车时间是直线距离估算的，报告不能说来自高德
 
 
@@ -437,6 +438,12 @@ def load_places(cfg: dict, amap, record: list) -> tuple[Place, list[Person]]:
 
 def load_trip(cfg: dict, amap) -> Trip:
     opt = cfg.get("options", {})
+    outbound = bool(opt.get("outbound", True))
+    back = back_leg(cfg)  # 配置有问题先报出来，不白白调用高德
+    if not outbound and back is None:
+        raise SystemExit("去程和返程至少要规划一段：现在去程关了，返程也没开")
+    if not outbound and not str((cfg.get("return") or {}).get("date") or "").strip():
+        raise SystemExit("只规划返程时，要填返程日期（[return] 的 date，如 2026-10-18）")
     resolved: list[dict] = []
     venue, people = load_places(cfg, amap, resolved)
     if not people:
@@ -459,13 +466,15 @@ def load_trip(cfg: dict, amap) -> Trip:
         for s in sorted({*(p.stations or []), *p.rail_min, *p.trains, *p.back_trains, *p.back_rail_min}):
             if s not in names:
                 warnings.append(f"{p.name} 写的站「{s}」不在候选站里，已忽略（名字要和候选站完全一致）")
-    date = str(opt.get("travel_date") or dt.date.today() + dt.timedelta(days=1))
+    # 只规划返程时没有去程日期可借用，日期取返程日期
+    date = str((opt.get("travel_date") if outbound else cfg["return"]["date"]) or dt.date.today() + dt.timedelta(days=1))
     y, m, d = (int(x) for x in date.replace("/", "-").split("-"))
     return Trip(venue, people, stations, int(opt.get("max_stops", DEFAULTS["max_stops"])),
                 float(opt.get("station_cost_min", DEFAULTS["station_cost_min"])), discovered, warnings,
                 estimate_rail=bool(opt.get("estimate_rail", True)),
                 travel_date=f"{y}-{m}-{d}", travel_time=str(opt.get("travel_time", DEFAULTS["travel_time"])),
-                exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back_leg(cfg))
+                exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back,
+                outbound=outbound)
 
 
 def back_leg(cfg: dict) -> "Leg | None":
@@ -532,11 +541,12 @@ def points_of(trip: Trip) -> dict[str, Place]:
     return pts
 
 
-def build_matrix(amap, pts: dict[str, Place], skip: set[str], both_ways: bool = False) -> dict[tuple[str, str], float]:
-    """行车分钟数 T[(起点, 终点)]。去程：起点含车主出发地，终点含目的地，接人点两者都是。
-    both_ways（返程插件）：再加上从目的地出发、到车主家的方向。"""
-    origins = [k for k in pts if (both_ways or k != "venue") and k not in skip]
-    dests = [k for k in pts if (both_ways or not k.startswith("car:")) and k not in skip]
+def build_matrix(amap, pts: dict[str, Place], skip: set[str], out: bool = True, back: bool = False) -> dict[tuple[str, str], float]:
+    """行车分钟数 T[(起点, 终点)]，只查需要的方向。
+    去程（out）：起点含车主出发地，终点含目的地，接人点两者都是。
+    返程（back）：起点含目的地，终点含车主家，送人点两者都是。两段都要时是两者的并集。"""
+    origins = [k for k in pts if k not in skip and ((out and k != "venue") or (back and not k.startswith("car:")))]
+    dests = [k for k in pts if k not in skip and ((out and not k.startswith("car:")) or (back and k != "venue"))]
     print(f"正在向高德查询行车时间（约 {len(dests)} 次请求）…", file=sys.stderr)
     T: dict[tuple[str, str], float] = {}
     plan = [(d, [o for o in origins if o != d]) for d in dests]
@@ -1023,23 +1033,25 @@ def paragraphs(lines: list[str]) -> list[str]:
     return [x for line in lines for x in (line, "")]
 
 
-def station_table(trip: Trip, pts: dict[str, Place], T) -> list[str]:
+def station_table(trip: Trip, pts: dict[str, Place], T, leg: Leg = OUT) -> list[str]:
+    """每个车主「只在这个站停一次」时的绕路。去程：车主家 → 站 → 目的地；返程：目的地 → 站 → 车主家。"""
     drivers = [p for p in trip.people if p.drives]
     rows = []
     for s in trip.stations:
         sid = f"st:{s.name}"
         cells, ok = [], []
         for d in drivers:
-            start = f"car:{d.name}"
-            detour = leg_minutes(T, [start, sid, "venue"]) - T.get((start, "venue"), INF)
-            fits = detour <= d.max_detour
+            start, end = leg.ends(d.name)
+            detour = leg_minutes(T, [start, sid, end]) - T.get((start, end), INF)
+            limit = d.back_max_detour if leg.reverse and d.back_max_detour is not None else d.max_detour
+            fits = detour <= limit and (not leg.reverse or d.back_drives)
             cells.append(("✅ " if fits else "") + fmt_min(max(detour, 0.0)))
             if fits:
                 ok.append(detour)
-        rows.append(((-len(ok), min(ok, default=INF), T.get((sid, "venue"), INF)),
-                     [s.name, fmt_min(T.get((sid, "venue"), INF)), *cells]))
+        ride = leg.station_to_venue(T, sid)
+        rows.append(((-len(ok), min(ok, default=INF), ride), [s.name, fmt_min(ride), *cells]))
     rows.sort(key=lambda r: r[0])
-    head = ["候选站", "站→目的地车程", *[f"{d.name}绕路" for d in drivers]]
+    head = ["候选站", "目的地→站车程" if leg.reverse else "站→目的地车程", *[f"{d.name}绕路" for d in drivers]]
     out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     out += ["| " + " | ".join(cells) + " |" for _, cells in rows]
     return out
@@ -1069,10 +1081,12 @@ def rail_section(trip: Trip) -> list[str]:
 
 
 def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
-    L = [f"# 拼车方案：{trip.venue.name}", ""]
+    L = [f"# 拼车方案：{trip.venue.name}" if trip.outbound else f"# 返程方案：{trip.venue.name}", ""]
     if trip.warnings:
         L += ["> ⚠️ " + w for w in trip.warnings] + [""]
-    if not plans:
+    if not trip.outbound:
+        pass  # 只规划返程：下面直接从返程开始
+    elif not plans:
         L += ["没有找到可行方案。", ""]
     else:
         best = plans[0]
@@ -1095,9 +1109,14 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
         for i, pl in enumerate(trip.back_plans, 1):
             L += [f"### 返程方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
                   *describe_back(pl, pts, T, trip), "", *paragraphs(rank_basis(pl, trip.back_plans[0]))]
-    L += ["## 候选站对比", "",
-          "每个车主「只在这个站停一次」时比直达多绕多久；✅ 表示在他能接受的绕路范围内。", "",
-          *station_table(trip, pts, T), "", *rail_section(trip)]
+    if trip.outbound:
+        L += ["## 候选站对比", "",
+              "每个车主「只在这个站停一次」时比直达多绕多久；✅ 表示在他能接受的绕路范围内。", "",
+              *station_table(trip, pts, T), "", *rail_section(trip)]
+    else:
+        L += ["## 候选站对比", "",
+              "每个车主「只在这个站送一次」时比直接回家多绕多久；✅ 表示在他能接受的绕路范围内。", "",
+              *station_table(trip, pts, T, trip.back), ""]
     if trip.discovered:
         L += ["> 候选站是自动搜出来的（含普速站）。确认后把需要的站写进配置的 `[[stations]]`，"
               "可以去掉没有高铁的站、补上漏掉的站。", ""]
@@ -1105,15 +1124,21 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
           "| 地点 | 解析结果 | 链接 |", "|---|---|---|"]
     L += [f"| {p.name} | {p.note} | [打开]({marker_url(p)}) |" for p in pts.values()]
     L += ["", "## 说明", ""]
-    L += ["- 试玩模式：地点和车次都是虚构的示意；行车时间按直线距离估算（直线公里数 × 1.3 ÷ 75 公里/小时，再加 10 分钟进出城），不是真实路况。",
-          "- 不开车的人到各站的用时：用配置里填的车次和分钟数；没填的按默认每站 "
-          f"{trip.station_cost:.0f} 分钟算。"] if trip.try_mode else [
-          "- 时间来自高德驾车测距，接近查询时的路况，当天可能有出入；车次和到站时间请在 12306 核对。",
-          "- 不开车的人到各站的用时：优先用配置里手填的 `rail_min`，否则用高德公共交通估算；"
-          "估算不准或想排除某些站时，给他填 `stations` 或 `rail_min`。"]
-    L += [
-          f"- 方案按计算规则第 {RULES_VERSION} 版排序，规则和默认值见 https://carpool.eigentime.org/guide/method",
-          "- 高铁站一般要到停车场或网约车上车点接人，约定时说到具体停车场和区域。"]
+    if trip.try_mode:
+        L += ["- 试玩模式：地点和车次都是虚构的示意；行车时间按直线距离估算（直线公里数 × 1.3 ÷ 75 公里/小时，再加 10 分钟进出城），不是真实路况。"]
+    else:
+        L += ["- 时间来自高德驾车测距，接近查询时的路况，当天可能有出入；车次和到站时间请在 12306 核对。"]
+    if trip.outbound:
+        L += ["- 不开车的人到各站的用时：用配置里填的车次和分钟数；没填的按默认每站 "
+              f"{trip.station_cost:.0f} 分钟算。"] if trip.try_mode else [
+              "- 不开车的人到各站的用时：优先用配置里手填的 `rail_min`，否则用高德公共交通估算；"
+              "估算不准或想排除某些站时，给他填 `stations` 或 `rail_min`。"]
+    else:
+        L += ["- 乘客从各站坐的车：用配置里填的回程车次（`return_trains`）；没填的人不限制赶车，到站用时按默认每站 "
+              f"{trip.station_cost:.0f} 分钟算。"]
+    L += [f"- 方案按计算规则第 {RULES_VERSION} 版排序，规则和默认值见 https://carpool.eigentime.org/guide/method"]
+    if trip.outbound:
+        L += ["- 高铁站一般要到停车场或网约车上车点接人，约定时说到具体停车场和区域。"]
     return "\n".join(L) + "\n"
 
 
@@ -1124,9 +1149,11 @@ def plan_trip(cfg: dict, amap) -> tuple[Trip, dict[str, Place], dict, list[Plan]
         trip.warnings.insert(0, TRY_NOTICE)
     pts = points_of(trip)
     skip = {f"home:{p.name}" for p in trip.people if not p.drives and not p.pickup_at_home}
-    T = build_matrix(amap, pts, skip, both_ways=trip.back is not None)
-    estimate_rail(amap, trip)
-    plans = solve(trip, T)
+    T = build_matrix(amap, pts, skip, out=trip.outbound, back=trip.back is not None)
+    plans: list[Plan] = []
+    if trip.outbound:  # 只规划返程时用不到去程的车次和用时
+        estimate_rail(amap, trip)
+        plans = solve(trip, T)
     if trip.back:  # 返程插件
         trip.back_plans = solve(trip, T, leg=trip.back)
     return trip, pts, T, plans
@@ -1172,7 +1199,7 @@ def dump_toml(cfg: dict, header: str = "") -> str:
                 if v is not None and v != "" and v != [] and v != {}]
 
     out = [header] if header else []
-    for name in ("venue", "options"):
+    for name in ("venue", "options", "return"):
         if cfg.get(name):
             out += [f"[{name}]", *body(cfg[name]), ""]
     for name in ("stations", "people"):

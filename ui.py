@@ -54,12 +54,10 @@ class App:
         return plan_payload(self.last)
 
     def share(self, plan: int = 0, back_plan: int = 0) -> dict:
-        index = plan
         if not self.last:
             raise SystemExit("先点「计算方案」，再生成方案页")
-        if not 0 <= index < len(self.last["plans"]):
-            raise SystemExit(f"没有方案 {index + 1}")
-        self.share_path.write_text(share.render_share(self.last, index, back_plan), encoding="utf-8")
+        share.check_choice(self.last, plan, back_plan)
+        self.share_path.write_text(share.render_share(self.last, plan, back_plan), encoding="utf-8")
         return {"file": self.share_path.name, "url": "/share"}
 
     def load(self) -> dict:

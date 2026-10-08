@@ -33,7 +33,7 @@ test('编辑页保留验收脚本依赖的 id 和 data 属性', () => {
   for (const id of ids) assert.match(ui, new RegExp(`id="${id}"`), `缺少 #${id}`);
   // 「更多」里动态生成的元素
   for (const id of ['shareCode', 'shareCodeBtn', 'editCode', 'editCodeBtn', 'rotateBtn', 'deleteBtn']) assert.ok(ui.includes(`id="${id}"`), `缺少 #${id}`);
-  for (const attr of ['data-return-toggle', 'data-backtrain', 'data-train', 'data-station=', 'data-share="new-link"', 'data-plan=', 'data-leg=', 'data-bind=']) {
+  for (const attr of ['data-return-toggle', 'data-outbound-toggle', 'data-backtrain', 'data-train', 'data-station=', 'data-share="new-link"', 'data-plan=', 'data-leg=', 'data-bind=']) {
     assert.ok(ui.includes(attr), `缺少 ${attr}`);
   }
   // 弹窗的稳定选择器
@@ -145,7 +145,7 @@ test('试玩模式：只在在线站点的 /try 或 /try.html 启用，加载示
 test('试玩模式：隐藏发布按钮，只留「看示例方案页」', () => {
   assert.match(ui, /body\.try \.local-only, body\.try #sharebtn \{ display: none; \}/);
   assert.match(ui, /id="demoLink" href="\/demo"/);
-  assert.match(ui, /\$\('#sharebtn'\)\.hidden = mode === 'try' \|\| !result\.plans\.length;/);
+  assert.match(ui, /\$\('#sharebtn'\)\.hidden = mode === 'try' \|\| !\(result\.plans\.length \|\| result\.back\?\.plans\.length\);/);
 });
 
 function loadWith(names, ctx) {
@@ -194,4 +194,49 @@ test('按模式显示的类不用 display: revert（a.c-btn 会被退回成行�
   assert.doesNotMatch(ui, /-only\s*\{\s*display:\s*revert/);
   assert.match(ui, /body:not\(\.try\) \.try-only \{ display: none; \}/);
   assert.match(ui, /body:not\(\.online\) \.online-only \{ display: none; \}/);
+});
+
+// ---------- 去程、返程各有开关 ----------
+// 取出页面脚本里的函数或 const 一行定义，放进沙箱里跑
+function pick(names, ctx) {
+  const code = scripts(ui).at(-1);
+  const src = names.map((n) => {
+    const m = new RegExp(`(?:function ${n}\\b[\\s\\S]*?\\n\\}\\n|const ${n} = [^\\n]*\\n)`).exec(code);
+    assert.ok(m, `找不到 ${n}`);
+    return m[0];
+  }).join('\n');
+  return vm.runInNewContext(`${src}\n({ ${names.join(', ')} })`, ctx);
+}
+
+test('表单顶部有「规划哪几段」：去程、返程两个独立开关', () => {
+  const form = /function renderForm\(\) \{[\s\S]*?\n\}\n/.exec(scripts(ui).at(-1))[0];
+  const legs = /<section id="sec-legs">[\s\S]*?<\/section>/.exec(form)[0];
+  assert.match(legs, /规划哪几段/);
+  assert.match(legs, /data-outbound-toggle/);
+  assert.match(legs, /data-return-toggle/);
+  assert.ok(form.indexOf('id="sec-legs"') < form.indexOf('id="sec-venue"'), '开关放在目的地之前');
+  assert.doesNotMatch(form.slice(form.indexOf('id="sec-return"')), /data-return-toggle/, '返程一节里不再有开关');
+  assert.match(ui, /去程和返程可以分别选，方案页按你选的组合生成/);
+});
+
+test('校验：去程返程至少开一个；只规划返程要有返程日期，并且不再检查去程的日期和车次', () => {
+  const run = (cfg) => pick(['isDate', 'isClock', 'trainProblem', 'collectProblems'], { cfg }).collectProblems();
+  const base = { venue: { name: 'v' }, stations: [], people: [{ name: '甲', from: 'x', car_seats: 3 }] };
+  const none = run({ ...base, options: { outbound: false }, return: { enabled: false } });
+  assert.ok(none.some((p) => p.path === 'sec-legs' && /至少要规划一段/.test(p.msg)));
+  assert.ok(!run({ ...base, options: {} }).some((p) => p.path === 'sec-legs'));
+  const only = run({ ...base, options: { outbound: false, travel_date: 'bad' }, return: { enabled: true, depart_time: '20:30' } });
+  assert.ok(only.some((p) => p.path === 'return.date' && p.required), '只规划返程时返程日期必填');
+  assert.ok(!only.some((p) => p.path === 'options.travel_date'), '去程关了，出发日期不检查');
+  const ok = run({ ...base, options: { outbound: false }, return: { enabled: true, depart_time: '20:30', date: '2026-10-18' } });
+  assert.equal(ok.length, 0);
+});
+
+test('只规划返程：隐藏去程的车次、出发日期时间，步骤条不再有「车次」，方案区只有返程一组', () => {
+  const code = scripts(ui).at(-1);
+  assert.match(/function personCard[\s\S]*?\n\}\n/.exec(code)[0], /\$\{!outOn \? '' : `<div class="rail">/);
+  assert.match(/function renderForm[\s\S]*?\n\}\n/.exec(code)[0], /\$\{outboundOn\(\) \? `<div class="row">\$\{field\('出发日期'/);
+  assert.match(/function renderSteps[\s\S]*?\n\}\n/.exec(code)[0], /\.\.\.\(outboundOn\(\) \? \[\['sec-people', '车次'/);
+  assert.match(/function renderTabs[\s\S]*?\n\}\n/.exec(code)[0], /\(outOn \? group\('去程'/);
+  assert.match(code, /backend\.share\(outOn \? active : -1, activeBack\)/);
 });

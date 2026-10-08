@@ -164,9 +164,17 @@ def _return_section(state: dict, index: int) -> str:
     return f'<h2>返程 · {depart} 散场后出发</h2>{"".join(cards)}'
 
 
-def render_share(state: dict, index: int, back_index: int = 0, generated: dt.datetime | None = None,
-                 expires: dt.date | None = None) -> str:
-    """expires：在线版里这个行程的自动删除日期，写进页脚；本地版没有保留期，不传。"""
+def check_choice(state: dict, index: int, back_index: int = 0) -> None:
+    """选的方案要存在：规划了去程要有这个去程方案；只规划返程要有返程方案。"""
+    trip = state["trip"]
+    if trip.outbound and not 0 <= index < len(state["plans"]):
+        raise SystemExit(f"没有方案 {index + 1}")
+    if not trip.outbound and not 0 <= back_index < len(trip.back_plans):
+        raise SystemExit(f"没有返程方案 {back_index + 1}")
+
+
+def _outbound(state: dict, index: int) -> tuple[str, dict]:
+    """去程部分：「开车的」「坐车的」两节卡片，以及地图数据。"""
     trip, pts, T = state["trip"], state["pts"], state["T"]
     plan: carpool.Plan = state["plans"][index]
     people = {p.name: p for p in trip.people}
@@ -262,22 +270,91 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
         pt["notes"] = detours.get(pt.pop("key"), [])
     map_data = {"points": points, "routes": routes,
                 "taxis": [[[pts[s].lat, pts[s].lng], [venue.lat, venue.lng]] for s in taxis]}
-    taxi_people = sum(people[n].party for n in plan.taxi)
-    summary = (f"{plan.carried} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
-               + (f"，{taxi_people} 人打车" if plan.taxi else "") + ("，含返程" if trip.back and trip.back_plans else ""))
+    html = ("<h2>开车的</h2>" + "".join(drivers) + "<h2>坐车的</h2>"
+            + ("".join(riders) or '<p class="meta">这个方案里没有需要接的人。</p>'))
+    return html, map_data
+
+
+def _back_map(state: dict, back_index: int) -> dict:
+    """只规划返程时的地图：目的地、送人用到的车站，以及模糊处理后的返程路线（路线终点是车主的家，去掉靠近家的一段）。"""
+    trip, pts = state["trip"], state["pts"]
+    plan = trip.back_plans[min(back_index, len(trip.back_plans) - 1)]
+    venue = pts["venue"]
+    homes = [pts[s] for r in plan.routes for s in r.stops if s.startswith("home:")]
+
+    def line(driver: str, stops: tuple) -> list:
+        path = (state["paths"].get(("back", driver, stops))
+                or [[pts[k].lat, pts[k].lng] for k in trip.back.sequence(driver, stops)])
+        return _blur(path[::-1], homes)  # 倒过来，让「开头去掉一段」落在车主家那一头
+
+    points, routes, detours = [], [], {}
+    for i, r in enumerate(plan.routes):
+        segments = line(r.driver, r.stops)
+        routes.append({"color": COLORS[i % len(COLORS)], "label": r.driver, "path": segments,
+                       "direct": line(r.driver, ()) if r.stops else None})
+        if segments:
+            lat, lng = segments[0][0]
+            points.append({"key": f"end:{r.driver}", "name": f"{r.driver} 回家", "lat": lat, "lng": lng, "kind": "car"})
+        if r.stops:
+            at = r.stops[0] if r.stops[0].startswith("st:") else f"end:{r.driver}"
+            detours.setdefault(at, []).append(f"{r.driver} 多绕 {carpool.fmt_min(r.detour)}")
+    used = {s for r in plan.routes for s in r.stops if s.startswith("st:")} | set(plan.taxi.values())
+    points += [{"key": k, "name": pts[k].name, "lat": pts[k].lat, "lng": pts[k].lng,
+                "kind": "venue" if k == "venue" else "st"} for k in ["venue", *sorted(used)]]
+    for pt in points:
+        pt["notes"] = detours.get(pt.pop("key"), [])
+    return {"points": points, "routes": routes,
+            "taxis": [[[pts[s].lat, pts[s].lng], [venue.lat, venue.lng]] for s in sorted(set(plan.taxi.values()))]}
+
+
+def render_share(state: dict, index: int, back_index: int = 0, generated: dt.datetime | None = None,
+                 expires: dt.date | None = None) -> str:
+    """expires：在线版里这个行程的自动删除日期，写进页脚；本地版没有保留期，不传。
+    选哪个组合：去程方案 index + 返程方案 back_index；只规划返程时 index 不用，只规划去程时 back_index 不用。"""
+    check_choice(state, index, back_index)
+    trip, pts = state["trip"], state["pts"]
+    venue = pts["venue"]
+    venue_link = ("目的地位置", carpool.marker_url(venue))
+    has_back = bool(trip.back and trip.back_plans)
+    if trip.outbound:
+        plan = state["plans"][index]
+        body, map_data = _outbound(state, index)
+        taxi_people = sum(p.party for p in trip.people if p.name in plan.taxi)
+        summary = (f"{plan.carried} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
+                   + (f"，{taxi_people} 人打车" if plan.taxi else "") + ("，含返程" if has_back else ""))
+        combo = f"去程方案 {index + 1}" + (f" + 返程方案 {min(back_index, len(trip.back_plans) - 1) + 1}" if has_back else "")
+        eyebrow = f"{_date_label(trip.travel_date)} 出发 · {combo}"
+        heading = f"去 {venue.name}"
+        legend = "彩色线：接人后的实际路线；灰色虚线：不接人时的直达路线，两条线分开的那段就是绕的路。"
+        tips = [f"时刻按车次到站后 {round(trip.exit_buffer)} 分钟出站推算，车主时间来自高德路况估算。路线和时间都只供参考，当天以实际路况和群里的实时位置为准，开车遵守交通规则。",
+                "高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。",
+                "车次、余票以 12306 为准，提前买票。"]
+    else:
+        plan = trip.back_plans[min(back_index, len(trip.back_plans) - 1)]
+        body, map_data = "", _back_map(state, back_index)
+        taxi_people = sum(p.party for p in trip.people if p.name in plan.taxi)
+        summary = (f"{plan.carried} 人搭顺风车" + (f"，车主共多绕 {carpool.fmt_min(plan.detour)}" if plan.detour >= 1 else "")
+                   + (f"，{taxi_people} 人打车" if plan.taxi else ""))
+        eyebrow = f"{_date_label(trip.travel_date)} 返程 · 返程方案 {back_index + 1}"
+        heading = f"从 {venue.name} 回去"
+        legend = "彩色线：送人后回家的实际路线（靠近家的一段不画）；灰色虚线：不送人、直接回家的路线，两条线分开的那段就是绕的路。"
+        tips = ["时刻按每个人填的离场时间和高德路况估算，路线和时间都只供参考，当天以实际路况和群里的实时位置为准，开车遵守交通规则。",
+                "送到车站时，高铁站一般不能在送客平台久停；到了在群里发「共享实时位置」。",
+                "车次、余票以 12306 为准，提前买票。"]
     stamp = (generated or dt.datetime.now(BEIJING)).strftime("%m-%d %H:%M") + "（北京时间）"
     expire_note = f"<br>这一页会在 {expires.isoformat()} 前后自动删除" if expires else ""
     return _fill(TEMPLATE, dict(
         title=escape(f"{venue.name} 出行方案"),
-        eyebrow=escape(f"{_date_label(trip.travel_date)} 出发 · 方案 {index + 1}"),
+        eyebrow=escape(eyebrow),
+        heading=escape(heading),
+        legend=escape(legend),
+        tips="".join(f"<li>{escape(t)}</li>" for t in tips),
         venue=escape(venue.name),
         venue_url=escape(venue_link[1]),
         summary=escape(summary),
-        description=escape(f"{_date_label(trip.travel_date)} 出发 · {summary}"),
-        drivers="".join(drivers),
-        riders="".join(riders) or '<p class="meta">这个方案里没有需要接的人。</p>',
+        description=escape(f"{eyebrow.split(' · ')[0]} · {summary}"),
+        body=body,
         back=_return_section(state, back_index),
-        buffer=round(trip.exit_buffer),
         stamp=escape(stamp),
         expire_note=expire_note,
         rules_version=carpool.RULES_VERSION,
@@ -371,7 +448,7 @@ TEMPLATE = """<!doctype html>
 <div class="wrap">
   <header>
     <div class="eyebrow">@@eyebrow@@</div>
-    <h1>去 @@venue@@</h1>
+    <h1>@@heading@@</h1>
     <p class="sum">@@summary@@</p>
     <p class="draft">这是先定大方向的初步方案：心里有个底，具体在哪接、几点到，大家在群里再商量。</p>
     <div class="navs">
@@ -380,18 +457,11 @@ TEMPLATE = """<!doctype html>
     </div>
   </header>
   <div id="map"></div>
-  <p class="legend">彩色线：接人后的实际路线；灰色虚线：不接人时的直达路线，两条线分开的那段就是绕的路。</p>
-  <h2>开车的</h2>
-  @@drivers@@
-  <h2>坐车的</h2>
-  @@riders@@
+  <p class="legend">@@legend@@</p>
+  @@body@@
   @@back@@
   <h2>注意</h2>
-  <ul class="tips">
-    <li>时刻按车次到站后 @@buffer@@ 分钟出站推算，车主时间来自高德路况估算。路线和时间都只供参考，当天以实际路况和群里的实时位置为准，开车遵守交通规则。</li>
-    <li>高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。</li>
-    <li>车次、余票以 12306 为准，提前买票。</li>
-  </ul>
+  <ul class="tips">@@tips@@</ul>
   <footer>生成于 @@stamp@@ · 链接会打开高德地图@@expire_note@@<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a><br>按公开的计算规则（第 @@rules_version@@ 版）排序：先让尽量多的人搭上车，再让总用时最少 · <a href="https://carpool.eigentime.org/guide/method" target="_blank" rel="noopener">怎么算的</a></footer>
 </div>
 <script id="data" type="application/json">@@data@@</script>
