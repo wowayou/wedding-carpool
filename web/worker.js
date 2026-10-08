@@ -47,7 +47,7 @@ const BOT_RULES = [
 ];
 const BOT_NAMES = new Set(BOT_RULES.map(([name]) => name));
 // 页面访问只统计这些路径（/guide/*、/for/* 只算存在的页面，见 route）
-const PAGE_PATH_RE = /^\/(?:|demo|guide(?:\/[a-z0-9-]+)?|for\/[a-z0-9-]+|privacy|about)$/;
+const PAGE_PATH_RE = /^\/(?:|demo|try|guide(?:\/[a-z0-9-]+)?|for\/[a-z0-9-]+|privacy|about)$/;
 const CREATE_PER_IP_PER_DAY = 10;
 // 数据保留期：出行日期后 60 天、最后一次编辑后 180 天，取较晚的那个；到期由行程实例的定时任务删除
 const RETAIN_AFTER_TRAVEL_MS = 60 * 86400e3;
@@ -1416,7 +1416,7 @@ function crossSiteMutation(request, url) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const isEditPage = /^\/t\/[a-z2-9]{10}\/?$/.test(url.pathname);
+    const isEditPage = /^\/t\/[a-z2-9]{10}\/?$/.test(url.pathname) || /^\/try(?:\.html)?\/?$/.test(url.pathname); // 试玩页就是编辑页的静态副本
     return withSecurityHeaders(await route(request, env, url, ctx), isEditPage ? { 'content-security-policy': "frame-ancestors 'none'" } : {});
   },
 };

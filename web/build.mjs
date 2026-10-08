@@ -22,6 +22,10 @@ cpSync('web/_headers', 'dist/_headers'); // 静态文件的安全响应头；Wor
 // 编辑页的前端依赖改为自己托管：下载并校验到 dist/vendor/，把 dist/edit.html、dist/pyworker.js 里的 CDN 地址换成 /vendor/…（见 web/vendor.mjs）
 vendor();
 
+// 试玩页（/try）：和编辑页是同一个文件，进入后由页面按路径切到试玩模式。要在 vendor() 之后复制，CDN 地址才已经换成 /vendor/
+cpSync('dist/edit.html', 'dist/try.html');
+cpSync('web/try-trip.json', 'dist/try-trip.json'); // 试玩的示例行程（虚构）
+
 // ---------- 构建时给每个页面生成 CSP ----------
 // 内嵌脚本按内容的 sha256 放行（不用 'unsafe-inline'），改了脚本重新构建即可，不用手工更新哈希。
 // 只改 dist/ 里的产物，源文件不动。CSP 放在 <meta> 里，紧跟 <meta charset>、在任何脚本之前。
@@ -35,13 +39,12 @@ const BASE = {
 const LEAFLET = { 'script-src': [CDNJS], 'style-src': [CDNJS], 'img-src': [CDNJS, 'https://*.is.autonavi.com'] };
 // 静态页面按 web/site-data.mjs 的清单逐个放行：示例页（demo）要 Leaflet（cdnjs），其余页面只有内嵌脚本（页头菜单、样式指南的演示）
 const PAGES = Object.fromEntries(Object.entries(site.csp).map(([out, kind]) => [out, kind === 'leaflet' ? LEAFLET : {}]));
-Object.assign(PAGES, {
-  // 编辑页：Leaflet、marked、Pyodide 都是自己托管的同源文件（见 web/vendor.mjs），不放行任何 CDN，只放行高德瓦片图片。
-  // 计算线程是同源的模块 Worker：Worker 里 import 的脚本由 worker-src 管（Chromium 实测），wasm 编译要 script-src 里的 'wasm-unsafe-eval'
-  'edit.html': {
-    'worker-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'img-src': ['https://*.is.autonavi.com'],
-  },
-});
+// 编辑页：Leaflet、marked、Pyodide 都是自己托管的同源文件（见 web/vendor.mjs），不放行任何 CDN，只放行高德瓦片图片。
+// 计算线程是同源的模块 Worker：Worker 里 import 的脚本由 worker-src 管（Chromium 实测），wasm 编译要 script-src 里的 'wasm-unsafe-eval'
+const EDIT_CSP = {
+  'worker-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'img-src': ['https://*.is.autonavi.com'],
+};
+Object.assign(PAGES, { 'edit.html': EDIT_CSP, 'try.html': EDIT_CSP }); // 试玩页和编辑页同一份策略
 
 // 可执行的内嵌脚本：没有 src，类型不是 JSON 数据块（application/json、application/ld+json）
 function inlineScriptHashes(html) {

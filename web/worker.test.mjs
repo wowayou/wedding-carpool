@@ -1179,6 +1179,18 @@ test('统计：页面访问、爬虫、来源各自计数；爬虫不算页面�
   assert.ok(!JSON.stringify(day).includes('secret') && !JSON.stringify(day).includes('1.1.1.1'));
 });
 
+test('统计：/try 试玩页计页面访问，带编辑页一样的防嵌入头', async () => {
+  const before = (await todayStats()).paths['/try'] || 0;
+  const res = await call('/try', { headers: HTML });
+  assert.equal(res.status, 200);
+  assertSecure(res, { 'content-security-policy': "frame-ancestors 'none'" });
+  await call('/try', { headers: { ...HTML, 'user-agent': 'Googlebot/2.1' } }); // 爬虫不算页面访问
+  await call('/try', { method: 'POST', headers: HTML }); // 不是 GET：不算
+  await settle();
+  assert.equal((await todayStats()).paths['/try'], before + 1);
+  assert.equal((await call('/try.html', { headers: HTML })).headers.get('content-security-policy'), "frame-ancestors 'none'");
+});
+
 test('统计：新建行程按来源分、发布方案页、方案页被打开、当天有计算的行程数', async () => {
   await newTrip({ amapKey: OWN_KEY });
   const t = await newTrip(); // 邀请码

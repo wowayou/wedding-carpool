@@ -11,8 +11,8 @@
     "binding": "ASSETS",
     // 不存在的静态路径返回 dist/404.html（状态码 404）
     "not_found_handling": "404-page",
-    // 先走 Worker 的路径：接口、方案页、编辑页，以及要做页面访问计数的页面（计数后由 Worker 转给静态文件）
-    "run_worker_first": ["/api/*", "/p/*", "/t/*", "/", "/demo", "/guide", "/guide/*", "/for/*", "/privacy", "/about"]
+    // 先走 Worker 的路径：接口、方案页、编辑页，以及要做页面访问计数的页面（计数后由 Worker 转给静态文件；/try 试玩页也是，不加也能用，只是不计数）
+    "run_worker_first": ["/api/*", "/p/*", "/t/*", "/", "/demo", "/try", "/guide", "/guide/*", "/for/*", "/privacy", "/about"]
   },
   "durable_objects": {
     "bindings": [

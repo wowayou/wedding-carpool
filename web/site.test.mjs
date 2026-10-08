@@ -87,3 +87,20 @@ test('SITE_ORIGIN 写错（没有协议、带路径）会让构建报错', () =>
     } finally { rmSync(b.dir, { recursive: true, force: true }); }
   }
 });
+
+// 试玩页（/try）：构建时把编辑页复制成 try.html，CSP 一致，示例数据一起进 dist。
+// 要跑完整构建（会重写 dist/）；依赖缓存（.cache/vendor）不在时需要联网下载，这里直接跳过
+test('构建产物里有试玩页 try.html 和 try-trip.json，CSP 与编辑页一致', { skip: !existsSync('.cache/vendor') && '没有依赖缓存，先 npm run build 一次' }, () => {
+  const child = spawnSync(process.execPath, ['web/build.mjs'], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const edit = readFileSync('dist/edit.html', 'utf8'), tryPage = readFileSync('dist/try.html', 'utf8');
+  assert.equal(tryPage, edit); // 同一个文件：模式由页面按路径判断
+  const csp = (html) => /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1];
+  assert.ok(csp(tryPage));
+  assert.equal(csp(tryPage), csp(edit));
+  assert.match(csp(tryPage), /script-src 'self' 'wasm-unsafe-eval' 'sha256-/);
+  assert.match(tryPage, /<meta name="robots" content="noindex">/);
+  assert.doesNotMatch(tryPage, /cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net/); // CDN 地址已换成 /vendor/
+  assert.deepEqual(JSON.parse(readFileSync('dist/try-trip.json', 'utf8')), JSON.parse(readFileSync('web/try-trip.json', 'utf8')));
+  assert.match(readFileSync('wrangler.jsonc', 'utf8'), /"run_worker_first": \[[^\]]*"\/try"/);
+});
