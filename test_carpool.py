@@ -676,6 +676,63 @@ class RuleSnapshotTest(unittest.TestCase):
         self.check(plans, [((), {}, {}, ["小陈"], 0, 0.0, 0.0)])
 
 
+class RankBasisTest(unittest.TestCase):
+    """报告里的「排序依据」和方案页页脚：分项之和要对得上，版本号和规则链接要在。"""
+
+    BASIS = re.compile(r"排序依据：(\d+) 人搭车；总分钟 (\d+) = 车主多绕 (\d+) \+ 乘客到上车点 (\d+) \+ 打车组 (\d+)")
+
+    def report(self, cfg):
+        trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
+        return carpool.render(trip, pts, T, plans), plans
+
+    def cfg(self, **driver):
+        return config([person("老王", WANG, car_seats=3, **driver), person("小李", "116.5,30.4"), person("小陈", "114.0,34.0")])
+
+    def test_components_sum_to_displayed_total(self):
+        report, plans = self.report(self.cfg(max_detour_min=60))
+        found = self.BASIS.findall(report)
+        self.assertEqual(len(found), len(plans))
+        for carried, total, *parts in found:
+            self.assertEqual(int(total), sum(map(int, parts)))
+        for p in plans:  # 分项合计就是排序用的成本
+            self.assertAlmostEqual(p.cost, p.detour + p.rider_min + p.taxi_min)
+
+    def test_same_headcount_shows_signed_component_changes(self):
+        report, _ = self.report(self.cfg(max_detour_min=60))
+        self.assertIn("和推荐方案比：总分钟多 17（车主多绕 −35，乘客到上车点 +52）", report)
+
+    def test_fewer_riders_shows_headcount_change(self):
+        report, _ = self.report(self.cfg())
+        self.assertIn("和推荐方案比：少 1 人搭车", report)
+        self.assertNotIn("和推荐方案比：总分钟", report)
+
+    def test_tie_on_minutes_names_the_stop_difference(self):
+        best = carpool.Plan([carpool.Route("甲", ("st:a",), 10, 0)], {}, {}, [], 0, 10, 1, 10, 0)
+        other = carpool.Plan([carpool.Route("甲", ("st:a", "st:b"), 10, 0)], {}, {}, [], 0, 10, 1, 10, 0)
+        self.assertEqual(carpool.rank_basis(other, best)[1], "和推荐方案比：总分钟相同，停车多 1 次")
+
+    def test_return_plans_have_basis_and_rules_note(self):
+        cfg = self.cfg()
+        cfg["people"][2]["return_trains"] = {"西站": "G2 西站20:30→小陈家23:30"}
+        cfg["return"] = {"enabled": True, "depart_time": "18:00"}
+        report, _ = self.report(cfg)
+        back = report.split("## 返程（")[1].split("## 候选站对比")[0]
+        self.assertIn("排序依据：2 人搭车", back)
+        self.assertIn("和推荐方案比：", back)
+        self.assertIn(f"方案按计算规则第 {carpool.RULES_VERSION} 版排序", report)
+        self.assertIn("https://carpool.eigentime.org/guide/method", report)
+
+    def test_share_page_footer_links_to_rules(self):
+        html = share.render_share(service.compute(self.cfg(), FakeAmap()), 0)
+        self.assertIn(f"按公开的计算规则（第 {carpool.RULES_VERSION} 版）排序", html)
+        self.assertIn('href="https://carpool.eigentime.org/guide/method" target="_blank" rel="noopener">怎么算的</a>', html)
+
+    def test_demo_page_footer_matches_share_template(self):
+        html = (Path(__file__).parent / "web" / "demo.html").read_text(encoding="utf-8")
+        self.assertIn(f"按公开的计算规则（第 {carpool.RULES_VERSION} 版）排序", html)
+        self.assertIn('href="https://carpool.eigentime.org/guide/method"', html)
+
+
 class TomlTest(unittest.TestCase):
     def test_dump_roundtrips(self):
         cfg = {

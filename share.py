@@ -280,6 +280,7 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
         buffer=round(trip.exit_buffer),
         stamp=escape(stamp),
         expire_note=expire_note,
+        rules_version=carpool.RULES_VERSION,
         data=json.dumps(map_data, ensure_ascii=False).replace("</", "<\\/"),
         light=_css_vars(LIGHT),
         dark=_css_vars(DARK),
@@ -391,7 +392,7 @@ TEMPLATE = """<!doctype html>
     <li>高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。</li>
     <li>车次、余票以 12306 为准，提前买票。</li>
   </ul>
-  <footer>生成于 @@stamp@@ · 链接会打开高德地图@@expire_note@@<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a></footer>
+  <footer>生成于 @@stamp@@ · 链接会打开高德地图@@expire_note@@<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a><br>按公开的计算规则（第 @@rules_version@@ 版）排序：先让尽量多的人搭上车，再让总用时最少 · <a href="https://carpool.eigentime.org/guide/method" target="_blank" rel="noopener">怎么算的</a></footer>
 </div>
 <script id="data" type="application/json">@@data@@</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
