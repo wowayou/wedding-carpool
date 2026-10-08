@@ -65,10 +65,12 @@
 - 容器：`c-card`（`--drive` `--ride` `--taxi` `--accent` 左边色条）、`c-tag`（`--ok` `--warn` `--danger` `--info` `--accent` `--drive` `--ride` `--taxi`）、`c-alert`（`--info` `--ok` `--warn` `--danger`）、`c-callout`。
 - 浮层：弹窗 `dialog.c-modal`、抽屉 `dialog.c-drawer`（都用原生 `<dialog>`，`showModal()` 自带焦点管理和 Esc 关闭）、轻提示 `c-toasts` 加 `c-toast`。编辑页和管理页用它们替换了 `alert` / `confirm` / `prompt`：各封装成 `confirmDialog`、`promptDialog`、`alertDialog` 和 `toast`，确认按钮 `[data-dialog-ok]`、取消 `[data-dialog-cancel]`、输入框 `[data-dialog-input]`、错误提示 `[data-dialog-error]`；删除、重置、停用这类危险操作用 `c-btn--danger c-btn--solid`。
 - 数据展示：`c-table-wrap` + `c-table`（窄屏横向滚动）、`c-tabs`、`c-steps`（`--row` 为横排）、`c-progress`（用 `--value`）、`c-empty`、`c-skeleton`。
-- 页面结构：站点页头 `c-site-header`（含手机菜单 `c-nav-toggle`、「场景」下拉 `c-nav__group`）、页脚 `c-site-footer`、精简页头 `c-bar`、面包屑 `c-breadcrumb`；`c-container`、`c-prose`、`c-section`、`c-hero`、`c-faq`、`c-figure`。
+- 页面结构：站点页头 `c-site-header`（含手机菜单 `c-nav-toggle`、「场景」下拉 `c-nav__group`；右侧操作区 `c-nav__actions` 放「试玩」次要按钮和「新建行程」主按钮；导航当前页用 `--accent` 下划线标出）、页脚 `c-site-footer`（上半 `__top`：左边 `__intro` 是品牌、介绍和带下划线箭头的引导行 `__cta`，右边 `__cols` 四列链接，栏目标题加粗；`__bottom` 是底部小字；最下面是大字标 `c-wordmark`；页脚和页面同为 `--bg`，只靠细线分开，打印时整个隐藏）、精简页头 `c-bar`、面包屑 `c-breadcrumb`；`c-container`、`c-prose`、`c-section`、`c-hero`、`c-faq`、`c-figure`。
 - 图标：`web/partials/icons.svg` 是 sprite，24 网格、1.75 描边、`currentColor`。模板里写 `{{icon:car}}`，生成 `<svg class="c-icon"><use href="/icons.svg#i-car"/></svg>`。现有：car、train、taxi、pin、station、copy、external、print、menu、close、check、alert、info、plus、trash、map、edit、arrow-right、chevron-down、heart、users、briefcase、github。不用 emoji 当图标。
 
 ## 页面模板和构建
+
+大字标 `c-wordmark`：页脚底部内嵌 SVG，单线画小写 carpool，桌面一行（`__svg--wide`），640px 以下分两行（`__svg--stack`），两份都带 `aria-hidden="true"`、`focusable="false"`。颜色规则：线条 `c-wordmark__line` 用 `--ink`，两个 o 是圆盘（`--station`、`--drive`）加中心小圆点（`--dest`、`--ride`），线端小圆点用 `--accent`；**只用语义变量，SVG 里不写死色值**（深色模式自动跟着变），构建测试会检查。静态，不加动画。
 
 页头页脚只写一份，在 `web/partials/`：`header.html`、`footer.html`、`header-lite.html`（编辑页和管理页的精简页头，参数 `title`、`actions`）、`head-common.html`、`site-script.html`（页头交互，内嵌脚本，构建时算哈希放进 CSP）。页面源文件里写占位，`web/site.mjs` 在构建时替换：
 
