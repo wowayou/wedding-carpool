@@ -122,7 +122,7 @@ Worker（web/worker.js，用 placement.region 固定在香港附近运行，离�
    └─ KV：方案页（带访问口令和过期时间）、按 Key 和接口类别记的配额标记
 ```
 
-计算内核（`carpool.py`）以「一段行程」（leg）为单位求解：去程是车主从家出发接人去目的地，返程是从目的地出发送人。两段互不影响，可以只算其中一段。座位按同行人数算，一组人不拆开。没搭上车的人怎么打车由 `TaxiPool` 安排，结果按「哪些人没搭上车」缓存。方案页由 `share.py` 生成，编辑器是 `ui.html`（本地版和在线版共用）。
+计算内核（`carpool.py`）以「一段行程」（leg）为单位求解：去程是车主从家出发接人去目的地，返程是从目的地出发送人。两段互不影响，可以只算其中一段。座位按同行人数算，一组人不拆开。没搭上车的人怎么打车由 `TaxiPool` 安排，结果按「哪些人没搭上车」缓存。方案页由 `share.py` 生成，编辑器是 `ui.html`（本地版和在线版共用）。求解之后，每个方案里「谁几点出发、几点到哪、等多久、打车几点汇合」只在行程表（`carpool.timelines`）里算一次，报告、方案页和界面数据都只读它，不再各自推算。`tests/golden/` 里的金标准测试逐字节固定这三样输出：有意改了输出，用 `GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest` 重新生成，再看一遍 `git diff`。
 
 需要 Node.js、Cloudflare 账号，以及一个高德 Web 服务 Key。免费套餐就够用，超出免费额度只会报错，不会扣费。
 
@@ -201,7 +201,7 @@ npm test     # Worker、页面合并逻辑、编辑页静态检查、站点构�
 
 ### 计算规则的版本
 
-`carpool.RULES_VERSION` 是计算规则的版本号，默认值集中在 `carpool.DEFAULTS`。只有排序规则或成本口径变了才加一，改界面、改文字不加。`test_carpool.py` 里的规则快照测试固定了几个场景的方案顺序和各项数字：快照失败说明排序或成本变了，如果是有意修改，更新期望值、把 `RULES_VERSION` 加一，并同步 `web/pages/guide-method.html`（默认值表会和 `DEFAULTS` 自动核对）和 `CHANGELOG.md`。
+`carpool.RULES_VERSION` 是计算规则的版本号。所有配置项（默认值、范围、中文名）只在 `config-fields.json` 里定义一处，`carpool.DEFAULTS` 由它生成。只有排序规则或成本口径变了才加一，改界面、改文字不加。`test_carpool.py` 里的规则快照测试固定了几个场景的方案顺序和各项数字：快照失败说明排序或成本变了，如果是有意修改，更新期望值、把 `RULES_VERSION` 加一，并同步 `web/pages/guide-method.html`（默认值表会和 `DEFAULTS` 自动核对）和 `CHANGELOG.md`。
 
 ### 地图审图号
 
