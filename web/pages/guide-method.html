@@ -28,7 +28,7 @@
       <li><b>你填的车次</b>：不开车的人到各个站坐的车，格式如 <code>G1234 08:00→11:30</code>。</li>
       <li><b>高德公共交通估算</b>：没填车次也没填分钟数时用。高德跨城只给直达火车，不含换乘和刚开通的线路，可能不准。</li>
       <li><b>默认值</b>：都没有的时候，按下面「默认值」表里的数估算。</li>
-      <li><b>12306 站名表</b>：「推荐车站」时用它去掉不办客运的站（多半是货运站）。排方案时不用。</li>
+      <li><b>高德周边搜索</b>和 <b>12306 站名表</b>：「推荐车站」时用，找站、去掉不办客运的站（多半是货运站）。排方案时不用。</li>
     </ul>
 
     <h2>硬性条件</h2>
@@ -119,6 +119,88 @@
         </tbody>
       </table>
     </div>
+
+    <h2>推荐车站怎么找</h2>
+    <p>编辑页里点「推荐车站」，程序在你设定的几个范围里搜火车站，过滤、排序后列给你勾选。这一步只是帮你缩小候选范围，<b>不影响方案之间的排序</b>，所以计算规则的版本号不变。最后算方案时，还是把你勾选的站都比一遍。</p>
+
+    <h3>找站设置</h3>
+    <p>设置在抽屉顶部的「找站设置」里，改完再点「开始找」。设置存在行程配置的 <code>[options.suggest]</code> 里，一起编辑的人看到的一样。超出范围的值会按范围夹紧，不会报错。</p>
+    <div class="c-table-wrap">
+      <table class="c-table">
+        <thead><tr><th>设置</th><th>默认值</th><th>可选范围</th></tr></thead>
+        <tbody>
+          <tr><td>在哪些地方找</td><td data-suggest-default="options.suggest.areas">目的地周边、车主出发地附近、车主路上</td><td data-suggest-range="options.suggest.areas">每一项都可以开关：目的地周边、车主出发地附近、车主路上、乘客出发地附近</td></tr>
+          <tr><td>车主路上怎么圈范围</td><td data-suggest-default="options.suggest.route_cover">沿路线取点</td><td data-suggest-range="options.suggest.route_cover">沿路线取点；绕路上限内全覆盖<br><span class="c-muted">全覆盖按每位车主的绕路上限圈出范围，更全，但搜索次数更多</span></td></tr>
+          <tr><td>目的地周边多大范围</td><td data-suggest-default="options.suggest.dest_radius_km">90 公里</td><td data-suggest-range="options.suggest.dest_radius_km">30–150 公里</td></tr>
+          <tr><td>出发地附近多大范围</td><td data-suggest-default="options.suggest.home_radius_km">30 公里</td><td data-suggest-range="options.suggest.home_radius_km">10–50 公里</td></tr>
+          <tr><td>车主路上每隔多远找一次</td><td data-suggest-default="options.suggest.route_step_km">30 公里</td><td data-suggest-range="options.suggest.route_step_km">10–60 公里</td></tr>
+          <tr><td>车主路上每次找多大范围</td><td data-suggest-default="options.suggest.route_radius_km">25 公里</td><td data-suggest-range="options.suggest.route_radius_km">5–60 公里<br><span class="c-muted">要大于间隔的一半，两圈之间才连得上</span></td></tr>
+          <tr><td>用哪几位车主的路线</td><td data-suggest-default="options.suggest.drivers">全部车主</td><td data-suggest-range="options.suggest.drivers">逐位勾选</td></tr>
+          <tr><td>车主路线怎么走</td><td data-suggest-default="options.suggest.route_strategy">高德默认（速度优先）</td><td data-suggest-range="options.suggest.route_strategy">高德默认（速度优先）；躲避拥堵；不走高速；避免收费；高速优先<br><span class="c-muted">对应高德驾车路径规划的 strategy</span></td></tr>
+          <tr><td>也沿备选路线找</td><td data-suggest-default="options.suggest.alt_routes">关</td><td data-suggest-range="options.suggest.alt_routes">开、关<br><span class="c-muted">开：高德给的最多 3 条路线都取点，能照顾到平行的高速</span></td></tr>
+          <tr><td>每次最多搜索几次</td><td data-suggest-default="options.suggest.max_searches">80 次</td><td data-suggest-range="options.suggest.max_searches">20–200 次<br><span class="c-muted">到上限就停，结果里写明可能没列全</span></td></tr>
+          <tr><td>怎么排序</td><td data-suggest-default="options.suggest.sort">车主最少绕路</td><td data-suggest-range="options.suggest.sort">车主最少绕路；到目的地最近；离乘客家最近<br><span class="c-muted">离乘客家最近只在找了乘客出发地附近时可选</span></td></tr>
+          <tr><td>超过车主绕路上限的站</td><td data-suggest-default="options.suggest.over_limit">照常列出，标明超过上限，不默认勾选</td><td data-suggest-range="options.suggest.over_limit">照常列出，标明超过上限，不默认勾选；直接不显示</td></tr>
+          <tr><td>最多显示几个</td><td data-suggest-default="options.suggest.show_count">15 个</td><td data-suggest-range="options.suggest.show_count">5–30 个</td></tr>
+          <tr><td>默认勾选几个</td><td data-suggest-default="options.suggest.checked_count">6 个</td><td data-suggest-range="options.suggest.checked_count">0–30 个<br><span class="c-muted">不能超过显示个数</span></td></tr>
+          <tr><td>用 12306 站名表过滤</td><td data-suggest-default="options.suggest.filter_12306">开</td><td data-suggest-range="options.suggest.filter_12306">开、关<br><span class="c-muted">关掉会混进货运站</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>在哪里找，怎么圈范围</h3>
+    <ul>
+      <li><b>目的地周边</b>：以目的地为中心，铺满设定的半径。高德单次搜索最多 50 公里，超过的话用几个 50 公里的圈铺满，圈和圈之间不留空当。默认 90 公里只要 7 个圈。</li>
+      <li><b>车主出发地附近</b>、<b>乘客出发地附近</b>：以各人的出发地为中心搜一圈。乘客出发地附近是给坐高铁的人找离家近的站，默认关。</li>
+      <li><b>车主路上</b>：先查每位车主「家到目的地」的驾车路线（只规划返程时反过来），再按「车主路上怎么圈范围」选一种圈法：
+        <ul>
+          <li><b>沿路线取点</b>（默认）：沿路线每隔设定的距离取一个点，每个点搜设定的半径。搜索次数少，只保证路线两侧一定宽度内没有遗漏，这个宽度会写在结果里。可以打开「也沿备选路线找」，高德给的最多 3 条路线都取点，能照顾到平行的高速。</li>
+          <li><b>绕路上限内全覆盖</b>：按每位车主的绕路上限，圈出所有「绕路不超过上限」的站可能在的范围，再用 50 公里的圈铺满。绕路不超过上限，就是经过这个站的用时不超过「直达用时 + 绕路上限」；车速按每分钟不超过 2 公里算，这样的站，家到站、站到目的地的直线距离之和一定不超过 2 ×（直达用时 + 绕路上限）公里。范围更全，但搜索次数更多，调用前先看估算。</li>
+        </ul>
+      </li>
+      <li>被别的圈完全包住的圈不再搜。</li>
+    </ul>
+
+    <h3>每个圈怎么搜</h3>
+    <ul>
+      <li>用高德周边搜索，类型是「火车站」，再加关键词「火车站」。只按类型搜的话，高德会把候车室、进站口、检票口、站台也算进来，一个大站周围有五六十个，一页的名额全被占满，只能找到离圈心最近的一两个站。加了关键词，这些点就不再占名额。</li>
+      <li>一页最多 25 个。一页满了就翻下一页，每个圈最多 3 页；翻到第 3 页还是满的，结果里会写「这些圈可能没列全」。</li>
+      <li>每次最多搜索几次（默认 80 次）是一次找站的总上限。到了就停，没搜的圈和没翻的页都写在结果里。</li>
+    </ul>
+
+    <h3>过滤，不悄悄丢站</h3>
+    <ul>
+      <li><b>12306 站名表里没有的站</b>：多半是货运站或线路所，也可能是新开的站。可以在设置里关掉这个过滤，但会混进货运站。</li>
+      <li><b>名字带「建设中」「暂停营业」</b>等标注的站。</li>
+      <li><b>已经在候选站里的站</b>。</li>
+      <li>名字不像火车站的点（比如带「进站」「货运」的）。</li>
+    </ul>
+    <p>被去掉的站都会留痕：结果下面有「没列出的站」，写明每个站为什么没列出，可以自己手动加进候选。某位车主的路线查不到时，会跳过这位车主，并写明。</p>
+
+    <h3>每位车主绕多少，怎么排序</h3>
+    <ul>
+      <li>每个站都算每位车主「家 → 站 → 目的地」比直达多绕多久，和各自的绕路上限比较；只规划返程时是「目的地 → 站 → 家」。抽屉里每个站列出每位车主各绕多少，超过上限的标灰。</li>
+      <li>默认按「车主最少绕路」排，再比到目的地的车程。也可以改成按到目的地最近，或者离乘客家最近。</li>
+      <li>所有车主都超过上限的站，排在能用的站后面，也不默认勾选。默认照常列出并标明，也可以设成直接不显示。</li>
+      <li>最多显示的个数、默认勾选的个数，都可以改；排在后面没显示的，也列在「没列出的站」里。</li>
+    </ul>
+
+    <h3>先估算，再搜索</h3>
+    <p>改完设置，页面会先显示「这次大约要多少次地点搜索」：至少是圈数，最多是圈数的 3 倍（每个圈最多翻 3 页），另外还有路线查询和测距的次数。估算超过「每次最多搜索几次」时，「开始找」点不了，要先把范围调小或者调高上限。只查车主路线，不做地点搜索，所以估算不占搜索额度。地图上会画出车主的路线、搜索圈和找到的站，方便你看哪里搜过了。试玩里能看设置和估算，但不能实际搜索。</p>
+
+    <h3>能保证什么，保证不了什么</h3>
+    <ul>
+      <li><b>能保证</b>：用「绕路上限内全覆盖」时，只要高德收录了这个站、12306 里有同名的站，而且没碰到翻页上限和单次搜索上限，所有车主绕路上限以内能到的站都会被搜到。碰到上限会明说。</li>
+      <li><b>沿路线取点</b>只保证路线两侧一定宽度内没有遗漏，宽度写在结果里。想更全，就切到「绕路上限内全覆盖」。</li>
+      <li><b>保证不了</b>：
+        <ul>
+          <li>高德没收录的站，或者站名和 12306 对不上的站。后者会列在「12306 站名表里没有」下面，让你自己看。</li>
+          <li>12306 站名表是 2026-10-07 生成的，之后新开的站要重新生成。</li>
+          <li>有没有合适的车次，找站时不判断，要到填车次时才知道。</li>
+        </ul>
+      </li>
+    </ul>
+    <p>没填候选站就直接计算时，程序会自动在目的地周边找站（范围和个数见上面的「自动找站」两项默认值），同样加了关键词「火车站」，也会去掉名字不像客运站的点；它不用找站设置，也不按 12306 站名表过滤。</p>
 
     <h2>算得完的代价</h2>
     <p>车很多的时候，组合数会爆炸。为了能在浏览器里算完，每辆车只保留绕路最少的若干条路线：2 位车主各留约 170 条，3 位约 30 条，4 位约 12 条。所以结果不一定是理论上的最优，只是在这个范围内最好的。</p>

@@ -21,6 +21,25 @@ discover_limit = 10       # 自动搜索最多保留几个站
 # taxi_pool_extra_min = 30  # 为了拼车，一个人最多比他自己最快的走法多花几分钟
 # taxi_wait_min = 30        # 同一辆出租里的人，到站（返程是离场）的时间最多相差几分钟
 
+# 推荐车站的找站设置（可选，都有默认值，不写就按默认；也可以在编辑页的「推荐车站」抽屉里改）。
+# 这一段要写在 [options] 的其他键之后、[return] 之前。
+# [options.suggest]
+# areas = ["dest", "owner_home", "owner_route"]  # 在哪些地方找：dest 目的地周边，owner_home 车主出发地附近，owner_route 车主路上，rider_home 乘客出发地附近（默认不找）
+# route_cover = "along"      # 车主路上怎么圈范围："along" 沿路线取点（省搜索次数）；"detour" 绕路上限内全覆盖（更全，搜索更多）
+# dest_radius_km = 90        # 目的地周边多大范围，30–150 公里
+# home_radius_km = 30        # 出发地附近多大范围，10–50 公里
+# route_step_km = 30         # 车主路上每隔多远找一次，10–60 公里
+# route_radius_km = 25       # 车主路上每次找多大范围，5–60 公里；要大于间隔的一半，两圈之间才连得上
+# drivers = ["老王"]         # 用哪几位车主的路线；不写就是全部车主
+# route_strategy = 0         # 车主路线怎么走：0 高德默认（速度优先），12 躲避拥堵，13 不走高速，14 避免收费，19 高速优先
+# alt_routes = false         # 也沿备选路线找：开了以后高德给的最多 3 条路线都取点，能照顾到平行的高速
+# max_searches = 80          # 每次最多搜索几次，20–200；到上限就停，结果里写明可能没列全
+# sort = "detour"            # 怎么排序："detour" 车主最少绕路；"dest" 到目的地最近；"rider_home" 离乘客家最近（要找乘客出发地附近）
+# over_limit = "show"        # 超过车主绕路上限的站："show" 照常列出、标明、不默认勾选；"hide" 直接不显示
+# show_count = 15            # 最多显示几个站，5–30
+# checked_count = 6          # 默认勾选几个，0–30，不能超过显示个数
+# filter_12306 = true        # 用 12306 站名表过滤；关掉会混进货运站
+
 # 返程（可选）：散场后车主从场地出发，顺路送人去车站或回家
 # [return]
 # enabled = true

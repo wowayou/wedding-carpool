@@ -1139,6 +1139,49 @@ class MethodPageTest(unittest.TestCase):
         self.assertEqual(len(self.table_mismatches(self.html, changed)), 1)  # 规则页没跟着改，测试能报出来
         self.assertIn("max_stops", self.table_mismatches(self.html, changed)[0])
 
+    @staticmethod
+    def suggest_table_mismatches(html: str, fields: dict) -> list[str]:
+        """规则页「推荐车站怎么找」的设置表和 config-fields.json 里 options.suggest.* 对不上的地方（空表示一致）。"""
+        text = lambda s: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip()
+        defaults = {k: text(v) for k, v in re.findall(r'<td[^>]*data-suggest-default="([\w.]+)"[^>]*>(.*?)</td>', html)}
+        ranges = {k: text(v) for k, v in re.findall(r'<td[^>]*data-suggest-range="([\w.]+)"[^>]*>(.*?)</td>', html)}
+        out = []
+        for path, f in fields.items():
+            if not path.startswith("options.suggest."):
+                continue
+            kind, v = f["type"], f.get("default")
+            if kind == "boolean":
+                want, parts = ("开" if v else "关"), ["开", "关"]
+            elif kind in ("number", "integer"):
+                want, parts = f"{v:g} {f['unit']}", [f"{f['min']:g}–{f['max']:g} {f['unit']}"]
+            elif kind == "choice":
+                want, parts = next(c["label"] for c in f["choices"] if c["value"] == v), [c["label"] for c in f["choices"]]
+            elif kind == "multi":
+                want, parts = "、".join(c["label"] for c in f["choices"] if c["value"] in v), [c["label"] for c in f["choices"]]
+            else:  # list：没有固定默认值，写 default_note
+                want, parts = f["default_note"], []
+            if path not in defaults:
+                out.append(f"{path} 定义里有，规则页没列")
+                continue
+            if defaults[path] != want:
+                out.append(f"{path}：页面默认值「{defaults[path]}」，定义「{want}」")
+            out += [f"{path}：可选范围里没有「{p}」" for p in parts if p not in ranges.get(path, "")]
+            if f.get("hint") and f["hint"] not in ranges.get(path, ""):
+                out.append(f"{path}：提示「{f['hint']}」没写")
+        out += [f"{k} 规则页列了，定义里没有" for k in defaults if k not in fields]
+        return out
+
+    def test_suggest_table_matches_config_fields(self):
+        self.assertEqual(self.suggest_table_mismatches(self.html, carpool.FIELDS), [])
+        self.assertEqual(len(re.findall(r"data-suggest-default=", self.html)), len([p for p in carpool.FIELDS if p.startswith("options.suggest.")]))
+
+    def test_changing_a_suggest_default_is_caught_by_the_page_check(self):
+        fields = {k: dict(v) for k, v in carpool.FIELDS.items()}
+        fields["options.suggest.dest_radius_km"]["default"] = 100
+        fields["options.suggest.route_cover"]["default"] = "detour"
+        fields["options.suggest.drivers"]["default_note"] = "第一位车主"
+        self.assertEqual(len(self.suggest_table_mismatches(self.html, fields)), 3)
+
     def test_page_names_the_current_version(self):
         self.assertIn(f"第 {carpool.RULES_VERSION} 版", self.html)
 
@@ -1215,7 +1258,7 @@ class ConfigFieldsTest(unittest.TestCase):
         """trip.example.toml 里出现的配置项（含被注释掉的示例行），按所在分段写成定义里的路径。"""
         section, keys = "", set()
         for line in (Path(__file__).parent / "trip.example.toml").read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^#?\s*\[\[?(\w+)\]\]?\s*(#.*)?$", line)
+            m = re.match(r"^#?\s*\[\[?([\w.]+)\]\]?\s*(#.*)?$", line)
             if m:
                 section = m.group(1)
                 continue
@@ -1229,6 +1272,7 @@ class ConfigFieldsTest(unittest.TestCase):
         self.assertIn("options.taxi_wait_min", keys)  # 确认解析到了被注释掉的示例行
         self.assertIn("people[].leave_time", keys)
         self.assertIn("return.security_min", keys)
+        self.assertEqual({k for k in keys if k.startswith("options.suggest.")}, {p for p in carpool.FIELDS if p.startswith("options.suggest.")})
         self.assertEqual(sorted(k for k in keys if k not in carpool.FIELDS), [])
 
     def test_every_key_the_loader_reads_is_defined(self):
