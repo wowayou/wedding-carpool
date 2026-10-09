@@ -148,10 +148,17 @@ def route_radius(step_km: float, radius_km: float) -> tuple[float, float]:
     return r, math.sqrt(r * r - (step_km / 2) ** 2)
 
 
-def detour_circles(home: carpool.Place, venue: carpool.Place, route_km: float, limit_min: float) -> list[carpool.Place]:
-    """绕路上限内全覆盖：绕路不超过 limit_min 分钟能到的站，满足「家到站 + 站到目的地 ≤ 路程 + 2·绕路分钟数」
-    （按每分钟不超过 2 公里算），是以家和目的地为焦点的椭圆；用 50 公里的圈把它铺满（格点留下 ≤ 这个和再加 100 公里的）。"""
-    total = max(route_km, carpool.km_between(home, venue)) + KM_PER_MIN * limit_min + 2 * SEARCH_MAX_KM
+def detour_circles(home: carpool.Place, venue: carpool.Place, route_km: float, limit_min: float,
+                   route_min: float | None = None) -> list[carpool.Place]:
+    """绕路上限内全覆盖。绕路不超过 limit_min 分钟，约束的是时间：用时(家→站→目的地) ≤ 直达用时 + limit_min；
+    直线距离之和不超过每分钟 2 公里 × 用时，所以「家到站 + 站到目的地」≤ 2·(直达用时 + limit_min)，
+    是以家和目的地为焦点的椭圆。直达路线慢、经过站的路快时，按路程算会漏，所以两种取大。
+    拿不到直达用时（route_min 为 None）就只能按路程算：路程 + 2·limit_min，可能不全。
+    用 50 公里的圈把椭圆铺满：格点留下和 ≤ 上面的值再加 100 公里的。"""
+    total = max(route_km, carpool.km_between(home, venue)) + KM_PER_MIN * limit_min
+    if route_min is not None:
+        total = max(total, KM_PER_MIN * (route_min + limit_min))
+    total += 2 * SEARCH_MAX_KM
     mid = _place((home.lat + venue.lat) / 2, (home.lng + venue.lng) / 2)
     reach = total / 2 * 1.05 + 5  # 椭圆离中点最远 total/2，多留一点免得中点取得不准
     return hex_centers(mid, reach, lambda p: carpool.km_between(home, p) + carpool.km_between(p, venue) <= total)
@@ -312,8 +319,12 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, plan_
         notes.append("没有拿到 12306 站名表，没有按它过滤")
 
     circles: list[dict] = []
+    absorbed: list[dict] = []
 
     def add(p, radius, where, kind):
+        if any(carpool.km_between(p, _place(c["lat"], c["lng"])) + radius <= c["radius_km"] for c in circles):
+            absorbed.append({"lat": p.lat, "lng": p.lng, "radius_km": radius, "where": where, "kind": kind, "searched": True})
+            return  # 被已有的圈完全包住，不用再搜（只记下来，给目的地圈搜到的站归属用）
         circles.append({"lat": p.lat, "lng": p.lng, "radius_km": round(radius, 3), "where": where, "kind": kind})
 
     if "dest" in areas:
@@ -347,7 +358,8 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, plan_
                 skipped.append({"driver": d.name, "reason": "车主路线查不到，没有沿这位车主的路线找站"})
                 continue
             for k, route in enumerate(got, 1):
-                routes.append({"driver": d.name, "path": route["path"], "alt": k, "km": round(route["km"], 1)})
+                routes.append({"driver": d.name, "path": route["path"], "alt": k, "km": round(route["km"], 1),
+                               "minutes": None if route.get("minutes") is None else round(route["minutes"], 1)})
             if along:
                 r, corridor = route_radius(st["route_step_km"], st["route_radius_km"])
                 mine: list[carpool.Place] = []
@@ -357,7 +369,9 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, plan_
                             mine.append(p)
                             add(p, r, f"{d.name}路上" if k == 1 else f"{d.name}路上（备选路线{k}）", "route")
             else:
-                for p in detour_circles(d.home, venue, got[0]["km"], limit_of(d)):
+                if got[0].get("minutes") is None:
+                    notes.append(f"{d.name}的路线没有用时，绕路范围按路程估算，可能不全")
+                for p in detour_circles(d.home, venue, got[0]["km"], limit_of(d), got[0].get("minutes")):
                     add(p, SEARCH_MAX_KM, f"{d.name}绕路范围内", "detour")
         if corridor is not None:
             notes.append(f"沿路搜索保证路线两侧至少 {math.floor(corridor)} 公里内没有遗漏")
@@ -435,16 +449,22 @@ def suggest_stations(cfg: dict, amap, valid_names: set[str] | None = None, plan_
             else:
                 ok.append(poi)
         for place in carpool.pick_stations(ok, _place(c["lat"], c["lng"]), c["radius_km"], len(ok)):
+            where = c["where"]
             if c["kind"] == "dest" and carpool.km_between(place, venue) > st["dest_radius_km"]:
-                continue  # 网格的圈会伸到设定范围之外
+                # 网格的圈会伸到设定范围之外：只有同时落在别的圈里（比如车主路上）才留下
+                other = next((o for o in [*circles, *absorbed] if o["kind"] != "dest" and o["searched"]
+                              and carpool.km_between(place, _place(o["lat"], o["lng"])) <= o["radius_km"]), None)
+                if other is None:
+                    continue
+                where = other["where"]
             if place.name in found:
                 continue
             if place.name in existing:
-                drop(place.name, "已经在候选站里", c["where"])
+                drop(place.name, "已经在候选站里", where)
             elif st["filter_12306"] and valid_names is not None and place.name.removesuffix("站") not in valid_names:
-                drop(place.name, "12306 站名表里没有（多半是货运站或线路所，也可能是新站）", c["where"])
+                drop(place.name, "12306 站名表里没有（多半是货运站或线路所，也可能是新站）", where)
             else:
-                found[place.name] = (place, c["where"])
+                found[place.name] = (place, where)
     out["dropped"] = list(dropped.values())
     summary["dropped"] = dict(Counter(x["reason"].split("，")[0].split("（")[0] for x in dropped.values()))
     summary["found"] = len(found)

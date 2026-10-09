@@ -91,9 +91,10 @@ def _fake_routes(self, places, strategy=0, alt=False):
     if any(n in p.name for n in self.routes_fail for p in places):
         raise carpool.AmapError("查不到路线")
     path = self.drive_path(places)
-    routes = [{"path": path, "km": sum(km_between(Place("", b[1], b[0]), Place("", a[1], a[0])) for a, b in zip(path, path[1:]))}]
+    km = sum(km_between(Place("", b[1], b[0]), Place("", a[1], a[0])) for a, b in zip(path, path[1:]))
+    routes = [{"path": path, "km": km, "minutes": km}]  # 假高德：1 公里 1 分钟
     if alt:  # 备选路线：整体往北偏 0.3 度
-        routes.append({"path": [[lat + 0.3, lng] for lat, lng in path], "km": routes[0]["km"] * 1.05})
+        routes.append({"path": [[lat + 0.3, lng] for lat, lng in path], "km": km * 1.05, "minutes": km * 1.05})
     return routes
 
 
@@ -1195,7 +1196,7 @@ class ConfigFieldsTest(unittest.TestCase):
 
     def test_suggest_settings_are_defined_per_plan(self):
         f = carpool.FIELDS
-        want = {"route_cover": "along", "alt_routes": False, "max_searches": 80, "dest_radius_km": 100, "home_radius_km": 30,
+        want = {"route_cover": "along", "alt_routes": False, "max_searches": 80, "dest_radius_km": 90, "home_radius_km": 30,
                 "route_step_km": 30, "route_radius_km": 25, "show_count": 15, "checked_count": 6, "filter_12306": True,
                 "route_strategy": 0, "sort": "detour", "over_limit": "show"}
         for key, value in want.items():
@@ -1301,6 +1302,26 @@ class SuggestGeometryTest(unittest.TestCase):
                     hit += 1
                     self.assertTrue(self.covered(circles, p), (home, p))
             self.assertGreater(hit, 100)
+
+
+    def test_detour_ellipse_is_bounded_by_time_when_direct_route_is_slow(self):
+        # 直达 150 公里却要 250 分钟（慢），绕路上限 10 分钟：经过某站的路再快，直线距离之和也可以到 2·(250+10) 公里
+        home, venue, route_km, route_min, limit = Place("", 116.0, 30.0), Place("", 117.5, 30.0), 150, 250, 10
+        new = [(c, 50) for c in service.detour_circles(home, venue, route_km, limit, route_min)]
+        old = [(c, 50) for c in service.detour_circles(home, venue, route_km, limit)]  # 只按路程：路程 + 2·绕路分钟数
+        rnd = random.Random(11)
+        hit = leak = 0
+        for _ in range(6000):
+            p = Place("", 112 + rnd.random() * 9.5, 27 + rnd.random() * 6)
+            if km_between(home, p) + km_between(p, venue) <= 2 * (route_min + limit):
+                hit += 1
+                self.assertTrue(self.covered(new, p), p)
+                leak += not self.covered(old, p)
+        self.assertGreater(hit, 300)
+        self.assertGreater(leak, 0)  # 旧上界在这里会漏
+        # 直达很快、路程更大时仍取路程那一项
+        fast = service.detour_circles(home, venue, 400, 10, 100)
+        self.assertEqual(len(fast), len(service.detour_circles(home, venue, 400, 10)))
 
 
 class SuggestTest(unittest.TestCase):
@@ -1499,7 +1520,7 @@ class SuggestTest(unittest.TestCase):
         self.assertGreater(out["trace"]["corridor_km"], 0)
         self.assertEqual(est["over_cap"], len(circles) > 80)
         # 范围调大，估算超过上限
-        big = service.suggest_stations({**cfg, "options": {"suggest": {"max_searches": 20}}}, FakeAmap(), plan_only=True)
+        big = service.suggest_stations({**cfg, "options": {"suggest": {"max_searches": 20, "dest_radius_km": 150}}}, FakeAmap(), plan_only=True)
         self.assertTrue(big["estimate"]["over_cap"])
         self.assertTrue(any("超过单次上限" in n for n in big["notes"]))
         # 估算和实际一致：圈数相同
@@ -1524,9 +1545,51 @@ class SuggestTest(unittest.TestCase):
         self.assertEqual(set(by), {"老王绕路范围内", "老周绕路范围内"})
         self.assertEqual([c[2] for c in amap.route_calls], [False, False])  # 全覆盖不需要备选路线
         wang = out["trace"]["routes"][0]
-        direct = service.detour_circles(Place("", 116, 30), Place("", 118, 30), wang["km"], 10)
+        direct = service.detour_circles(Place("", 116, 30), Place("", 118, 30), wang["km"], 10, wang["minutes"])
         self.assertEqual(len(direct), by["老王绕路范围内"])  # 用的是高德给的里程和这位车主自己的上限
         self.assertIsNone(out["trace"]["corridor_km"])
+
+    def test_routes_carry_minutes_and_missing_minutes_is_said(self):
+        out = service.suggest_stations(self.cfg(areas=["owner_route"], route_cover="detour"), FakeAmap(), plan_only=True)
+        self.assertEqual(out["trace"]["routes"][0]["minutes"], out["trace"]["routes"][0]["km"])  # 假高德 1 公里 1 分钟
+        self.assertFalse(any("按路程估算" in n for n in out["notes"]))
+
+        class NoMinutes(FakeAmap):
+            def drive_routes(self, *a, **k):
+                return [{**r, "minutes": None} for r in super().drive_routes(*a, **k)]
+
+        out = service.suggest_stations(self.cfg(areas=["owner_route"], route_cover="detour"), NoMinutes(), plan_only=True)
+        self.assertIsNone(out["trace"]["routes"][0]["minutes"])
+        self.assertTrue(any("按路程估算，可能不全" in n for n in out["notes"]))
+        try_route = browser.TryAmap().drive_routes([Place("", 116, 30), Place("", 118, 30)])[0]
+        self.assertGreater(try_route["minutes"], 0)
+
+    def test_default_dest_radius_is_seven_circles(self):
+        out = service.suggest_stations(self.cfg(areas=["dest"]), FakeAmap(), plan_only=True)
+        self.assertEqual((out["settings"]["dest_radius_km"], out["estimate"]["circles"]), (90, 7))
+
+    def test_circles_inside_other_circles_are_not_searched(self):
+        # 默认设置：沿路第一个点是车主家（在「出发地附近」的圈里），最后一个点是目的地（在目的地圈里）
+        cfg = self.cfg([person("老王", WANG, car_seats=3)], areas=["dest", "owner_home", "owner_route"], dest_radius_km=40)
+        amap = FakeAmap()
+        out = service.suggest_stations(cfg, amap, plan_only=True)
+        centers = [(c["lat"], c["lng"], c["kind"]) for c in out["trace"]["circles"]]
+        self.assertEqual([k for *_, k in centers if k != "route"], ["dest", "home"])
+        self.assertNotIn((30.0, 116.0, "route"), centers)
+        self.assertNotIn((30.0, 118.0, "route"), centers)
+        all_route = service.route_samples(amap.drive_path([Place("", 116, 30), Place("", 118, 30)]), 30)
+        self.assertLess(len(centers) - 2, len(all_route))
+        self.assertEqual(out["estimate"]["circles"], len(centers))
+        real = service.suggest_stations(cfg, amap)
+        self.assertEqual(len(amap.around_calls), len(centers))  # 没有多搜
+
+    def test_station_on_route_kept_even_if_route_circle_is_absorbed(self):
+        # 西站离目的地 96 公里，在默认 90 公里的目的地范围之外，但在老王路上
+        pois = self.pois(("西站", WEST))
+        out = service.suggest_stations(self.cfg(areas=["dest", "owner_route"]), FakeAmap(pois=pois))
+        self.assertEqual([(s["name"], s["where"]) for s in out["stations"]], [("西站", "老王路上")])
+        out = service.suggest_stations(self.cfg(areas=["dest"]), FakeAmap(pois=pois))
+        self.assertEqual(out["stations"], [])
 
     def test_alt_routes_add_circles(self):
         one = service.suggest_stations(self.cfg(areas=["owner_route"]), FakeAmap(), plan_only=True)

@@ -231,7 +231,7 @@ class Amap:
 
     def drive_routes(self, places: list[Place], strategy: int = 0, alt: bool = False,
                      max_points: int = 600) -> list[dict]:
-        """驾车路线 [{"path": [[lat, lng], ...], "km": 里程}, ...]。不开 alt 只取第一条；
+        """驾车路线 [{"path": [[lat, lng], ...], "km": 里程, "minutes": 用时}, ...]。不开 alt 只取第一条；
         开了 alt 时，策略 0 改用 10（高德 strategy 10 到 20 返回最多 3 条路线），其余策略本身就是多路线。"""
         api, params = self.driving_query(places, route_strategy(strategy, alt))
         paths = self._get(api, **params)["route"]["paths"][:3 if alt else 1]
@@ -241,7 +241,8 @@ class Amap:
                    for x, y in (pair.split(",") for pair in step["polyline"].split(";"))]
             stride = max(1, len(pts) // max_points)
             out.append({"path": pts[::stride] + ([pts[-1]] if pts and (len(pts) - 1) % stride else []),
-                        "km": float(path["distance"]) / 1000})
+                        "km": float(path["distance"]) / 1000,
+                        "minutes": float(path["duration"]) / 60 if str(path.get("duration", "")).isdigit() else None})
         return out
 
     def geocode(self, address: str, city: str | None = None) -> Place | None:

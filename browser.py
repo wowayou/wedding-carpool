@@ -119,7 +119,7 @@ class TryAmap:
     def drive_routes(self, places: list[carpool.Place], strategy: int = 0, alt: bool = False, max_points: int = 600) -> list[dict]:
         """试玩：只有一条直线路线，里程按直线乘折算系数（找站的估算用）。"""
         km = sum(carpool.km_between(a, b) for a, b in zip(places, places[1:])) * self.DETOUR
-        return [{"path": self.drive_path(places), "km": km}]
+        return [{"path": self.drive_path(places), "km": km, "minutes": km / self.SPEED_KMH * 60 + self.CITY_MIN}]
 
 
 BATCH_LIMIT = 40  # Worker 免费套餐单次请求最多 50 个子请求
