@@ -252,6 +252,7 @@ test('返程：成员卡片有离场时间，返程一节有乘客最多等；�
   assert.ok(bad.some((p) => p.path === 'people.0.leave_time' && /时:分/.test(p.msg)));
   assert.equal(run([{ name: '甲', from: 'x', leave_time: '21:30' }], {}).length, 0);
   assert.ok(run([{ name: '甲', from: 'x' }], { max_wait_min: -5 }).some((p) => p.path === 'return.max_wait_min'));
+  assert.ok(run([{ name: '甲', from: 'x', rail_min: { 黄山北站: -10 } }], {}).some((p) => p.path === 'people.0.rail_min.黄山北站' && /甲到黄山北站的用时不能小于 0/.test(p.msg)), '各站用时也按定义里的范围校验');
 });
 
 test('选项里有打车方式、拼车多花、时间差；方案卡片显示打车几辆', () => {

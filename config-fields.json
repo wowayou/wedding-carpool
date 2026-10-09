@@ -54,11 +54,11 @@
   {"path": "people[].note", "type": "text", "label": "备注", "section": "people"},
   {"path": "people[].stations", "type": "list", "label": "只考虑这些站", "section": "people"},
   {"path": "people[].trains", "type": "map", "label": "到各站的车次", "section": "people"},
-  {"path": "people[].rail_min", "type": "map", "label": "到各站的用时", "section": "people", "unit": "分钟"},
+  {"path": "people[].rail_min", "type": "map", "label": "到各站的用时", "section": "people", "min": 0, "unit": "分钟"},
   {"path": "people[].return_drives", "type": "boolean", "label": "返程是否开车", "section": "people", "default": true},
   {"path": "people[].return_max_detour_min", "type": "number", "label": "返程最多绕路", "section": "people", "min": 0, "unit": "分钟", "default_note": "同去程"},
   {"path": "people[].return_trains", "type": "map", "label": "返程车次", "section": "people"},
-  {"path": "people[].return_rail_min", "type": "map", "label": "返程用时", "section": "people", "unit": "分钟"},
+  {"path": "people[].return_rail_min", "type": "map", "label": "返程用时", "section": "people", "min": 0, "unit": "分钟"},
   {"path": "people[].leave_time", "type": "time", "label": "离场时间", "section": "people", "default_from": "return.depart_time", "default_note": "同散场时间", "hint": "返程时这个人几点离开场地；车主的离场时间就是车的出发时间"}
  ]
 }
