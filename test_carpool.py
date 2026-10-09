@@ -5,14 +5,19 @@
     python3 -m unittest -v test_carpool.py
 """
 
+import ast
 import contextlib
 import datetime as dt
+import importlib
+import inspect
 import io
 import json
 import math
 import os
 import random
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -24,10 +29,12 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+import base
 import browser
 import carpool
 import share
 import service
+import taxi
 import ui
 from carpool import Place, km_between
 
@@ -1278,7 +1285,7 @@ class ConfigFieldsTest(unittest.TestCase):
         self.assertEqual(sorted(k for k in keys if k not in carpool.FIELDS), [])
 
     def test_every_key_the_loader_reads_is_defined(self):
-        src = (Path(__file__).parent / "carpool.py").read_text(encoding="utf-8")
+        src = (Path(__file__).parent / "model.py").read_text(encoding="utf-8")
         back = src[src.index("def back_leg"):src.index("def train_times")]
         read = [("options", k) for k in re.findall(r'\bopt\.get\("(\w+)"', src)]
         read += [("return", k) for k in re.findall(r'\br\.get\("(\w+)"', back)]
@@ -2008,6 +2015,238 @@ class CliTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             carpool.main(["trip.example.toml", "--key", ""])
         self.assertEqual(ctx.exception.code, 2)
+
+    def test_command_line_writes_report_without_calling_amap(self):
+        """命令行冒烟：整条路径（读 TOML、算、写报告）用不联网的 FakeAmap 跑一遍，报告和 carpool.run 的输出一致。"""
+        cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "trip.toml"
+            path.write_text(carpool.dump_toml(cfg), encoding="utf-8")
+            shown, notes = io.StringIO(), io.StringIO()
+            with (mock.patch("carpool.Amap", lambda key: FakeAmap()),
+                  mock.patch("urllib.request.urlopen", side_effect=AssertionError("命令行冒烟不该联网")),
+                  contextlib.redirect_stdout(shown), contextlib.redirect_stderr(notes)):
+                carpool.main([str(path), "--key", "fake"])
+            written = (Path(tmp) / "trip-report.md").read_text(encoding="utf-8")
+        self.assertEqual(written, carpool.run(cfg, FakeAmap()))
+        self.assertEqual(shown.getvalue(), written + "\n")
+        self.assertIn("老王", written)
+        self.assertIn("报告已写入", notes.getvalue())
+
+
+# ---------- 模块拆分（v3.11）：门面、模块依赖、可变全局、高德接口、网页版加载清单 ----------
+
+ROOT = Path(__file__).parent
+CORE_MODULES = ("base", "geo", "model", "routes", "taxi", "solver", "timetable", "reporting", "tomlio")
+
+
+def local_imports(path: Path) -> set[str]:
+    """一个 .py 文件 import 了仓库根目录的哪些模块（只看 import 语句）。"""
+    here = {p.stem for p in ROOT.glob("*.py")}
+    found = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            found |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.add(node.module.split(".")[0])
+    return found & here
+
+
+class FacadeTest(unittest.TestCase):
+    """carpool.py 是门面：原来的名字都在，模块之间单向依赖。"""
+
+    def test_every_function_and_class_is_reexported(self):
+        for name in CORE_MODULES:
+            mod = importlib.import_module(name)
+            for node in ast.parse((ROOT / f"{name}.py").read_text(encoding="utf-8")).body:
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                    with self.subTest(module=name, name=node.name):
+                        self.assertIs(getattr(carpool, node.name), getattr(mod, node.name))
+
+    def test_core_modules_form_a_dag(self):
+        deps = {name: local_imports(ROOT / f"{name}.py") for name in CORE_MODULES}
+        for name, used in deps.items():
+            self.assertLessEqual(used, set(CORE_MODULES), f"{name} 只该依赖计算核心里的模块：{used}")
+            self.assertNotIn("carpool", used, f"{name} 不能反过来依赖门面")
+        done: list[str] = []
+        while len(done) < len(deps):  # 拓扑排序，每轮取出依赖都已排好的模块；排不动说明有环
+            ready = [n for n in deps if n not in done and deps[n] <= set(done)]
+            self.assertTrue(ready, f"模块之间有循环依赖：{ {n: sorted(d) for n, d in deps.items() if n not in done} }")
+            done += ready
+
+    def test_cli_entry_runs_as_script(self):
+        out = subprocess.run([sys.executable, str(ROOT / "carpool.py"), "--help"], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("行程配置", out.stdout)
+
+
+class LiveGlobalsTest(unittest.TestCase):
+    """模块级的可变全局：给门面 carpool 赋值，必须改到真正读它的模块。"""
+
+    def test_progress_set_on_facade_reaches_long_operations(self):
+        seen = []
+        self.addCleanup(setattr, carpool, "progress", carpool.progress)
+        carpool.progress = lambda label, done, total: seen.append((label, done, total))
+        self.assertIs(base.progress, carpool.progress)
+        carpool.report("手动阶段", 1, 2)
+        self.assertEqual(seen, [("手动阶段", 1, 2)])
+        self.assertEqual(carpool.current_stage, "手动阶段")  # 读门面也是实时的
+        seen.clear()
+        carpool.plan_trip(config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")]), FakeAmap())  # 求解里的各阶段
+        labels = list(dict.fromkeys(label for label, _, _ in seen))
+        self.assertEqual(labels[:2], ["定位目的地、成员和车站", "查询行车时间"])
+        self.assertIn("比较各种接人组合", labels)
+        self.assertEqual(carpool.current_stage, labels[-1])
+
+    def test_progress_set_to_none_stops_reporting(self):
+        seen = []
+        self.addCleanup(setattr, carpool, "progress", carpool.progress)
+        carpool.progress = lambda *args: seen.append(args)
+        carpool.progress = None
+        carpool.report("不会有人收到")
+        self.assertEqual(seen, [])
+
+    def test_browser_installs_its_progress_hook_through_the_facade(self):
+        self.addCleanup(setattr, carpool, "progress", carpool.progress)
+        importlib.reload(browser)  # 重新执行 browser.py 的模块级代码，看它给 carpool.progress 赋的值落在哪
+        self.assertIs(base.progress, browser._post_progress)
+        self.assertIs(carpool.progress, browser._post_progress)
+
+    def test_every_constant_is_forwarded_to_its_owner(self):
+        self.assertGreater(len(carpool._LIVE), 15)
+        for name in ("progress", "current_stage", "TAXI_COMBO_LIMIT", "COMBO_LIMIT", "CAR_SEATS", "RETRIES", "RULES_VERSION", "FIELDS", "DEFAULTS"):
+            self.assertIn(name, carpool._LIVE)
+        for name, owner in carpool._LIVE.items():
+            with self.subTest(name=name):
+                old, marker = getattr(owner, name), object()
+                self.assertIs(getattr(carpool, name), old)
+                self.assertNotIn(name, vars(carpool), "门面里不能留一份拷贝，否则改了读不到")
+                try:
+                    setattr(carpool, name, marker)
+                    self.assertIs(getattr(owner, name), marker)
+                    self.assertIs(getattr(carpool, name), marker)
+                finally:
+                    setattr(owner, name, old)
+
+    def test_mock_patch_on_the_facade_changes_the_reader_and_restores(self):
+        original = taxi.TAXI_COMBO_LIMIT
+        with mock.patch("carpool.TAXI_COMBO_LIMIT", 1):
+            self.assertEqual(taxi.TAXI_COMBO_LIMIT, 1)  # TaxiPool 读的就是 taxi 模块里的这个
+        self.assertEqual(taxi.TAXI_COMBO_LIMIT, original)
+        self.assertEqual(carpool.TAXI_COMBO_LIMIT, original)
+
+    def test_unknown_attribute_still_raises(self):
+        with self.assertRaises(AttributeError):
+            carpool.no_such_name  # noqa: B018
+
+
+def protocol_members(proto) -> set[str]:
+    names = set()
+    for klass in proto.__mro__:
+        if klass is object or klass.__name__ in ("Protocol", "Generic"):
+            continue
+        names |= {n for n in vars(klass).get("__annotations__", {})}
+        names |= {n for n, v in vars(klass).items() if inspect.isfunction(v) and not n.startswith("__")}
+    return names
+
+
+class AmapInterfaceTest(unittest.TestCase):
+    """高德客户端的接口（geo.AmapLike）：四个实现都满足，计算核心和 service.py 调用的方法都在接口里。"""
+
+    def implementations(self):
+        return {"Amap": carpool.Amap("fake-key"), "BrowserAmap": browser.BrowserAmap(), "TryAmap": browser.TryAmap(), "FakeAmap": FakeAmap()}
+
+    def test_all_four_implementations_satisfy_amap_like(self):
+        for name, amap in self.implementations().items():
+            with self.subTest(impl=name):
+                self.assertIsInstance(amap, carpool.AmapLike)
+                for method in protocol_members(carpool.AmapLike) - {"calls"}:
+                    self.assertTrue(callable(getattr(amap, method)), f"{name}.{method} 要能调用")
+                self.assertIsInstance(amap.calls, int)
+
+    def test_implementations_take_the_required_arguments(self):
+        required = {m: [p for p in inspect.signature(getattr(carpool.AmapLike, m)).parameters.values()
+                        if p.name != "self" and p.default is p.empty]
+                    for m in protocol_members(carpool.AmapLike) - {"calls"}}
+        for name, amap in self.implementations().items():
+            for method, params in required.items():
+                with self.subTest(impl=name, method=method):
+                    got = [p for p in inspect.signature(getattr(amap, method)).parameters.values()
+                           if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL)]
+                    self.assertTrue(any(p.kind == p.VAR_POSITIONAL for p in got) or len(got) >= len(params))
+
+    def test_try_amap_refusing_methods_exist_and_refuse(self):
+        amap = browser.TryAmap()
+        for method, args in (("geocode", ("某地",)), ("find_station", ("某站",)), ("search", ("某",)),
+                             ("stations_near", (Place("p", 118.0, 30.0), 50)), ("stations_around", (Place("p", 118.0, 30.0), 50)),
+                             ("transit", (Place("a", 118.0, 30.0), Place("b", 119.0, 30.0), "2030-10-12", "08:00"))):
+            with self.subTest(method=method), self.assertRaises(carpool.AmapError):
+                getattr(amap, method)(*args)
+        a, b = Place("a", 118.0, 30.0), Place("b", 119.0, 30.0)
+        self.assertEqual(len(amap.drive_minutes([a], b)), 1)
+        self.assertEqual(amap.drive_path([a, b]), [[30.0, 118.0], [30.0, 119.0]])
+        self.assertEqual(len(amap.drive_routes([a, b])), 1)
+
+    def test_prefetch_sub_interface(self):
+        self.assertIsInstance(carpool.Amap("k"), carpool.AmapPrefetch)
+        self.assertIsInstance(browser.BrowserAmap(), carpool.AmapPrefetch)
+        # 试玩和测试用的实现没有批量预取：carpool.prefetch 只在有 prefetch 时才调用，*_query 不会被调到
+        self.assertNotIsInstance(browser.TryAmap(), carpool.AmapPrefetch)
+        self.assertNotIsInstance(FakeAmap(), carpool.AmapPrefetch)
+
+    def test_methods_the_code_calls_on_the_client_are_in_the_interface(self):
+        """用 AST 找 amap.xxx / app.amap.xxx：计算核心、service、share、ui、browser 对高德客户端用到的名字，都得在接口里。"""
+        known = protocol_members(carpool.AmapPrefetch)
+        used: dict[str, set[str]] = {}
+        files = [*(f"{m}.py" for m in CORE_MODULES), "carpool.py", "service.py", "share.py", "ui.py", "browser.py"]
+        for file in files:
+            for node in ast.walk(ast.parse((ROOT / file).read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Attribute):
+                    continue
+                owner = node.value
+                if (isinstance(owner, ast.Name) and owner.id == "amap") or (isinstance(owner, ast.Attribute) and owner.attr == "amap"):
+                    used.setdefault(node.attr, set()).add(file)
+        self.assertGreaterEqual(set(used), {"drive_minutes", "geocode", "find_station", "transit", "stations_near", "stations_around",
+                                            "drive_path", "drive_routes", "driving_query", "distance_query", "search", "calls"})
+        missing = {name: sorted(files) for name, files in used.items() if name not in known}
+        self.assertEqual(missing, {}, "这些方法被调用了，但没写进 AmapLike / AmapPrefetch")
+
+    def test_every_interface_method_says_which_amap_service_it_uses(self):
+        doc = carpool.AmapLike.__doc__
+        for path in ("/v3/geocode/geo", "/v3/geocode/regeo", "/v5/place/text", "/v5/place/around", "/v5/place/polygon",
+                     "/v3/distance", "/v3/direction/driving", "/v3/direction/transit/integrated"):
+            self.assertIn(path, doc)
+        for method in protocol_members(carpool.AmapLike) - {"calls"}:
+            with self.subTest(method=method):
+                self.assertIn("额度", getattr(carpool.AmapLike, method).__doc__)
+
+
+class WebManifestTest(unittest.TestCase):
+    """网页版（Pyodide）要加载的文件清单 web/py-manifest.json 和仓库里的 Python 模块一致。"""
+
+    def manifest(self):
+        return json.loads((ROOT / "web" / "py-manifest.json").read_text(encoding="utf-8"))["files"]
+
+    def test_manifest_lists_every_module_the_browser_needs(self):
+        shipped = sorted(p.name for p in ROOT.glob("*.py") if not p.name.startswith("test_") and p.name != "ui.py")
+        self.assertEqual(sorted(f for f in self.manifest() if f.endswith(".py")), shipped,
+                         "根目录新增了 Python 模块？要同步加进 web/py-manifest.json（ui.py 和测试除外）")
+        self.assertIn("config-fields.json", self.manifest())
+        for name in self.manifest():
+            self.assertTrue((ROOT / name).is_file(), name)
+        self.assertEqual(len(set(self.manifest())), len(self.manifest()))
+
+    def test_everything_a_shipped_module_imports_is_shipped(self):
+        files = set(self.manifest())
+        for name in sorted(files):
+            if name.endswith(".py"):
+                with self.subTest(module=name):
+                    self.assertLessEqual({f"{m}.py" for m in local_imports(ROOT / name)}, files)
+
+    def test_pyworker_reads_the_manifest_instead_of_a_hardcoded_list(self):
+        src = (ROOT / "web" / "pyworker.js").read_text(encoding="utf-8")
+        self.assertIn("py/manifest.json", src)
+        self.assertNotIn("'carpool.py'", src)
 
 
 # ---------- 金标准：固定报告、方案页、界面数据的现有输出 ----------

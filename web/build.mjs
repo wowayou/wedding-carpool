@@ -18,7 +18,10 @@ cpSync('web/demo-shot.png', 'dist/demo-shot.png');
 // 页面、页头页脚、结构化数据、sitemap 和设计系统的构建都在 web/site.mjs，页面清单在 web/site-data.mjs
 const site = buildSite('dist');
 // config-fields.json（配置项定义）两处用：Python 计算核心在 py/ 下读它，编辑页从站点根目录取它
-for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py', 'config-fields.json']) cpSync(name, `dist/py/${name}`);
+// Python 文件清单只在 web/py-manifest.json 里写一处：这里按它复制，并把它放到 dist/py/manifest.json 给 pyworker.js 读
+const pyManifest = JSON.parse(readFileSync('web/py-manifest.json', 'utf8'));
+for (const name of pyManifest.files) cpSync(name, `dist/py/${name}`);
+writeFileSync('dist/py/manifest.json', JSON.stringify({ files: pyManifest.files }));
 cpSync('config-fields.json', 'dist/config-fields.json');
 cpSync('web/_headers', 'dist/_headers'); // 静态文件的安全响应头；Worker 生成的响应在 worker.js 里加同一组
 

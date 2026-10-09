@@ -150,5 +150,10 @@ test('构建产物里有 config-fields.json（根目录和 py/ 各一份），�
   const src = readFileSync('config-fields.json', 'utf8');
   assert.equal(readFileSync('dist/config-fields.json', 'utf8'), src);
   assert.equal(readFileSync('dist/py/config-fields.json', 'utf8'), src);
-  assert.match(readFileSync('web/pyworker.js', 'utf8'), /'browser\.py', 'config-fields\.json'\]/);
+  // 计算线程按清单加载（清单源头是 web/py-manifest.json）：清单里的每个文件都已复制到 dist/py/
+  assert.match(readFileSync('web/pyworker.js', 'utf8'), /fetch\('py\/manifest\.json'/);
+  const { files } = JSON.parse(readFileSync('dist/py/manifest.json', 'utf8'));
+  assert.deepEqual(files, JSON.parse(readFileSync('web/py-manifest.json', 'utf8')).files);
+  assert.ok(files.includes('config-fields.json') && files.includes('browser.py'));
+  for (const name of files) assert.equal(readFileSync(`dist/py/${name}`, 'utf8'), readFileSync(name, 'utf8'), name);
 });
