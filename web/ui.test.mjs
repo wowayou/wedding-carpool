@@ -359,7 +359,7 @@ test('找站设置的中文名、默认值、可选项、说明都取自 config-
   assert.match(radius, /目的地周边多大范围/);
   assert.match(radius, /placeholder="90"/);
   assert.match(radius, /min="30" max="150"/);
-  assert.match(radius, /sg-suffix" aria-hidden="true">公里</);
+  assert.match(radius, /c-unit-input__unit" aria-hidden="true">公里</);
   assert.match(html(base, 'route_strategy'), /<option value="12">躲避拥堵<\/option>/);
   assert.match(html(base, 'route_cover'), /绕路上限内全覆盖/);
   assert.match(html(base, 'route_cover'), /全覆盖按每位车主的绕路上限圈出范围/); // 说明
@@ -375,7 +375,7 @@ test('找站设置的中文名、默认值、可选项、说明都取自 config-
   assert.match(r2, /改了名的范围/);
   assert.match(r2, /placeholder="77"/);
   assert.match(r2, /min="11" max="222"/);
-  assert.match(r2, /sg-suffix" aria-hidden="true">里</);
+  assert.match(r2, /c-unit-input__unit" aria-hidden="true">里</);
   assert.match(html(box, 'route_strategy'), /<option value="99">新加的走法<\/option>/);
   assert.match(html(box, 'alt_routes'), /改过的说明/);
   // 一行摘要里的名字也取自定义
@@ -418,7 +418,7 @@ test('超出范围的输入就地提示，并说清楚会按什么算', () => {
   assert.match(problems.checked_count, /比显示个数（10）还多，现在会按 10 算/);
   assert.match(problems.route_radius_km, /要大于 30 公里/); // 间隔 60、范围默认 25：两圈连不上
   assert.deepEqual(plain(sugSandbox().run('sgProblems()')), {});
-  assert.match(ui, /class="c-field sg-f/); // 就地提示用 c-field 的错误样式
+  assert.match(ui, /class="c-field c-settings__field/); // 就地提示用 c-field 的错误样式
   assert.match(ui, /class="c-field__error" id="\$\{id\}-err"/);
 });
 
@@ -503,16 +503,16 @@ test('结果里每位车主各绕多少：超过上限标灰并写明，最顺�
   const row = { name: '泾县站', where: '老张路上', to_venue: 106, checked: true, over_all: false,
     detours: [{ driver: '老王', minutes: 12, limit: 30, over: false }, { driver: '老张', minutes: 25, limit: 20, over: true }, { driver: '小赵', minutes: 18, limit: 30, over: false }] };
   const html = box.run(`sgTags(${JSON.stringify(row)})`);
-  assert.match(html, /c-tag--accent sg-best" title="[^"]*">老王 \+12 分</); // 最顺路
+  assert.match(html, /c-tag--accent c-tag--best" title="[^"]*">老王 \+12 分</); // 最顺路
   assert.match(html, /c-tag--ok" title="[^"]*">小赵 \+18 分</);
-  assert.match(html, /c-tag sg-over" title="[^"]*">老张 \+25 分 · 超过上限</);
+  assert.match(html, /c-tag c-tag--over" title="[^"]*">老张 \+25 分 · 超过上限</);
   assert.doesNotMatch(html, /车主都要绕很远/);
   const all = box.run(`sgTags(${JSON.stringify({ ...row, over_all: true, detours: [{ driver: '老张', minutes: 70, limit: 20, over: true }] })})`);
   assert.match(all, /车主都要绕很远/);
   assert.match(all, /老张 \+[^<]*· 超过上限/);
   // 「没列出的站」折叠，按原因分组；有坐标的能加入，没有坐标的提示手动添加
   const code = scripts(ui).at(-1);
-  assert.match(code, /<details class="sg-more"><summary>没列出的站/);
+  assert.match(code, /<details class="c-fold"><summary>没列出的站/);
   assert.match(code, /data-sg-more="\$\{j\}">加入<\/button>/);
   assert.match(code, /要用的话，点「\+ 手动添加」搜站名/);
 });
@@ -549,13 +549,89 @@ test('「找站过程」图层：重新计算方案时清掉，关抽屉时隐�
   assert.match(ui, /在地图上显示找站过程/);
 });
 
-test('推荐车站的样式：自己的类不带 c- 前缀并写明定稿后移走，颜色只用语义变量，可交互元素有焦点样式', () => {
-  const css = /\/\* 推荐车站：找站设置、估算、结果[\s\S]*?(?=\n  \.kv )/.exec(ui);
-  assert.ok(css, '找不到推荐车站的样式');
-  assert.match(css[0], /定稿后移到 design\.css（切片 E）/);
-  assert.doesNotMatch(css[0], /#[0-9a-fA-F]{3,8}\b/, '样式里不能写死颜色');
-  assert.doesNotMatch(css[0], /rgba?\(/);
-  assert.match(css[0], /sg-row:has\(input:focus-visible\)/);
-  assert.match(css[0], /sg-more > summary:focus-visible/);
-  assert.match(ui, /@media \(min-width: 960px\) \{ \.sg-peek \{ display: none; \} \}/);
+test('推荐车站的样式：通用的在 design.css（c- 组件），页面里只剩专用的小样式；颜色只用语义变量', () => {
+  const css = readFileSync('web/design.css', 'utf8');
+  assert.doesNotMatch(ui, /定稿后移到/, '「定稿后移到 design.css」的注释要去掉');
+  const style = /<style>([\s\S]*?)<\/style>/.exec(ui)[1];
+  const left = [...new Set([...style.matchAll(/\.(sg-[\w-]+)/g)].map((m) => m[1]))].sort();
+  assert.deepEqual(left, ['sg-line', 'sg-names', 'sg-peek'], '页面里只保留推荐车站专用的 sg- 样式');
+  assert.match(style, /@media \(min-width: 960px\) \{ \.sg-peek \{ display: none; \} \}/);
+  // 新样式（设置面板、估算、结果列表、地图）不写死颜色
+  const mine = css.slice(css.indexOf('/* ---------- 12. 设置面板'), css.indexOf('/* ---------- 14. 打印'));
+  assert.ok(mine.length > 500);
+  assert.doesNotMatch(mine, /#[0-9a-fA-F]{3,8}\b/, '样式里不能写死颜色');
+  assert.doesNotMatch(mine, /rgba?\(|hsla?\(/);
+  // 可交互元素有焦点样式
+  assert.match(mine, /\.c-pick-row:has\(input:focus-visible\)/);
+  assert.match(mine, /\.c-fold > summary:focus-visible/);
+  // 自建 Leaflet pane 里的 svg：全局的 svg { max-width: 100% } 会把它压成 0 宽
+  assert.match(css, /\nimg, svg \{ max-width: 100%; \}/);
+  assert.match(css, /\.leaflet-pane svg \{ max-width: none !important; max-height: none !important; \}/);
+  assert.doesNotMatch(ui, /\.leaflet-sug-pane/);
+});
+
+// 页面里用到的 c- 类，design.css 里都要有定义（只看 class 属性和拼进 class 的字符串，不会把 id 里的 sec-legs 当成类）
+const cssFile = readFileSync('web/design.css', 'utf8');
+const definedClasses = new Set([...cssFile.matchAll(/\.(c-[a-z0-9_-]+)/g)].map((m) => m[1]));
+const usedClasses = (html) => {
+  const used = new Set();
+  for (const m of html.matchAll(/class(?:Name)?=(?:"([^"]*)"|'([^']*)')|classList\.(?:add|toggle|remove)\(([^)]*)\)/g)) {
+    for (const t of (m[1] ?? m[2] ?? m[3]).matchAll(/(?<![\w-])c-[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:__[a-z0-9]+(?:-[a-z0-9]+)*)?(?:--[a-z0-9]+(?:-[a-z0-9]+)*)?/g)) used.add(t[0]);
+  }
+  // 脚本里拼出来的 class 字符串，如 'c-choices c-choices--stack'
+  for (const t of html.matchAll(/'((?:c-[a-z0-9_-]+ ?)+)'/g)) for (const c of t[1].trim().split(' ')) used.add(c);
+  return used;
+};
+
+test('编辑页用到的每个 c- 类，design.css 里都有定义', () => {
+  const used = usedClasses(ui);
+  assert.ok(used.size > 40, `只找到 ${used.size} 个，提取可能坏了`);
+  for (const c of ['c-settings', 'c-unit-input', 'c-choices', 'c-estimate', 'c-pick-row', 'c-tags', 'c-fold', 'c-tag--over', 'c-tag--best', 'c-why--info']) assert.ok(used.has(c), `编辑页应该用到 ${c}`);
+  const missing = [...used].filter((c) => !definedClasses.has(c));
+  assert.deepEqual(missing, [], `design.css 里没有定义：${missing.join('、')}`);
+});
+
+test('设置面板、估算、结果列表的组件都在 /design 样式指南里有示例，写进了设计规范的组件清单', () => {
+  const guide = readFileSync('web/pages/design.html', 'utf8');
+  const doc = readFileSync('docs/design-system.md', 'utf8');
+  const section = cssFile.slice(cssFile.indexOf('/* ---------- 12. 设置面板'), cssFile.indexOf('/* ---------- 13. 地图'));
+  const parts = [...new Set([...section.matchAll(/\.(c-[a-z0-9_-]+)/g)].map((m) => m[1]))];
+  assert.ok(parts.length >= 25, `只找到 ${parts.length} 个组件类`);
+  for (const c of parts) {
+    assert.match(guide, new RegExp(`(?<![\\w-])${c}(?![\\w-])`), `/design 里没有 ${c} 的示例`);
+    assert.ok(doc.includes(c.replace(/(__|--).*/, "")) && doc.includes(/(__|--).*/.exec(c)?.[0] ?? c), `设计规范里没提到 ${c}`);
+  }
+  assert.match(guide, /id="suggest-parts"/);
+});
+
+test('设计规范的「交互规范」里点名的函数、类名、属性在代码里真实存在', () => {
+  const doc = readFileSync('docs/design-system.md', 'utf8');
+  const start = doc.indexOf('\n## 交互规范');
+  assert.ok(start > 0, '缺少「交互规范」一节');
+  const spec = doc.slice(start, doc.indexOf('\n## ', start + 5));
+  assert.match(doc, /定稿的界面改动，先改这份规范，再改页面/);
+  const sources = [ui, cssFile, readFileSync('web/admin.html', 'utf8'), readFileSync('web/pages/design.html', 'utf8'), readFileSync('config-fields.json', 'utf8')].join('\n');
+  const named = [...new Set([...spec.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).filter((t) => /^\.?[A-Za-z_][\w-]*(\(\))?$/.test(t)))];
+  assert.ok(named.length > 60, `只找到 ${named.length} 个点名的名字，提取可能坏了`);
+  const missing = named.filter((t) => !sources.includes(t.replace(/^\./, '').replace(/\(\)$/, '')));
+  assert.deepEqual(missing, [], `规范里点名但代码里找不到：${missing.join('、')}`);
+  // 关键的几个：规范里要写到，代码里要有定义
+  for (const fn of ['openDrawer', 'closeDrawer', 'openDialog', 'confirmDialog', 'promptDialog', 'alertDialog', 'toast', 'sgFieldHtml', 'sgSummary', 'sgProblems', 'setSuggest',
+    'scheduleSugEstimate', 'runSugEstimate', 'startProgress', 'updateProgress', 'stopProgress', 'syncSugLayer', 'drawSugLayer', 'clearSugLayer', 'sgTags', 'sgGroupBy',
+    'isStale', 'updateStale', 'reportError', 'showQuota', 'decorateSoon', 'problemsDialog', 'jumpTo', 'setPane', 'themeVar', 'sugOpen', 'sgSyncFromCfg', 'updatePlanDot', 'renderEmptyPlan']) {
+    assert.ok(spec.includes(fn), `规范里应该写到 ${fn}`);
+    assert.match(ui, new RegExp(`(?:function ${fn}\\b|const ${fn} = )`), `代码里没有 ${fn} 的定义`);
+  }
+  assert.match(ui, /map\.createPane\('sugPane'\)\.style\.zIndex = 350/);
+});
+
+test('推荐车站设置：分组标题和第一项的名字重复时，只显示一个，名字留给读屏', () => {
+  const box = sugSandbox();
+  const quiet = box.run(`sgFieldHtml('areas', true)`);
+  assert.match(quiet, /<span class="c-field__label c-sr-only" id="sg-areas-l">在哪些地方找<\/span>/);
+  assert.match(quiet, /role="group" aria-labelledby="sg-areas-l"/); // 无障碍名称还在
+  assert.doesNotMatch(box.run(`sgFieldHtml('areas')`), /c-sr-only/);
+  const panel = box.run(`SG_GROUPS.map((g) => g.keys.map((k, i) => sgFieldHtml(k, Boolean(g.quietFirst) && i === 0)).join('')).join('')`);
+  assert.equal((panel.match(/c-sr-only/g) || []).length, 1, '只有「在哪找」的第一项把名字藏起来');
+  assert.match(ui, /title: '在哪找', keys: \['areas'/);
 });

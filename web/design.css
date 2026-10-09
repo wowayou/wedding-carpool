@@ -374,7 +374,67 @@ dialog.c-drawer { position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); 
 .c-swatch i { width: 40px; height: 40px; border-radius: var(--r-ctl); border: 1px solid var(--line-strong); }
 .c-swatch code { font-size: var(--fs-12); }
 
-/* ---------- 12. 打印：隐藏站点页头页脚，强制浅色 ---------- */
+/* ---------- 12. 设置面板、估算、结果列表（v3.8，编辑页的「推荐车站」抽屉用，规范见 docs/design-system.md 的「交互规范」） ---------- */
+/* 设置面板：折叠成一行摘要，点按钮展开分组；展开后，估算和主按钮贴在底部（c-settings__foot）。
+   <div class="c-settings is-editing"><section><div class="c-settings__bar"><p class="c-settings__sum">…</p><button class="c-btn c-btn--sm">改设置</button></div>
+   <div class="c-settings__panel"><fieldset class="c-settings__group"><legend>分组</legend><div class="c-settings__grid"><div class="c-field c-settings__field">…</div></div></fieldset></div></section>
+   <div class="c-settings__foot"><div class="c-estimate">…</div><div class="c-settings__actions">…</div><p class="c-field__hint c-why">…</p></div></div> */
+.c-settings { min-width: 0; }
+.c-settings__bar { display: flex; gap: var(--sp-3); align-items: flex-start; justify-content: space-between; }
+.c-settings__sum { margin: 0; padding-top: 4px; font-size: var(--fs-13); color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; }
+.c-settings__bar .c-btn { flex: none; }
+.c-settings__panel { margin-top: var(--sp-4); padding-top: var(--sp-4); border-top: 1px solid var(--line); }
+.c-settings__group { border: 0; margin: 0 0 var(--sp-4); padding: 0; min-width: 0; }
+.c-settings__group > legend { padding: 0; margin-bottom: var(--sp-3); font-size: var(--fs-13); font-weight: 600; color: var(--ink-2); letter-spacing: .04em; }
+.c-settings__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 var(--sp-3); }
+.c-settings__field { margin-bottom: var(--sp-3); min-width: 0; }
+.c-settings__field--wide { grid-column: 1 / -1; }
+.c-settings__foot { margin: 0 calc(-1 * var(--sp-4)); padding: 0 var(--sp-4); background: var(--surface); }
+.c-settings.is-editing .c-settings__foot { position: sticky; bottom: calc(-1 * var(--sp-4)); z-index: 2; padding-top: var(--sp-2); padding-bottom: var(--sp-3); border-top: 1px solid var(--line-strong); box-shadow: 0 -6px 8px -8px var(--line-strong); }
+.c-settings.is-editing .c-settings__foot .c-alert { margin-bottom: var(--sp-2); }
+.c-settings__actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; margin: var(--sp-3) 0 var(--sp-2); }
+/* 带单位的输入框：单位写在框里右侧，只是视觉，读屏不读（aria-hidden），框的名字里已有单位 */
+.c-unit-input { position: relative; }
+.c-unit-input .c-input { padding-right: 3.4em; }
+.c-unit-input__unit { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-2); font-size: var(--fs-13); pointer-events: none; }
+/* 一组选项：胶囊横排（c-check--pill），或选项文字长时竖排 */
+.c-choices { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.c-choices--stack { display: grid; gap: 6px; }
+.c-choices--stack .c-check { align-items: flex-start; }
+/* 估算条：先估算再调用。一句话写清要花多少，超限的原因用 c-alert--warn 写在下面；没估好时灰字 */
+.c-estimate { margin: var(--sp-3) 0 var(--sp-2); font-size: var(--fs-14); }
+.c-settings.is-editing .c-estimate { margin-top: var(--sp-1); }
+.c-estimate b { font-variant-numeric: tabular-nums; }
+/* 主按钮不能点的原因，写在按钮下面；--info 用于「这个模式本来就不能用」（试玩） */
+.c-why { margin: 0 0 var(--sp-3); }
+.c-why--info { color: var(--ink); background: var(--info-soft); border-left: 4px solid var(--info); border-radius: var(--r-ctl); padding: 8px 12px; font-size: var(--fs-13); }
+.c-callout__list { margin: 0; padding-left: 18px; font-size: var(--fs-13); }
+/* 结果行：整行可点的勾选项，下面一行标签（c-tags）；全部超限的行加 is-off */
+.c-pick-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; padding: var(--sp-2) 6px; margin: 0 -6px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: var(--r-ctl); }
+.c-pick-row input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+.c-pick-row small { display: block; color: var(--ink-2); }
+.c-pick-row.is-off { background: var(--surface-2); }
+.c-pick-row:has(input:focus-visible), .c-fold__row:has(button:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 标签行，及按语义着色的标签：最好的 c-tag--accent c-tag--best，可用的 c-tag--ok，超限的 c-tag--over（灰底虚线），全部超限的 c-tag--danger */
+.c-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.c-tags .c-tag { white-space: normal; }
+.c-tag--over { color: var(--ink-2); background: var(--surface-2); border: 1px dashed var(--line-strong); line-height: 18px; }
+.c-tag--best { font-weight: 700; }
+/* 折叠区：默认收起的「没列出的」，里面按原因分组（__title），每行一个对象加一个按钮（__row） */
+.c-fold { margin-top: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-card); padding: 0 var(--sp-3); }
+.c-fold > summary { cursor: pointer; padding: var(--sp-3) 0; font-weight: 600; font-size: var(--fs-13); }
+.c-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-ctl); }
+.c-fold[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: var(--sp-2); }
+.c-fold__title { margin: var(--sp-3) 0 4px; font-size: var(--fs-13); color: var(--ink-2); }
+.c-fold__row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
+.c-fold__row > span:first-child { min-width: 0; }
+.c-fold__row small { display: block; color: var(--ink-2); }
+
+/* ---------- 13. 地图（Leaflet） ---------- */
+/* 页面自己用 map.createPane 建的图层：Leaflet 只给自带的 overlayPane 取消了 svg 的最大宽度，上面的 svg { max-width: 100% } 会把它们压成 0 宽 */
+.leaflet-pane svg { max-width: none !important; max-height: none !important; }
+
+/* ---------- 14. 打印：隐藏站点页头页脚，强制浅色 ---------- */
 @media print {
   .c-site-header, .c-site-footer, .c-toasts, .c-skip { display: none !important; }
 }
