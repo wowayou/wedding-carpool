@@ -1094,11 +1094,28 @@ class MethodPageTest(unittest.TestCase):
     def setUpClass(cls):
         cls.html = (Path(__file__).parent / "web" / "pages" / "guide-method.html").read_text(encoding="utf-8")
 
-    def test_default_table_matches_code(self):
-        cells = re.findall(r'<td[^>]*data-default="(\w+)"[^>]*>(.*?)</td>', self.html)
+    @staticmethod
+    def table_mismatches(html: str, defaults: dict) -> list[str]:
+        """规则页默认值表和一组默认值对不上的地方（空表示一致）。"""
+        cells = re.findall(r'<td[^>]*data-default="(\w+)"[^>]*>(.*?)</td>', html)
         page = {key: re.search(r"\d+:\d+|\d+|[a-z]+", re.sub(r"<[^>]+>", "", text)).group(0) for key, text in cells}
-        self.assertEqual(len(cells), len(page), "默认值表里有重复的键")
-        self.assertEqual(page, {k: str(v) for k, v in carpool.DEFAULTS.items()})
+        out = [f"默认值表里 {key} 重复" for key in {k for k, _ in cells if [c for c, _ in cells].count(k) > 1}]
+        want = {k: str(v) for k, v in defaults.items()}
+        out += [f"{k}：页面 {page[k]}，定义 {want[k]}" for k in want if k in page and page[k] != want[k]]
+        out += [f"{k} 定义里有，规则页没列" for k in want if k not in page]
+        out += [f"{k} 规则页列了，定义里没有" for k in page if k not in want]
+        return out
+
+    def test_default_table_matches_code(self):
+        self.assertEqual(self.table_mismatches(self.html, carpool.DEFAULTS), [])
+
+    def test_changing_a_default_in_config_fields_is_caught_by_the_page_check(self):
+        fields = {k: dict(v) for k, v in carpool.FIELDS.items()}
+        fields["options.max_stops"]["default"] = 3  # 只改 config-fields.json 里的一个默认值
+        changed = carpool.defaults_from(fields)
+        self.assertEqual(changed["max_stops"], 3)  # DEFAULTS 跟着变
+        self.assertEqual(len(self.table_mismatches(self.html, changed)), 1)  # 规则页没跟着改，测试能报出来
+        self.assertIn("max_stops", self.table_mismatches(self.html, changed)[0])
 
     def test_page_names_the_current_version(self):
         self.assertIn(f"第 {carpool.RULES_VERSION} 版", self.html)
@@ -1114,6 +1131,94 @@ class MethodPageTest(unittest.TestCase):
         cfg["return"] = {"enabled": True, "depart_time": "18:00"}
         self.assertEqual(carpool.load_trip(cfg, FakeAmap()).back.margin, d["security_min"])
         self.assertEqual(carpool.load_trip(cfg, FakeAmap()).back.max_wait, d["max_wait_min"])
+
+
+class ConfigFieldsTest(unittest.TestCase):
+    """config-fields.json 是配置项的唯一定义：DEFAULTS 由它生成，示例配置里的每一项它都要有。"""
+    ROOT = Path(__file__).parent
+
+    # 改成从文件生成之前的 DEFAULTS，原样固定下来：键和值都不能变（变了就是改了规则，要升 RULES_VERSION）
+    OLD_DEFAULTS = {
+        "max_detour_min": 30, "max_stops": 2, "station_cost_min": 60, "station_access_min": 45, "exit_buffer_min": 15,
+        "security_min": 40, "max_wait_min": 30, "taxi_mode": "save", "taxi_pool_extra_min": 30, "taxi_wait_min": 30,
+        "discover_radius_km": 120, "discover_limit": 10, "travel_time": "08:00",
+    }
+
+    def test_defaults_are_unchanged(self):
+        self.assertEqual(carpool.DEFAULTS, self.OLD_DEFAULTS)
+        self.assertEqual({type(v) for v in carpool.DEFAULTS.values()}, {type(v) for v in self.OLD_DEFAULTS.values()})
+
+    def test_definitions_are_well_formed(self):
+        raw = json.loads((self.ROOT / "config-fields.json").read_text(encoding="utf-8"))
+        paths = [f["path"] for f in raw["fields"]]
+        self.assertEqual(len(paths), len(set(paths)), "路径重复")
+        table_keys = [f["path"].rsplit(".", 1)[-1] for f in raw["fields"] if f.get("rules_table")]
+        self.assertEqual(len(table_keys), len(set(table_keys)), "规则页默认值表的键重复")
+        for f in raw["fields"]:
+            self.assertIn(f["section"], raw["sections"], f["path"])
+            self.assertIn(f["type"], {"text", "number", "integer", "boolean", "time", "date", "choice", "multi", "list", "map"}, f["path"])
+            self.assertTrue(f["label"], f["path"])
+            if f.get("rules_table"):
+                self.assertIn("default", f, f["path"])
+            if "min" in f and "max" in f:
+                self.assertLessEqual(f["min"], f["max"], f["path"])
+            if "default" in f and "min" in f and isinstance(f["default"], (int, float)) and not isinstance(f["default"], bool):
+                self.assertGreaterEqual(f["default"], f["min"], f["path"])
+                self.assertLessEqual(f["default"], f.get("max", f["default"]), f["path"])
+            if f["type"] in ("choice", "multi"):
+                values = [c["value"] for c in f["choices"]]
+                defaults = f.get("default") if f["type"] == "multi" else [f.get("default")]
+                self.assertTrue(set(defaults) <= set(values), f["path"])
+            if "default_from" in f:
+                self.assertIn(f["default_from"], carpool.FIELDS, f["path"])
+
+    def test_suggest_settings_are_defined_per_plan(self):
+        f = carpool.FIELDS
+        want = {"route_cover": "along", "alt_routes": False, "max_searches": 80, "dest_radius_km": 100, "home_radius_km": 30,
+                "route_step_km": 30, "route_radius_km": 25, "show_count": 15, "checked_count": 6, "filter_12306": True,
+                "route_strategy": 0, "sort": "detour", "over_limit": "show"}
+        for key, value in want.items():
+            self.assertEqual(f[f"options.suggest.{key}"]["default"], value, key)
+        self.assertEqual([c["value"] for c in f["options.suggest.route_cover"]["choices"]], ["along", "detour"])
+        self.assertEqual((f["options.suggest.max_searches"]["min"], f["options.suggest.max_searches"]["max"]), (20, 200))
+        self.assertFalse(any(x.get("rules_table") for p, x in f.items() if p.startswith("options.suggest.")))
+
+    def test_loader_reads_the_fields_file(self):
+        fields = carpool.load_fields(self.ROOT / "config-fields.json")
+        self.assertEqual(fields, carpool.FIELDS)
+        self.assertEqual(carpool.defaults_from(fields), carpool.DEFAULTS)
+
+    @staticmethod
+    def example_keys() -> set[str]:
+        """trip.example.toml 里出现的配置项（含被注释掉的示例行），按所在分段写成定义里的路径。"""
+        section, keys = "", set()
+        for line in (Path(__file__).parent / "trip.example.toml").read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^#?\s*\[\[?(\w+)\]\]?\s*(#.*)?$", line)
+            if m:
+                section = m.group(1)
+                continue
+            m = re.match(r"^#?\s*([a-z_0-9]+)\s*=", line)
+            if m:
+                keys.add({"people": "people[]", "stations": "stations[]"}.get(section, section) + "." + m.group(1))
+        return keys
+
+    def test_every_key_in_the_example_config_is_defined(self):
+        keys = self.example_keys()
+        self.assertIn("options.taxi_wait_min", keys)  # 确认解析到了被注释掉的示例行
+        self.assertIn("people[].leave_time", keys)
+        self.assertIn("return.security_min", keys)
+        self.assertEqual(sorted(k for k in keys if k not in carpool.FIELDS), [])
+
+    def test_every_key_the_loader_reads_is_defined(self):
+        src = (Path(__file__).parent / "carpool.py").read_text(encoding="utf-8")
+        back = src[src.index("def back_leg"):src.index("def train_times")]
+        read = [("options", k) for k in re.findall(r'\bopt\.get\("(\w+)"', src)]
+        read += [("return", k) for k in re.findall(r'\br\.get\("(\w+)"', back)]
+        places = src[src.index("def leave_time"):src.index("def load_trip")]
+        read += [("venue", k) for k in re.findall(r'\bv\.get\("(\w+)"', places)]
+        read += [("people[]", k) for k in re.findall(r'\bp\.get\("(\w+)"', places) + re.findall(r'\bp\["(\w+)"\]', places)]
+        self.assertGreater(len(read), 20)
+        self.assertEqual(sorted({f"{s}.{k}" for s, k in read if f"{s}.{k}" not in carpool.FIELDS}), [])
 
 
 class TomlTest(unittest.TestCase):
@@ -1282,6 +1387,8 @@ class UiServerTest(unittest.TestCase):
         self.assertEqual((status, [s["name"] for s in data["stations"]]), (200, ["杭州东站"]))
         with urllib.request.urlopen(self.base + "/stations12306.json") as resp:
             self.assertIn("北京南", json.load(resp)["stations"])
+        with urllib.request.urlopen(self.base + "/config-fields.json") as resp:  # 编辑页的占位、范围、中文名取自它
+            self.assertEqual({f["path"]: f["default"] for f in json.load(resp)["fields"] if "default" in f}["options.max_stops"], 2)
 
     def test_search(self):
         status, data = self.call("/api/search?q=%E6%9D%AD%E5%B7%9E%E4%B8%9C%E7%AB%99")

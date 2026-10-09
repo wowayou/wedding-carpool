@@ -16,7 +16,9 @@ cpSync('web/demo-shot.png', 'dist/demo-shot.png');
 // 静态站点：首页、示例、指南、场景页、关于、更新记录、隐私、管理页、样式指南、404。
 // 页面、页头页脚、结构化数据、sitemap 和设计系统的构建都在 web/site.mjs，页面清单在 web/site-data.mjs
 const site = buildSite('dist');
-for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py']) cpSync(name, `dist/py/${name}`);
+// config-fields.json（配置项定义）两处用：Python 计算核心在 py/ 下读它，编辑页从站点根目录取它
+for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py', 'config-fields.json']) cpSync(name, `dist/py/${name}`);
+cpSync('config-fields.json', 'dist/config-fields.json');
 cpSync('web/_headers', 'dist/_headers'); // 静态文件的安全响应头；Worker 生成的响应在 worker.js 里加同一组
 
 // 编辑页的前端依赖改为自己托管：下载并校验到 dist/vendor/，把 dist/edit.html、dist/pyworker.js 里的 CDN 地址换成 /vendor/…（见 web/vendor.mjs）

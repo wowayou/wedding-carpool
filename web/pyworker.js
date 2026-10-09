@@ -10,7 +10,7 @@ const ready = (async () => {
   self.postMessage({ progress: { label: '下载计算环境（第一次约 12MB）', done: null, total: null } });
   const py = await loadPyodide({ indexURL: PYODIDE }); // Worker 里推断不出文件位置，要显式给
   self.postMessage({ progress: { label: '计算环境就绪，开始计算', done: null, total: null } });
-  for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py']) {
+  for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py', 'config-fields.json']) {
     const res = await fetch('py/' + name, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`加载 ${name} 失败（${res.status}）`);
     py.FS.writeFile(name, await res.text());

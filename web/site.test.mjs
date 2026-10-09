@@ -137,3 +137,13 @@ test('构建产物里有试玩页 try.html 和 try-trip.json，CSP 与编辑页�
   assert.deepEqual(JSON.parse(readFileSync('dist/try-trip.json', 'utf8')), JSON.parse(readFileSync('web/try-trip.json', 'utf8')));
   assert.match(readFileSync('wrangler.jsonc', 'utf8'), /"run_worker_first": \[[^\]]*"\/try"/);
 });
+
+// config-fields.json：网页版 Python 在 py/ 下读，编辑页从站点根目录取；Pyodide 要把它和 .py 一起加载
+test('构建产物里有 config-fields.json（根目录和 py/ 各一份），计算线程会加载它', { skip: !existsSync('.cache/vendor') && '没有依赖缓存，先 npm run build 一次' }, () => {
+  const child = spawnSync(process.execPath, ['web/build.mjs'], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const src = readFileSync('config-fields.json', 'utf8');
+  assert.equal(readFileSync('dist/config-fields.json', 'utf8'), src);
+  assert.equal(readFileSync('dist/py/config-fields.json', 'utf8'), src);
+  assert.match(readFileSync('web/pyworker.js', 'utf8'), /'browser\.py', 'config-fields\.json'\]/);
+});

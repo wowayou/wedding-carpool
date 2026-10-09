@@ -43,22 +43,25 @@ INF = math.inf
 
 # 计算规则的版本：只有排序规则或成本口径变了才加一；改界面、改文字不加。说明见 /guide/method
 RULES_VERSION = 2
-# 配置里没写时的默认值，说明页的默认值表会和它核对（test_carpool.py）
-DEFAULTS = {
-    "max_detour_min": 30,       # 车主最多愿意绕多久
-    "max_stops": 2,             # 每辆车最多停几个接人点
-    "station_cost_min": 60,     # 乘客到站用时查不到时的估值
-    "station_access_min": 45,   # 填了车次时，去车站和候车的时间
-    "exit_buffer_min": 15,      # 列车到站后出站、走到接人点
-    "security_min": 40,         # 返程：发车前多久到站
-    "max_wait_min": 30,         # 返程：乘客最多愿意等车主多久
-    "taxi_mode": "save",        # 打车怎么安排：save 尽量拼车省钱，fast 各人走自己最快的站
-    "taxi_pool_extra_min": 30,  # 为了拼车，一个人最多比他自己最快的走法多花几分钟
-    "taxi_wait_min": 30,        # 同一辆出租里的人，到站或离场的时间最多相差几分钟
-    "discover_radius_km": 120,  # 自动找站的范围
-    "discover_limit": 10,       # 自动找站最多留几个
-    "travel_time": "08:00",     # 公交估算的出发时刻
-}
+# 配置项只在 config-fields.json 里定义一处（路径、类型、默认值、范围、单位、中文名……）。
+# 网页版把这个文件和 .py 一起加载（见 web/pyworker.js）；编辑页、规则页的测试读的也是它
+FIELDS_FILE = Path(__file__).with_name("config-fields.json")
+
+
+def load_fields(path: Path = FIELDS_FILE) -> dict[str, dict]:
+    """读配置项定义，返回 {路径: 定义}，路径如 options.max_detour_min、people[].max_detour_min。"""
+    fields = json.loads(Path(path).read_text(encoding="utf-8"))["fields"]
+    return {f["path"]: f for f in fields}
+
+
+def defaults_from(fields: dict[str, dict]) -> dict:
+    """规则页默认值表里的那些项（rules_table）：{配置里的键: 默认值}，键取路径的最后一段。"""
+    return {f["path"].rsplit(".", 1)[-1]: f["default"] for f in fields.values() if f.get("rules_table")}
+
+
+FIELDS = load_fields()
+# 配置里没写时的默认值，由 FIELDS 生成；说明页的默认值表会和它核对（test_carpool.py）
+DEFAULTS = defaults_from(FIELDS)
 
 
 # 进度回调：长操作分阶段报告 (阶段说明, 已完成数, 总数)，网页版用来显示进度条；本地版不设

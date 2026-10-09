@@ -155,7 +155,7 @@ function loadWith(names, ctx) {
     assert.ok(m, `找不到 ${n}`);
     return m[0];
   }).join('\n');
-  return vm.runInNewContext(`${pick}\n({ ${names.join(', ')} })`, ctx);
+  return vm.runInNewContext(`${fieldsPrelude()}\n${pick}\n({ ${names.join(', ')} })`, ctx);
 }
 
 test('试玩模式：地址只读、没有搜索按钮和清除坐标，车站只能删除', () => {
@@ -205,7 +205,7 @@ function pick(names, ctx) {
     assert.ok(m, `找不到 ${n}`);
     return m[0];
   }).join('\n');
-  return vm.runInNewContext(`${src}\n({ ${names.join(', ')} })`, ctx);
+  return vm.runInNewContext(`${fieldsPrelude()}\n${src}\n({ ${names.join(', ')} })`, ctx);
 }
 
 test('表单顶部有「规划哪几段」：去程、返程两个独立开关', () => {
@@ -252,6 +252,7 @@ test('返程：成员卡片有离场时间，返程一节有乘客最多等；�
   assert.ok(bad.some((p) => p.path === 'people.0.leave_time' && /时:分/.test(p.msg)));
   assert.equal(run([{ name: '甲', from: 'x', leave_time: '21:30' }], {}).length, 0);
   assert.ok(run([{ name: '甲', from: 'x' }], { max_wait_min: -5 }).some((p) => p.path === 'return.max_wait_min'));
+  assert.ok(run([{ name: '甲', from: 'x', rail_min: { 黄山北站: -10 } }], {}).some((p) => p.path === 'people.0.rail_min.黄山北站' && /甲到黄山北站的用时不能小于 0/.test(p.msg)), '各站用时也按定义里的范围校验');
 });
 
 test('选项里有打车方式、拼车多花、时间差；方案卡片显示打车几辆', () => {
@@ -271,4 +272,57 @@ test('选项里有打车方式、拼车多花、时间差；方案卡片显示�
   assert.ok(run({ taxi_wait_min: -1 }).some((p) => p.path === 'options.taxi_wait_min'));
   assert.equal(run({ taxi_mode: 'fast', taxi_pool_extra_min: 20 }).length, 0);
   assert.match(code, /options\.taxi_mode' && value === 'save' \? ''/); // 默认值不写进配置
+});
+
+// ---------- 配置项只定义一处：config-fields.json ----------
+const fieldsFile = JSON.parse(readFileSync('config-fields.json', 'utf8'));
+
+// 从页面脚本里取出「读定义」的几个函数（不含 fetch 的 loadFields），用给定的定义跑
+const fieldsPrelude = (fields = fieldsFile.fields) => `${fieldsCode()}
+FIELDS = Object.fromEntries(${JSON.stringify(fields)}.map((f) => [f.path, f]));`;
+const fieldsCode = () => {
+  const m = /let FIELDS = \{\};[\s\S]*?const placeholderOf = [^\n]*\n/.exec(scripts(ui).at(-1));
+  assert.ok(m, '找不到 config-fields.json 的读取代码');
+  return m[0].replace(/async function loadFields[\s\S]*?\n\}\n/, '');
+};
+const withFields = (fields, body) => vm.runInNewContext(`${fieldsPrelude(fields)}\n${body}`, {});
+
+test('编辑页的占位文字取自 config-fields.json，改定义就跟着变', () => {
+  const h = withFields(fieldsFile.fields, '({ fieldOf, defaultOf, noteOf, placeholderOf })');
+  for (const f of fieldsFile.fields.filter((x) => x.rules_table && typeof x.default === 'number')) assert.equal(h.placeholderOf(f.path), String(f.default), f.path);
+  assert.equal(h.placeholderOf('people.3.party'), '1'); // 成员字段：people.N.x 对应 people[].x
+  assert.equal(h.placeholderOf('return.depart_time'), '20:30'); // 没有默认值的用写明的示例
+  assert.equal(h.noteOf('people.0.leave_time'), '同散场时间');
+  const changed = fieldsFile.fields.map((f) => (f.path === 'options.max_stops' ? { ...f, default: 7 } : f));
+  const h2 = withFields(changed, '({ defaultOf, placeholderOf })');
+  assert.equal(h2.placeholderOf('options.max_stops'), '7');
+  assert.equal(h2.defaultOf('options.max_stops'), 7);
+});
+
+test('编辑页不再写死默认值，用到的配置路径在 config-fields.json 里都有定义', () => {
+  const code = scripts(ui).at(-1);
+  assert.doesNotMatch(code, /DEFAULTS_STATION_COST/);
+  assert.doesNotMatch(code, /placeholder: '\d/); // 占位里写死的 30、2、40、60、15、45……
+  assert.doesNotMatch(code, /\?\? \d+\)/); // detourHint 里的 ?? 30 之类
+  const defined = new Set(fieldsFile.fields.map((f) => f.path));
+  const used = new Set([...ui.matchAll(/['"`]((?:options|return|venue)\.[a-z_]+(?:\.[a-z_0-9]+)?)['"`]/g)].map((m) => m[1]));
+  assert.ok(used.has('options.max_detour_min') && used.has('return.security_min'));
+  assert.deepEqual([...used].filter((p) => !defined.has(p)), []);
+  const personKeys = [...ui.matchAll(/base \+ '\.([a-z_]+)'/g)].map((m) => m[1]);
+  assert.ok(personKeys.includes('max_detour_min'));
+  assert.deepEqual(personKeys.filter((k) => !defined.has(`people[].${k}`) && !defined.has(`stations[].${k}`)), []);
+});
+
+test('冲突提示里的中文名取自定义（含找站设置）', () => {
+  const fn = /function labelOf\(path\) \{[\s\S]*?\n\}\n/.exec(scripts(ui).at(-1));
+  assert.ok(fn);
+  const run = (fields) => withFields(fields, `const cfg = { people: [{ name: '老王' }], stations: [{ name: '黄山北站' }] };\n${fn[0]}\nlabelOf`);
+  const labelOf = run(fieldsFile.fields);
+  assert.equal(labelOf('options.taxi_pool_extra_min'), '选项「拼车最多多花」');
+  assert.equal(labelOf('return.security_min'), '返程「发车前多久到站」');
+  assert.equal(labelOf('people.0.max_detour_min'), '老王的最多绕路');
+  assert.equal(labelOf('options.suggest.max_searches'), '找站设置「每次最多搜索几次」');
+  assert.equal(labelOf('venue.address'), '目的地地址');
+  const renamed = run(fieldsFile.fields.map((f) => (f.path === 'options.max_stops' ? { ...f, label: '改名后' } : f)));
+  assert.equal(renamed('options.max_stops'), '选项「改名后」');
 });
