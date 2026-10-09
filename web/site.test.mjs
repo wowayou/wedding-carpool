@@ -136,6 +136,11 @@ test('构建产物里有试玩页 try.html 和 try-trip.json，CSP 与编辑页�
   assert.doesNotMatch(tryPage, /cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net/); // CDN 地址已换成 /vendor/
   assert.deepEqual(JSON.parse(readFileSync('dist/try-trip.json', 'utf8')), JSON.parse(readFileSync('web/try-trip.json', 'utf8')));
   assert.match(readFileSync('wrangler.jsonc', 'utf8'), /"run_worker_first": \[[^\]]*"\/try"/);
+  // 编辑页的脚本模块随构建复制到 dist/editor/；页面里只剩一段兜底的内嵌脚本，CSP 只放行它的哈希（模块脚本由 'self' 放行）
+  assert.deepEqual(readdirSync('dist/editor').sort(), readdirSync('web/editor').sort());
+  assert.equal(readFileSync('dist/editor/main.js', 'utf8'), readFileSync('web/editor/main.js', 'utf8'));
+  assert.match(edit, /<script type="module" src="\/editor\/main\.js"><\/script>/);
+  assert.equal(csp(edit).match(/'sha256-/g).length, 1);
 });
 
 // config-fields.json：网页版 Python 在 py/ 下读，编辑页从站点根目录取；Pyodide 要把它和 .py 一起加载

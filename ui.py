@@ -36,6 +36,8 @@ STATIC_FILES = {
     "/favicon.svg": (HERE / "web" / "favicon.svg", "image/svg+xml"),
     "/apple-touch-icon.png": (HERE / "web" / "apple-touch-icon.png", "image/png"),
 }
+# 编辑页的脚本模块（web/editor/*.js）：浏览器要求模块的 MIME 是 JavaScript。只开放这个目录下现有的 .js 文件（逐个列出，请求路径必须正好等于键），不按请求路径去拼文件路径
+STATIC_FILES.update({f"/editor/{p.name}": (p, "text/javascript; charset=utf-8") for p in sorted((HERE / "web" / "editor").glob("*.js"))})
 SAVE_HEADER = "# 由 ui.py 保存。手写注释不会保留，第一次保存前的原文件在同名 .bak 里\n"
 
 
