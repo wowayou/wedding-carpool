@@ -1040,6 +1040,162 @@ def solve(trip: Trip, T, top: int = 3, leg: Leg = OUT) -> list[Plan]:
     return sorted(plans, key=lambda pl: pl.score)[:top]
 
 
+# ---------- 行程表 ----------
+# 一个方案里「谁几点出发、几点到哪、等多久、打车几点汇合」只在这一节算一次，存成行程表。
+# 报告、方案页、界面数据都只读行程表，各自负责「怎么写出来」（文字、HTML、JSON），不再自己推算时刻。
+# 时刻都是当天的原始分钟数（不取整）；不知道的时刻统一是 None（比如没填车次，推不出车主几点出发）。
+# 这一节不引用报告和方案页的代码，v3.11 会整体搬进单独的模块。
+
+def pickup_ready(plan: Plan, trip: Trip) -> dict[tuple[str, str], float]:
+    """(车主, 接人点) → 乘客都能上车的时刻：最晚到站的那位到站后再加出站时间。"""
+    people = {p.name: p for p in trip.people}
+    ready: dict[tuple[str, str], float] = {}
+    for name, (driver, stop) in plan.rides.items():
+        arr = arrival_at(people[name], stop)
+        if arr is not None:
+            ready[(driver, stop)] = max(ready.get((driver, stop), -INF), arr + trip.exit_buffer)
+    return ready
+
+
+def route_schedule(route: Route, ready: dict[tuple[str, str], float], T) -> dict | None:
+    """按接人点的上车时刻倒推车主几点出发，再正推各点时刻；不知道车次时刻就返回 None。"""
+    legs = [f"car:{route.driver}", *route.stops, "venue"]
+    need = {s: ready[(route.driver, s)] for s in route.stops if (route.driver, s) in ready}
+    if not need:
+        return None
+    elapsed, cum = 0.0, {}
+    for a, b in zip(legs, legs[1:]):
+        elapsed += T.get((a, b), INF)
+        cum[b] = elapsed
+    t = depart = max(need[s] - cum[s] for s in need)
+    times = {}
+    for a, b in zip(legs, legs[1:]):
+        t = max(t + T.get((a, b), INF), need.get(b, -INF))  # 早到了就在接人点等
+        times[b] = t
+    return {"depart": depart, "times": times}
+
+
+@dataclass
+class Stop:
+    """车主路线上的一个停靠点。"""
+    point: str           # 点 id（st:站名 或 home:名字）
+    time: float | None   # 车到这里的时刻
+    people: list[str]    # 在这里上车（返程是下车）的人
+
+
+@dataclass
+class CarTrip:
+    """一辆私家车。去程：出发地 → 接人点 → 目的地；返程：目的地 → 送人点 → 家。"""
+    driver: str
+    depart: float | None     # 出发时刻：去程按接人时刻倒推，不知道车次时刻就是 None；返程是车主的离场时间
+    stops: list[Stop]
+    arrive: float | None     # 到达时刻：去程到目的地，返程到家
+    minutes: float           # 全程分钟
+    detour: float            # 比直达多绕的分钟
+    first_leg: float | None  # 出发后到第一个停靠点的车程；没有停靠点就是 None
+
+
+@dataclass
+class Rider:
+    """一个坐车（私家车或出租）的人。去程里 board 是上车时刻、arrive 是到目的地；
+    返程里 board 是车出发的时刻、arrive 是到送人点（出租是到站）。"""
+    name: str
+    driver: str | None       # 坐谁的车；出租为 None
+    stop: str                # 在哪上车（返程是在哪下车）
+    board: float | None
+    arrive: float | None
+    train: str = ""          # 要坐的车次说明，没填就是空
+    train_depart: float | None = None  # 车次说明里的第一个时刻
+    train_arrive: float | None = None  # 车次说明里的最后一个时刻
+    leave: float | None = None         # 返程：这个人自己的离场时刻
+    wait: float | None = None          # 返程：等车主（或同车的人）多久
+    guessed: bool = False    # 出租：没填车次，时刻是按同车的人算的
+
+
+@dataclass
+class TaxiCar:
+    """一辆出租。"""
+    stop: str
+    names: list[str]
+    n: int                   # 一共几个人（同行的算多人）
+    time: float | None       # 去程：站里汇合的时刻；返程：从目的地出发的时刻
+    ride: float              # 站和目的地之间的车程
+    unknown: list[str]       # 没填车次的人
+    members: list[Rider]
+
+
+@dataclass
+class Stranded:
+    name: str
+    leave: float | None      # 返程：这个人的离场时刻
+
+
+@dataclass
+class Timeline:
+    """一个方案（去程或返程）的行程表。cars 和 plan.routes 一一对应。"""
+    cars: list[CarTrip]
+    riders: list[Rider]      # 搭私家车的人，顺序同 plan.rides
+    taxis: list[TaxiCar]
+    stranded: list[Stranded]
+
+
+@dataclass
+class Timelines:
+    """一次计算的全部行程表：去程方案和返程方案各一份，顺序同 plans 和 trip.back_plans。"""
+    out: list[Timeline]
+    back: list[Timeline]
+
+
+def timeline(plan: Plan, trip: Trip, T, leg: Leg) -> Timeline:
+    people = {p.name: p for p in trip.people}
+    back = leg.reverse
+    ready = {} if back else pickup_ready(plan, trip)
+    cars: list[CarTrip] = []
+    for r in plan.routes:
+        seq = leg.sequence(r.driver, r.stops)
+        names = lambda s, r=r: [n for n, (d, st) in plan.rides.items() if d == r.driver and st == s]  # noqa: E731
+        if back:
+            depart = leave_of(people[r.driver], leg)
+            times = stop_times(r, T, leg, depart)
+            arrive = times[f"car:{r.driver}"]
+        else:
+            sched = route_schedule(r, ready, T)
+            depart = sched["depart"] if sched else None
+            times = sched["times"] if sched else {}
+            arrive = times.get("venue")
+        cars.append(CarTrip(r.driver, depart, [Stop(s, times.get(s), names(s)) for s in r.stops], arrive, r.minutes, r.detour,
+                            T.get((seq[0], seq[1]), INF) if r.stops else None))
+
+    def rider(name: str, driver: str | None, stop: str, board, arrive, guessed: bool = False) -> Rider:
+        p = people[name]
+        text = (p.back_trains if back else p.trains).get(stop[3:], "") if stop.startswith("st:") else ""
+        clocks = train_times(text)
+        leave = leave_of(p, leg) if back else None
+        return Rider(name, driver, stop, board, arrive, text, clocks[0] if clocks else None, clocks[-1] if clocks else None,
+                     leave, board - leave if back and board is not None else None, guessed)
+
+    by_driver = {c.driver: c for c in cars}
+    riders = []
+    for name, (driver, stop) in plan.rides.items():
+        car = by_driver[driver]
+        at = next(s.time for s in car.stops if s.point == stop)
+        riders.append(rider(name, driver, stop, car.depart, at) if back else rider(name, driver, stop, at, car.arrive))
+    taxis = []
+    for car in taxi_cars(plan.taxi, people, T, leg, trip):
+        t, ride = car["time"], car["ride"]
+        end = None if t is None else t + ride
+        members = [rider(n, None, car["stop"], t, end, n in car["unknown"]) for n in car["names"]]
+        taxis.append(TaxiCar(car["stop"], car["names"], car["n"], t, ride, car["unknown"], members))
+    stranded = [Stranded(n, leave_of(people[n], leg) if back else None) for n in plan.stranded]
+    return Timeline(cars, riders, taxis, stranded)
+
+
+def timelines(trip: Trip, T, plans: list[Plan]) -> Timelines:
+    """去程方案和返程方案的行程表，求解后算一次，报告、方案页、界面数据共用。"""
+    return Timelines([timeline(pl, trip, T, OUT) for pl in plans],
+                     [timeline(pl, trip, T, trip.back) for pl in trip.back_plans] if trip.back else [])
+
+
 # ---------- 报告 ----------
 
 def fmt_min(m: float) -> str:
@@ -1087,35 +1243,6 @@ def arrival_at(person: Person, stop: str) -> float | None:
     return times[-1] if times else None
 
 
-def pickup_ready(plan: Plan, trip: Trip) -> dict[tuple[str, str], float]:
-    """(车主, 接人点) → 乘客都能上车的时刻：最晚到站的那位到站后再加出站时间。"""
-    people = {p.name: p for p in trip.people}
-    ready: dict[tuple[str, str], float] = {}
-    for name, (driver, stop) in plan.rides.items():
-        arr = arrival_at(people[name], stop)
-        if arr is not None:
-            ready[(driver, stop)] = max(ready.get((driver, stop), -INF), arr + trip.exit_buffer)
-    return ready
-
-
-def route_schedule(route: Route, ready: dict[tuple[str, str], float], T) -> dict | None:
-    """按接人点的上车时刻倒推车主几点出发，再正推各点时刻；不知道车次时刻就返回 None。"""
-    legs = [f"car:{route.driver}", *route.stops, "venue"]
-    need = {s: ready[(route.driver, s)] for s in route.stops if (route.driver, s) in ready}
-    if not need:
-        return None
-    elapsed, cum = 0.0, {}
-    for a, b in zip(legs, legs[1:]):
-        elapsed += T.get((a, b), INF)
-        cum[b] = elapsed
-    t = depart = max(need[s] - cum[s] for s in need)
-    times = {}
-    for a, b in zip(legs, legs[1:]):
-        t = max(t + T.get((a, b), INF), need.get(b, -INF))  # 早到了就在接人点等
-        times[b] = t
-    return {"depart": depart, "times": times}
-
-
 def who(names, trip: Trip) -> str:
     """名字列表，多人同行的标上人数：小陈（3 人）。"""
     party = {p.name: p.party for p in trip.people}
@@ -1132,73 +1259,64 @@ def taxi_fare(minutes: float, people: int) -> str:
     return f"，打车粗估约 {low:.0f}–{high:.0f} 元{f'（{cars} 辆车）' if cars > 1 else ''}，以实际为准"
 
 
-def describe(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
+def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> list[str]:
+    """去程方案的文字说明。时刻都读行程表 tl；plan 只用来生成导航链接。"""
     seats = {p.name: p.seats for p in trip.people if p.drives}
-    ready = pickup_ready(plan, trip)
     lines = []
-    for r in plan.routes:
-        if not r.stops:
-            lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：直接开到目的地，"
-                         f"约 {fmt_min(r.minutes)}，不接人。")
+    for r, car in zip(plan.routes, tl.cars):
+        if not car.stops:
+            lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：直接开到目的地，"
+                         f"约 {fmt_min(car.minutes)}，不接人。")
             continue
-        sched = route_schedule(r, ready, T)
         legs = []
-        for s in r.stops:
-            names = who([n for n, (d, st) in plan.rides.items() if d == r.driver and st == s], trip)
-            at = f" {clock(sched['times'][s])}" if sched else ""
-            legs.append(f"{stop_label(s, pts)}{at}（接 {names}）")
-        if sched:
-            timing = (f"建议 **{clock(sched['depart'])} 出发** → {' → '.join(legs)} → "
-                      f"约 {clock(sched['times']['venue'])} 到目的地；")
+        for s in car.stops:
+            at = f" {clock(s.time)}" if s.time is not None else ""
+            legs.append(f"{stop_label(s.point, pts)}{at}（接 {who(s.people, trip)}）")
+        if car.depart is not None:
+            timing = (f"建议 **{clock(car.depart)} 出发** → {' → '.join(legs)} → "
+                      f"约 {clock(car.arrive)} 到目的地；")
         else:
-            first = T.get((f"car:{r.driver}", r.stops[0]), INF)
-            timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(first)} 到第一个接人点；"
-        lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{timing}"
-                     f"全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。{route_links(r, pts)}")
-    for car in taxi_cars(plan.taxi, {p.name: p for p in trip.people}, T, OUT, trip):
-        s, ride, ready = car["stop"], car["ride"], car["time"]
+            timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(car.first_leg)} 到第一个接人点；"
+        lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：{timing}"
+                     f"全程约 {fmt_min(car.minutes)}，比直达多绕 **{fmt_min(car.detour)}**。{route_links(r, pts)}")
+    for car in tl.taxis:
+        s, ride, ready = car.stop, car.ride, car.time
         timing = (f"约 {clock(ready)} 在站汇合，{clock(ready + ride)} 左右到目的地" if ready is not None else f"车程约 {fmt_min(ride)}")
-        if car["unknown"] and ready is not None:
-            timing += f"（{who(car['unknown'], trip)}没填车次，按同一时间算）"
-        lines.append(f"- **打车/包车组**：{who(car['names'], trip)} 坐高铁到 **{pts[s].name}**，"
-                     f"一起打车到目的地，{timing}{taxi_fare(ride, car['n'])}。[导航]({nav_url(pts[s], pts['venue'])})")
-    for name in plan.stranded:
-        lines.append(f"- **{name}**：没有可用的候选站，需要单独安排。")
+        if car.unknown and ready is not None:
+            timing += f"（{who(car.unknown, trip)}没填车次，按同一时间算）"
+        lines.append(f"- **打车/包车组**：{who(car.names, trip)} 坐高铁到 **{pts[s].name}**，"
+                     f"一起打车到目的地，{timing}{taxi_fare(ride, car.n)}。[导航]({nav_url(pts[s], pts['venue'])})")
+    for st in tl.stranded:
+        lines.append(f"- **{st.name}**：没有可用的候选站，需要单独安排。")
     return lines
 
 
-def describe_back(plan: Plan, pts: dict[str, Place], T, trip: Trip) -> list[str]:
-    """返程（插件）：车主几点从目的地出发、几点送到哪、几点到家；乘客等多久；打车组几点出发赶哪趟车。"""
-    leg = trip.back
+def describe_back(tl: Timeline, pts: dict[str, Place], trip: Trip) -> list[str]:
+    """返程（插件）：车主几点从目的地出发、几点送到哪、几点到家；乘客等多久；打车组几点出发赶哪趟车。时刻都读行程表 tl。"""
     seats = {p.name: p.seats for p in trip.people if p.drives}
-    people = {p.name: p for p in trip.people}
+    riders = {rd.name: rd for rd in tl.riders}
     lines = []
-    for r in plan.routes:
-        home = f"car:{r.driver}"
-        depart = leave_of(people[r.driver], leg)
-        if not r.stops:
-            lines.append(f"- **{r.driver}**：{clock(depart)} 从目的地直接回家，约 {fmt_min(r.minutes)}，不送人。")
+    for car in tl.cars:
+        if not car.stops:
+            lines.append(f"- **{car.driver}**：{clock(car.depart)} 从目的地直接回家，约 {fmt_min(car.minutes)}，不送人。")
             continue
-        times = stop_times(r, T, leg, depart)
         legs = []
-        for s in r.stops:
-            names = [n for n, (d, st) in plan.rides.items() if d == r.driver and st == s]
-            trains = [people[n].back_trains.get(s[3:]) for n in names if s.startswith("st:")]
+        for s in car.stops:
+            trains = [riders[n].train for n in s.people if s.point.startswith("st:")]
             catch = f"，赶 {'、'.join(t for t in trains if t)}" if any(trains) else ""
-            waits = "".join(f"，{n}等 {fmt_min(depart - leave_of(people[n], leg))}" for n in names
-                            if depart - leave_of(people[n], leg) >= 1)
-            legs.append(f"{stop_label(s, pts)} {clock(times[s])}（送 {who(names, trip)}{catch}{waits}）")
-        lines.append(f"- **{r.driver}**（空 {seats[r.driver]} 座）：{clock(depart)} 从目的地出发 → {' → '.join(legs)} → "
-                     f"约 {clock(times[home])} 到家；全程约 {fmt_min(r.minutes)}，比直达多绕 **{fmt_min(r.detour)}**。")
-    for car in taxi_cars(plan.taxi, people, T, leg, trip):
-        s, names, ride, t = car["stop"], car["names"], car["ride"], car["time"]
-        trains = [people[n].back_trains.get(pts[s].name) for n in names]
+            waits = "".join(f"，{n}等 {fmt_min(riders[n].wait)}" for n in s.people if riders[n].wait >= 1)
+            legs.append(f"{stop_label(s.point, pts)} {clock(s.time)}（送 {who(s.people, trip)}{catch}{waits}）")
+        lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：{clock(car.depart)} 从目的地出发 → {' → '.join(legs)} → "
+                     f"约 {clock(car.arrive)} 到家；全程约 {fmt_min(car.minutes)}，比直达多绕 **{fmt_min(car.detour)}**。")
+    for car in tl.taxis:
+        s, ride, t = car.stop, car.ride, car.time
+        trains = [m.train for m in car.members]
         catch = f"，赶 {'、'.join(x for x in trains if x)}" if any(trains) else ""
-        waits = "".join(f"，{n}等 {fmt_min(t - leave_of(people[n], leg))}" for n in names if t - leave_of(people[n], leg) >= 1)
-        lines.append(f"- **打车组**：{who(names, trip)} {clock(t)} 从目的地一起打车去 **{pts[s].name}**，"
-                     f"约 {clock(t + ride)} 到{catch}{waits}{taxi_fare(ride, car['n'])}。")
-    for name in plan.stranded:
-        lines.append(f"- **{name}**：按 {clock(leave_of(people[name], leg))} 离场，赶不上任何一个候选站的车次，需要单独安排（提前离场或改签）。")
+        waits = "".join(f"，{m.name}等 {fmt_min(m.wait)}" for m in car.members if m.wait >= 1)
+        lines.append(f"- **打车组**：{who(car.names, trip)} {clock(t)} 从目的地一起打车去 **{pts[s].name}**，"
+                     f"约 {clock(t + ride)} 到{catch}{waits}{taxi_fare(ride, car.n)}。")
+    for st in tl.stranded:
+        lines.append(f"- **{st.name}**：按 {clock(st.leave)} 离场，赶不上任何一个候选站的车次，需要单独安排（提前离场或改签）。")
     return lines
 
 
@@ -1287,7 +1405,8 @@ def rail_section(trip: Trip) -> list[str]:
             "", *lines, ""]
 
 
-def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
+def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelines) -> str:
+    """tls：这次计算的行程表（carpool.timelines），报告里的时刻都从它读。"""
     L = [f"# 拼车方案：{trip.venue.name}" if trip.outbound else f"# 返程方案：{trip.venue.name}", ""]
     if trip.warnings:
         L += ["> ⚠️ " + w for w in trip.warnings] + [""]
@@ -1304,18 +1423,18 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan]) -> str:
               f"- 不开车的 {total} 人里，**{best.carried} 人能搭上顺风车**，"
               f"车主合计多绕 {fmt_min(best.detour)}。",
               f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or '不需要坐到站'}**。",
-              "", "## 推荐方案", "", *describe(best, pts, T, trip), "",
+              "", "## 推荐方案", "", *describe(best, tls.out[0], pts, trip), "",
               *paragraphs(rank_basis(best))]
         for i, pl in enumerate(plans[1:], 2):
             L += [f"## 备选方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
-                  *describe(pl, pts, T, trip), "", *paragraphs(rank_basis(pl, best))]
+                  *describe(pl, tls.out[i - 1], pts, trip), "", *paragraphs(rank_basis(pl, best))]
     if trip.back:
         L += [f"## 返程（{clock(trip.back.depart)} 散场后出发，发车前 {trip.back.margin:.0f} 分钟到站）", ""]
         if not trip.back_plans:
             L += ["没有找到可行的返程方案。", ""]
         for i, pl in enumerate(trip.back_plans, 1):
             L += [f"### 返程方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
-                  *describe_back(pl, pts, T, trip), "", *paragraphs(rank_basis(pl, trip.back_plans[0]))]
+                  *describe_back(tls.back[i - 1], pts, trip), "", *paragraphs(rank_basis(pl, trip.back_plans[0]))]
     if trip.outbound:
         L += ["## 候选站对比", "",
               "每个车主「只在这个站停一次」时比直达多绕多久；✅ 表示在他能接受的绕路范围内。", "",
@@ -1367,7 +1486,8 @@ def plan_trip(cfg: dict, amap) -> tuple[Trip, dict[str, Place], dict, list[Plan]
 
 
 def run(cfg: dict, amap) -> str:
-    return render(*plan_trip(cfg, amap))
+    trip, pts, T, plans = plan_trip(cfg, amap)
+    return render(trip, pts, T, plans, timelines(trip, T, plans))
 
 
 # ---------- 配置读写 ----------
