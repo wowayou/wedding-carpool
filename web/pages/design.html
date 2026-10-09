@@ -218,8 +218,8 @@
               </div>
               <div class="c-field c-settings__field has-error">
                 <label class="c-field__label" for="dgs-home">出发地附近多大范围</label>
-                <div class="c-unit-input"><input class="c-input" id="dgs-home" type="number" value="500" aria-invalid="true" aria-describedby="dgs-home-err"><span class="c-unit-input__unit" aria-hidden="true">公里</span></div>
-                <span class="c-field__error" id="dgs-home-err">要在 5 到 80 公里之间，现在会按 80 算</span>
+                <div class="c-unit-input"><input class="c-input" id="dgs-home" type="number" value="80" aria-invalid="true" aria-describedby="dgs-home-err"><span class="c-unit-input__unit" aria-hidden="true">公里</span></div>
+                <span class="c-field__error" id="dgs-home-err">要在 10 到 50 公里之间，现在会按 50 算</span>
               </div>
             </div>
           </fieldset>
@@ -235,7 +235,7 @@
               <span class="c-field__label" id="dgs-sort-l">结果怎么排</span>
               <div class="c-choices c-choices--stack" role="radiogroup" aria-labelledby="dgs-sort-l">
                 <label class="c-check"><input type="radio" name="dgs-sort" checked> 车主最少绕路</label>
-                <label class="c-check"><input type="radio" name="dgs-sort"> 离目的地最近</label>
+                <label class="c-check"><input type="radio" name="dgs-sort"> 到目的地最近</label>
               </div>
             </div>
           </fieldset>
@@ -273,7 +273,7 @@
         <h4 class="c-fold__title">12306 里没有（1 个）</h4>
         <p class="c-hint" style="margin: 0 0 var(--sp-2)">莘庄（目的地周边）：没有坐标，只列名字和原因。</p>
       </details>
-      <div class="c-callout" style="margin: var(--sp-4) 0 0"><ul class="c-callout__list"><li>沿路取点有缝隙：两圈之间可能漏掉小站。</li></ul></div>
+      <div class="c-callout" style="margin: var(--sp-4) 0 0"><ul class="c-callout__list"><li>沿路搜索保证路线两侧至少 20 公里内没有遗漏。</li></ul></div>
     </div>
   </section>
 
