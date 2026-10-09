@@ -7,9 +7,11 @@
     "build": "node web/build.mjs",
     "dev": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
+    "e2e": "node --test --test-concurrency=1 web/e2e/*.test.mjs",
     "test": "node --test web/worker.test.mjs web/merge.test.mjs web/ui.test.mjs web/site.test.mjs && python3 -m unittest test_carpool.py"
   },
   "devDependencies": {
+    "playwright": "1.62.1",
     "wrangler": "^4.148.0"
   },
   "license": "AGPL-3.0-or-later"
