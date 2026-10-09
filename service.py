@@ -44,47 +44,43 @@ def compute(cfg: dict, amap) -> dict:
     for i, (key, ps) in enumerate(places.items()):
         carpool.report("获取路线轨迹", i, len(places))
         paths[key] = _path(amap, ps)
-    return {"trip": trip, "pts": pts, "T": T, "plans": plans, "paths": paths}
+    return {"trip": trip, "pts": pts, "T": T, "plans": plans, "paths": paths,
+            "timelines": carpool.timelines(trip, T, plans)}  # 时刻只在这里算一次，报告、方案页、界面数据都读它
 
 
-def _back_payload(trip, T, paths) -> dict | None:
+def _back_payload(trip, tls, paths) -> dict | None:
     if not trip.back:
         return None
-    people = {p.name: p for p in trip.people}
     out = []
-    for plan in trip.back_plans:
+    for plan, tl in zip(trip.back_plans, tls.back):
         routes = [{"driver": r.driver, "stops": list(r.stops), "minutes": round(r.minutes), "detour": round(r.detour),
                    "path": paths.get(("back", r.driver, r.stops)),
                    "direct_path": paths.get(("back", r.driver, ())) if r.stops else None,
-                   "depart": carpool.clock(carpool.leave_of(people[r.driver], trip.back))} for r in plan.routes]
+                   "depart": carpool.clock(car.depart)} for r, car in zip(plan.routes, tl.cars)]
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi, "stranded": plan.stranded,
                     "detour": round(plan.detour), "carried": plan.carried, "taxi_cars": plan.taxi_cars, "routes": routes})
     return {"depart": carpool.clock(trip.back.depart), "plans": out}
 
 
 def plan_payload(state: dict) -> dict:
-    """给界面的 JSON：报告、坐标、各方案的路线（含直达对比）和时刻；开了返程再带上返程方案。"""
-    trip, pts, T, plans, paths = (state[k] for k in ("trip", "pts", "T", "plans", "paths"))
+    """给界面的 JSON：报告、坐标、各方案的路线（含直达对比）和时刻；开了返程再带上返程方案。时刻都读行程表。"""
+    trip, pts, T, plans, paths, tls = (state[k] for k in ("trip", "pts", "T", "plans", "paths", "timelines"))
     out = []
-    for plan in plans:
-        ready = carpool.pickup_ready(plan, trip)
-        routes = []
-        for r in plan.routes:
-            sched = carpool.route_schedule(r, ready, T)
-            routes.append({"driver": r.driver, "stops": list(r.stops), "minutes": round(r.minutes),
-                           "detour": round(r.detour), "path": paths[(r.driver, r.stops)],
-                           "direct_path": paths[(r.driver, ())] if r.stops else None,
-                           "depart": carpool.clock(sched["depart"]) if sched else None})
+    for plan, tl in zip(plans, tls.out):
+        routes = [{"driver": r.driver, "stops": list(r.stops), "minutes": round(r.minutes),
+                   "detour": round(r.detour), "path": paths[(r.driver, r.stops)],
+                   "direct_path": paths[(r.driver, ())] if r.stops else None,
+                   "depart": carpool.clock(car.depart) if car.depart is not None else None} for r, car in zip(plan.routes, tl.cars)]
         out.append({"rides": {k: list(v) for k, v in plan.rides.items()}, "taxi": plan.taxi,
                     "stranded": plan.stranded, "detour": round(plan.detour), "carried": plan.carried, "taxi_cars": plan.taxi_cars, "routes": routes})
     return {
-        "report": carpool.render(trip, pts, T, plans),
+        "report": carpool.render(trip, pts, T, plans, tls),
         "outbound": trip.outbound,  # false：只规划返程，plans 为空
         "warnings": trip.warnings,
         "resolved": trip.resolved,  # 这次按文字定位到的坐标，界面写回配置，下次不再请求
         "points": {k: {"name": p.name, "lat": p.lat, "lng": p.lng} for k, p in pts.items()},
         "plans": out,
-        "back": _back_payload(trip, T, paths),
+        "back": _back_payload(trip, tls, paths),
     }
 
 

@@ -370,7 +370,7 @@ class TrainScheduleTest(unittest.TestCase):
         ready = 10 * 60 + 15  # 10:00 到站 + 15 分钟出站
         self.assertAlmostEqual(sched["depart"], ready - T[("car:老王", "st:西站")])
         self.assertAlmostEqual(sched["times"]["venue"], ready + T[("st:西站", "venue")])
-        report = carpool.render(trip, pts, T, plans)
+        report = carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
         self.assertIn(f"建议 **{carpool.clock(sched['depart'])} 出发**", report)
 
     def test_share_page(self):
@@ -560,7 +560,7 @@ class ReturnTripTest(unittest.TestCase):
         trip, pts, T, plans = self.run_trip(self.cfg(train="G2 西站19:30→小陈家22:30"))
         back = trip.back_plans[0]
         self.assertEqual((back.rides, back.taxi, back.stranded), ({}, {}, ["小陈"]))
-        self.assertIn("赶不上任何一个候选站的车次", carpool.render(trip, pts, T, plans))
+        self.assertIn("赶不上任何一个候选站的车次", carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans)))
 
     def test_driver_not_driving_back(self):
         trip, *_ = self.run_trip(self.cfg(drives=False))
@@ -578,7 +578,7 @@ class ReturnTripTest(unittest.TestCase):
 
     def test_report_has_return_section(self):
         trip, pts, T, plans = self.run_trip(self.cfg())
-        report = carpool.render(trip, pts, T, plans)
+        report = carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
         self.assertIn("## 返程（18:00 散场后出发，发车前 40 分钟到站）", report)
         self.assertIn("送 小陈，赶 G2 西站20:30→小陈家23:30", report)
 
@@ -655,7 +655,7 @@ class ReturnOnlyTest(unittest.TestCase):
 
     def test_report_has_no_outbound_wording(self):
         trip, pts, T, plans = carpool.plan_trip(self.cfg(), FakeAmap())
-        report = carpool.render(trip, pts, T, plans)
+        report = carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
         self.assertTrue(report.startswith("# 返程方案："))
         for word in ("去程", "## 结论", "## 推荐方案", "备选方案", "站→目的地", "不开车的人到各站要多久", "接人"):
             self.assertNotIn(word, report)
@@ -733,7 +733,7 @@ class LeaveTimeTest(unittest.TestCase):
 
     def back(self, cfg):
         trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
-        return trip, trip.back_plans[0], carpool.render(trip, pts, T, plans)
+        return trip, trip.back_plans[0], carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
 
     def test_same_as_depart_time_changes_nothing(self):
         def key(cfg):
@@ -847,7 +847,7 @@ class TaxiPoolTest(unittest.TestCase):
     def riders_to_one_station(self, arrivals, **options):
         people = [person(f"乘客{i}", "114.0,34.0", trains={"近站": f"G{i} 07:00→{arr}"}) for i, arr in enumerate(arrivals)]
         plans, pts, T, trip = best_plan(config(people, stations=(("近站", NEAR),), **options))
-        return plans[0], carpool.render(trip, pts, T, plans)
+        return plans[0], carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
 
     def test_arrivals_far_apart_take_separate_cars(self):
         plan, report = self.riders_to_one_station(["10:00", "10:20"])  # 差 20 分钟，在 30 分钟以内：一辆
@@ -874,7 +874,7 @@ class TaxiPoolTest(unittest.TestCase):
         people = [person("甲", "114.0,34.0", trains={"近站": "G1 07:00→10:00"}), person("乙", "114.0,34.0", stations=["近站"])]
         plans, pts, T, trip = best_plan(config(people, stations=(("近站", NEAR),)))
         self.assertEqual(plans[0].taxi_cars, 1)
-        report = carpool.render(trip, pts, T, plans)
+        report = carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
         self.assertIn("乙没填车次，按同一时间算", report)
         html = share.render_share(service.compute(config(people, stations=(("近站", NEAR),)), FakeAmap()), 0)
         self.assertIn("你没填车次，按同一时间算", html)
@@ -886,7 +886,7 @@ class TaxiPoolTest(unittest.TestCase):
             c = config(people)
             c["return"] = {"enabled": True, "depart_time": "18:00"}
             trip, pts, T, _ = carpool.plan_trip(c, FakeAmap())
-            return trip.back_plans[0], carpool.render(trip, pts, T, [])
+            return trip.back_plans[0], carpool.render(trip, pts, T, [], carpool.timelines(trip, T, []))
         plan, report = cars("17:10")  # 乙晚 10 分钟，一起走：17:10 出发，甲要等 10 分钟
         self.assertEqual(plan.taxi_cars, 1)
         self.assertIn("甲、乙 17:10 从目的地一起打车去", report)
@@ -922,7 +922,7 @@ class TaxiPoolTest(unittest.TestCase):
     def test_rank_basis_shows_taxi_line_without_changing_the_ranking(self):
         cfg = config([person("老王", WANG, car_seats=3), person("小李", "116.5,30.4"), person("小陈", "114.0,34.0")])
         trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
-        report = carpool.render(trip, pts, T, plans)
+        report = carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
         plan = plans[-1]
         low, high = round(plan.taxi_ride * 2, -1), round(plan.taxi_ride * 3, -1)
         self.assertIn(f"打车：1 辆，粗估 {low:.0f}–{high:.0f} 元", report)
@@ -948,7 +948,7 @@ class PartyTest(unittest.TestCase):
     def best(self, seats, *riders):
         cfg = config([person("老王", WANG, car_seats=seats), *riders])
         trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
-        return plans[0], carpool.render(trip, pts, T, plans)
+        return plans[0], carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
 
     def test_group_is_not_split(self):
         plan, report = self.best(2, person("小陈一家", "114.0,34.0", party=3))
@@ -1061,7 +1061,7 @@ class RankBasisTest(unittest.TestCase):
 
     def report(self, cfg):
         trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
-        return carpool.render(trip, pts, T, plans), plans
+        return carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans)), plans
 
     def cfg(self, **driver):
         return config([person("老王", WANG, car_seats=3, **driver), person("小李", "116.5,30.4"), person("小陈", "114.0,34.0")])
@@ -2139,13 +2139,50 @@ def golden_outputs(name: str) -> dict[str, bytes]:
         state = service.compute(cfg, amap)
     payload = service.plan_payload(state)
     out = {
-        "report.md": carpool.render(state["trip"], state["pts"], state["T"], state["plans"]),
+        "report.md": carpool.render(state["trip"], state["pts"], state["T"], state["plans"], state["timelines"]),
         "payload.json": json.dumps(payload, sort_keys=True, indent=1, ensure_ascii=False) + "\n",
     }
     for i, j in combos:
         label = "-".join(f"{k}{n + 1}" for k, n in (("o", i), ("b", j)) if n is not None)
         out[f"share-{label}.html"] = share.render_share(state, i or 0, j or 0, generated=GOLDEN_GENERATED, expires=GOLDEN_EXPIRES)
     return {k: v.encode("utf-8") for k, v in out.items()}
+
+
+class TimelineTest(unittest.TestCase):
+    """行程表：时刻只在 carpool 的「行程表」一节算一次，三处输出都只读它。"""
+
+    DERIVING = ("pickup_ready", "route_schedule", "stop_times", "taxi_cars", "leave_of", "arrival_at", "back_deadline", "train_times")
+
+    def test_outputs_do_not_derive_times(self):
+        for module in ("share.py", "service.py"):
+            src = (Path(__file__).parent / module).read_text(encoding="utf-8")
+            for name in self.DERIVING:
+                with self.subTest(module=module, name=name):
+                    # 调用或引用函数才算；Plan 的 taxi_cars 字段（界面数据里同名的键）不是推算
+                    hit = re.search(rf"carpool\.{name}\b|\b{name}\(", src)
+                    self.assertIsNone(hit, f"{module} 不该自己推算时刻，要读行程表")
+
+    def test_one_change_shows_in_report_share_and_payload(self):
+        build, _ = GOLDEN_SCENARIOS["both"]
+        cfg, amap = build()
+        with contextlib.redirect_stderr(io.StringIO()):
+            state = service.compute(cfg, amap)
+        tls = state["timelines"]
+        out_i, out_car = next((i, c) for i, tl in enumerate(tls.out) for c in tl.cars if c.stops and c.depart is not None)
+        back_i, back_car = next((i, c) for i, tl in enumerate(tls.back) for c in tl.cars if c.stops)
+        # 改行程表里的时刻：去程车主的出发、第一站和到达，返程车主的出发和到家
+        out_car.depart, out_car.stops[0].time, out_car.arrive = 3 * 60 + 11, 3 * 60 + 29, 3 * 60 + 47
+        back_car.depart, back_car.arrive = 4 * 60 + 13, 4 * 60 + 53
+        report = carpool.render(state["trip"], state["pts"], state["T"], state["plans"], tls)
+        html = share.render_share(state, out_i, back_i)
+        payload = service.plan_payload(state)
+        for text in ("03:11 出发", "03:29", "约 03:47 到目的地", "04:13 从目的地出发", "约 04:53 到家"):
+            self.assertIn(text, report)
+        for text in ("03:11", "03:29", "03:47", "04:13", "04:53"):
+            self.assertIn(text, html)
+        driver = lambda routes, name: next(r for r in routes if r["driver"] == name)  # noqa: E731
+        self.assertEqual(driver(payload["plans"][out_i]["routes"], out_car.driver)["depart"], "03:11")
+        self.assertEqual(driver(payload["back"]["plans"][back_i]["routes"], back_car.driver)["depart"], "04:13")
 
 
 class GoldenTest(unittest.TestCase):
