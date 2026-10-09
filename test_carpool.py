@@ -1421,7 +1421,8 @@ class SuggestTest(unittest.TestCase):
         out = service.suggest_stations(cfg, amap, valid_names={"西", "老"})
         self.assertEqual([s["name"] for s in out["stations"]], ["西站"])
         reasons = {d["name"]: d["reason"] for d in out["dropped"]}
-        self.assertIn("建设中", reasons["新站(建设中)"])
+        self.assertEqual(reasons["新站(建设中)"], "建设中")  # 状态直接当原因，汇总里写「建设中 1 个」
+        self.assertEqual(carpool.reject_reason({"name": "某站(东广场)"}), "站名带标注「东广场」")
         self.assertIn("货运", reasons["货运站"])
         self.assertIn("不像火车站", reasons["某线路所"])
         self.assertIn("12306", reasons["陌生站"])

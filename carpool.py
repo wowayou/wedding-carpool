@@ -329,7 +329,8 @@ def reject_reason(poi: dict) -> str | None:
     """这个 POI 不是客运火车站的原因；None 表示可以留下。"""
     name = poi.get("name") or ""
     if m := re.search(r"[(（]([^)）]*)", name):
-        return f"站名带标注「{m.group(1)}」"
+        # 「(建设中)」「(暂停营业)」这类状态直接当原因，汇总里写「建设中 4 个」；别的标注照原样引出来
+        return m.group(1) if re.search(r"建设|暂停|停用|停运|规划|关闭", m.group(1)) else f"站名带标注「{m.group(1)}」"
     for noise in STATION_NOISE:
         if noise in name:
             return f"站名里有「{noise}」，不是客运站点"
