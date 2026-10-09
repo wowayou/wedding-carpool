@@ -122,7 +122,7 @@ Worker（web/worker.js，用 placement.region 固定在香港附近运行，离�
    └─ KV：方案页（带访问口令和过期时间）、按 Key 和接口类别记的配额标记
 ```
 
-计算内核（`carpool.py`）以「一段行程」（leg）为单位求解：去程是车主从家出发接人去目的地，返程是从目的地出发送人。两段互不影响，可以只算其中一段。座位按同行人数算，一组人不拆开。没搭上车的人怎么打车由 `TaxiPool` 安排，结果按「哪些人没搭上车」缓存。方案页由 `share.py` 生成，编辑器是 `ui.html`（本地版和在线版共用）。求解之后，每个方案里「谁几点出发、几点到哪、等多久、打车几点汇合」只在行程表（`carpool.timelines`）里算一次，报告、方案页和界面数据都只读它，不再各自推算。`tests/golden/` 里的金标准测试逐字节固定这三样输出：有意改了输出，用 `GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest` 重新生成，再看一遍 `git diff`。
+计算内核（`carpool.py`）以「一段行程」（leg）为单位求解：去程是车主从家出发接人去目的地，返程是从目的地出发送人。两段互不影响，可以只算其中一段。座位按同行人数算，一组人不拆开。没搭上车的人怎么打车由 `TaxiPool` 安排，结果按「哪些人没搭上车」缓存。方案页由 `share.py` 生成。编辑器是 `ui.html`（本地版、在线版、试玩共用），页面只有结构和样式，脚本是 `web/editor/` 下的 ES 模块：入口 `main.js` 判断是哪种模式；`backend.js` 是三种模式的后端实现，接口相同，并按模式生成一张能力表（`caps`：能不能保存、能不能实际搜索、有没有历史、能不能实时同步……）。其他模块只看能力表，不判断模式，测试会检查这一点。模块之间单向依赖，没有环，也由测试守着。求解之后，每个方案里「谁几点出发、几点到哪、等多久、打车几点汇合」只在行程表（`carpool.timelines`）里算一次，报告、方案页和界面数据都只读它，不再各自推算。`tests/golden/` 里的金标准测试逐字节固定这三样输出：有意改了输出，用 `GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest` 重新生成，再看一遍 `git diff`。
 
 需要 Node.js、Cloudflare 账号，以及一个高德 Web 服务 Key。免费套餐就够用，超出免费额度只会报错，不会扣费。
 
@@ -197,7 +197,18 @@ npm run deploy                             # 构建 dist/ 并部署
 npm test     # Worker、页面合并逻辑、编辑页静态检查、站点构建（node --test）和 Python（unittest），都离线运行
 ```
 
-编辑页和管理页的交互（弹窗、手机分页签、加载失败等）在浏览器里验证：`npm run build` 后 `npx wrangler dev`，用 Playwright 走一遍。编辑页里所有确认、提示、输入都是页内弹窗（`<dialog>`）和轻提示，没有原生 `alert` / `confirm` / `prompt`；自动化脚本用稳定的选择器：确认 `[data-dialog-ok]`、取消 `[data-dialog-cancel]`、输入框 `[data-dialog-input]`、错误提示 `[data-dialog-error]`。
+编辑页的交互用端到端测试验证：
+
+```bash
+npm run e2e  # 试玩、本地、在线三种模式的 18 个场景，约 2 分钟
+```
+
+- **什么时候跑**：改了编辑页（`ui.html`、`web/editor/`）、`ui.py` 或 Worker 接口以后，以及每次发布前。它要起本地服务和浏览器，所以不在 `npm test` 里。
+- **前提**：本机要有 Playwright 1.62.1 对应的 Chromium。没有的话先运行 `npx playwright install chromium`。
+- **会不会碰到真的 Key**：不会。测试自己起 `wrangler dev` 和 `ui.py`：用临时生成的假 Key 和测试口令，不读 `.dev.vars`；本地存储放在临时目录，跑完按进程号停掉、删掉。浏览器里发往高德代理和站外的请求一律拦下，出现一次就算失败。
+- **截图对比**：`node web/e2e/shots.mjs <目录>` 生成 32 张固定状态的截图，用于重构前后逐像素比对。偶尔会有地图矢量图形边缘的抗锯齿差异，比如试玩、桌面、深色那几张，重跑一次即可。
+
+管理页的交互仍在浏览器里手动验证：`npm run build` 后 `npx wrangler dev`。编辑页里所有确认、提示、输入都是页内弹窗（`<dialog>`）和轻提示，没有原生 `alert` / `confirm` / `prompt`；自动化脚本用稳定的选择器：确认 `[data-dialog-ok]`、取消 `[data-dialog-cancel]`、输入框 `[data-dialog-input]`、错误提示 `[data-dialog-error]`。
 
 ### 计算规则的版本
 
@@ -205,7 +216,7 @@ npm test     # Worker、页面合并逻辑、编辑页静态检查、站点构�
 
 ### 地图审图号
 
-地图角标写着高德的审图号 `GS(2025)5996号`，在三处各写了一份：`ui.html`、`share.py`、`web/demo.html` 的 `attribution`（`web/ui.test.mjs` 会检查三处一样）。高德更新审图号时，三处都要改。
+地图角标写着高德的审图号 `GS(2025)5996号`，在三处各写了一份：`web/editor/map.js`、`share.py`、`web/demo.html` 的 `attribution`（`web/ui.test.mjs` 会检查三处一样）。高德更新审图号时，三处都要改。
 
 ### 重新生成示例页 `/demo`
 
