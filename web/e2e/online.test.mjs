@@ -146,6 +146,8 @@ test('在线：两边同时改同一格，出现冲突提示', async () => {
   const saved = A.page.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/t\/[a-z2-9]+\/config$/.test(r.url()) && r.status() === 200);
   release();
   await saved;
+  // 合并后重存成功：不用再动，状态栏也要从「同步中…」回到「已同步」（3.10 前会一直停在「同步中…」）
+  await A.page.locator('#status', { hasText: '已同步' }).waitFor({ timeout: 5000 });
   // 一键改用对方的
   await conflict.first().locator('[data-use-theirs]').click();
   await A.page.waitForFunction((p) => document.querySelector(`#form [data-bind="${p}"]`)?.value === '42', field);

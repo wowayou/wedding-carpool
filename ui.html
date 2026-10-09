@@ -1133,7 +1133,7 @@ function scheduleSync(delay = 800) {
 async function syncSave() {
   clearTimeout(syncTimer); syncTimer = null;
   while (syncing) await syncing; // 一次只发一个保存
-  if (!dirty) return;
+  if (!dirty) { setStatus(); return; } // 已经存好了（比如冲突合并后重存过）：定时器刚清掉，状态栏要从「同步中…」改回来
   syncing = (async () => {
     setStatus();
     for (let attempt = 0; attempt < 4; attempt++) {

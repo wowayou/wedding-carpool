@@ -635,3 +635,12 @@ test('推荐车站设置：分组标题和第一项的名字重复时，只显�
   assert.equal((panel.match(/c-sr-only/g) || []).length, 1, '只有「在哪找」的第一项把名字藏起来');
   assert.match(ui, /title: '在哪找', keys: \['areas'/);
 });
+
+test('在线保存：改动已经存好时，定时器触发的保存也会把状态栏从「同步中…」改回来', async () => {
+  let status = 0;
+  const ctx = { dirty: false, syncing: null, syncTimer: 1, clearTimeout: () => {}, setStatus: () => { status += 1; } };
+  const fn = /async function syncSave\(\) \{[\s\S]*?\n\}\n/.exec(scripts(ui).at(-1));
+  assert.ok(fn, '找不到 syncSave');
+  await vm.runInNewContext(`${fn[0]}\nsyncSave`, ctx)();
+  assert.equal(status, 1);
+});
