@@ -8,6 +8,8 @@
 import datetime as dt
 import io
 import json
+import math
+import random
 import re
 import tempfile
 import threading
@@ -36,9 +38,13 @@ WANG = "116.0,30.0"   # 老王从西边开过来，直达约 193km
 class FakeAmap:
     """只实现 carpool 用到的接口。"""
 
-    def __init__(self, places=None, pois=None, no_transit=()):
+    def __init__(self, places=None, pois=None, no_transit=(), around=None, routes_fail=()):
         self.places = places or {}
         self.pois = pois or []
+        self.around = around  # 可选：(中心, 半径, 页码) -> POI 列表，测翻页和各圈不同的结果
+        self.routes_fail = set(routes_fail)  # 这些车主的路线查不到
+        self.around_calls: list[tuple] = []  # 地点搜索调用（含翻页）
+        self.route_calls: list[tuple] = []  # 驾车路线调用
         self.no_transit = set(no_transit)  # 这些站查不到公共交通方案
         self.calls = 0
 
@@ -53,9 +59,10 @@ class FakeAmap:
         self.calls += 1
         return self.pois
 
-    def stations_around(self, center, radius_km):
+    def stations_around(self, center, radius_km, page=1):
         self.calls += 1
-        return self.pois
+        self.around_calls.append((center, radius_km, page))
+        return self.around(center, radius_km, page) if self.around else self.pois
 
     def drive_minutes(self, origins, dest):
         self.calls += 1
@@ -77,6 +84,20 @@ class FakeAmap:
         pts = [[a.lat + (b.lat - a.lat) * k / 20, a.lng + (b.lng - a.lng) * k / 20]
                for a, b in zip(places, places[1:]) for k in range(20)]
         return pts + [[places[-1].lat, places[-1].lng]]
+
+
+def _fake_routes(self, places, strategy=0, alt=False):
+    self.route_calls.append((places, strategy, alt))
+    if any(n in p.name for n in self.routes_fail for p in places):
+        raise carpool.AmapError("查不到路线")
+    path = self.drive_path(places)
+    routes = [{"path": path, "km": sum(km_between(Place("", b[1], b[0]), Place("", a[1], a[0])) for a, b in zip(path, path[1:]))}]
+    if alt:  # 备选路线：整体往北偏 0.3 度
+        routes.append({"path": [[lat + 0.3, lng] for lat, lng in path], "km": routes[0]["km"] * 1.05})
+    return routes
+
+
+FakeAmap.drive_routes = _fake_routes
 
 
 def person(name, loc, **kw):
@@ -1221,6 +1242,327 @@ class ConfigFieldsTest(unittest.TestCase):
         self.assertEqual(sorted({f"{s}.{k}" for s, k in read if f"{s}.{k}" not in carpool.FIELDS}), [])
 
 
+class SuggestGeometryTest(unittest.TestCase):
+    """找站的搜索圈：圈和圈之间没有空当。"""
+
+    def covered(self, circles, p):
+        return any(km_between(c, p) <= r for c, r in circles)
+
+    def test_dest_disc_has_no_gap(self):
+        rnd = random.Random(7)
+        for lat in (30.0, 55.0):
+            venue = Place("", 118.0, lat)
+            for radius in (40, 51, 100, 150):
+                circles = [(Place("", c.lng, c.lat), r) for c, r in service.dest_circles(venue, radius)]
+                self.assertEqual(len(circles) == 1, radius <= 50)
+                self.assertTrue(all(r <= 50 for _, r in circles))
+                for _ in range(1500):  # 圆内随机取点
+                    d, a = radius * math.sqrt(rnd.random()), rnd.random() * 2 * math.pi
+                    p = Place("", venue.lng + d * math.sin(a) / (111.195 * math.cos(math.radians(lat))), lat + d * math.cos(a) / 111.195)
+                    if km_between(p, venue) <= radius:
+                        self.assertTrue(self.covered(circles, p), (lat, radius, p))
+
+    def test_route_samples_cover_the_corridor_end_to_end(self):
+        a, b = Place("", 116.0, 30.0), Place("", 121.0, 31.5)
+        path = FakeAmap().drive_path([a, b])
+        for step, radius in ((30, 25), (40, 21), (60, 31)):
+            samples = service.route_samples(path, step)
+            self.assertEqual((samples[0].lat, samples[0].lng), tuple(path[0]))  # 首尾都取
+            self.assertEqual((samples[-1].lat, samples[-1].lng), tuple(path[-1]))
+            for p, q in zip(samples, samples[1:]):
+                self.assertLessEqual(km_between(p, q), step * 1.001)
+            r, width = service.route_radius(step, radius)
+            self.assertAlmostEqual(width, math.sqrt(r * r - (step / 2) ** 2))
+            rnd = random.Random(step)
+            for _ in range(800):  # 路线两侧 width 以内的点都要在某个圈里
+                lat, lng = path[rnd.randrange(len(path))]
+                off = (rnd.random() * 2 - 1) * width * 0.99
+                p = Place("", lng, lat + off / 111.195)
+                self.assertTrue(self.covered([(s, r) for s in samples], p), (step, off))
+
+    def test_route_radius_is_raised_until_circles_connect(self):
+        self.assertEqual(service.route_radius(40, 10)[0], 21)  # 10 不到间隔的一半，调到刚好连得上
+        self.assertEqual(service.route_radius(40, 20)[0], 21)  # 恰好等于一半也只是相切
+        self.assertEqual(service.route_radius(30, 25)[0], 25)
+        self.assertEqual(service.route_radius(60, 60)[0], 50)  # 高德最大 50 公里
+
+    def test_detour_ellipse_has_no_gap(self):
+        rnd = random.Random(3)
+        for home, venue, limit in ((Place("", 116.0, 30.0), Place("", 118.0, 30.0), 30), (Place("", 100.0, 40.0), Place("", 116.0, 39.0), 60),
+                                   (Place("", 120.58, 31.3), Place("", 121.47, 31.23), 20)):
+            route_km = km_between(home, venue) * 1.2
+            circles = [(c, 50) for c in service.detour_circles(home, venue, route_km, limit)]
+            total = route_km + 2 * limit
+            hit = 0
+            for _ in range(4000):  # 椭圆（家到站 + 站到目的地 ≤ 路程 + 2·绕路上限）里随机取点
+                p = Place("", min(home.lng, venue.lng) - 3 + rnd.random() * (abs(home.lng - venue.lng) + 6),
+                          min(home.lat, venue.lat) - 3 + rnd.random() * (abs(home.lat - venue.lat) + 6))
+                if km_between(home, p) + km_between(p, venue) <= total:
+                    hit += 1
+                    self.assertTrue(self.covered(circles, p), (home, p))
+            self.assertGreater(hit, 100)
+
+
+class SuggestTest(unittest.TestCase):
+    """找站：关键词、翻页、上限、过滤留痕、每位车主各自的绕路、排序和估算。"""
+
+    def cfg(self, people=None, stations=(), **suggest):
+        return config(people or [person("老王", WANG, car_seats=3, max_detour_min=30), person("小陈", "114.0,34.0")], stations=stations, suggest=suggest)
+
+    def pois(self, *pairs):
+        return [{"name": n, "location": loc, "typecode": "150200"} for n, loc in pairs]
+
+    def test_requests_carry_keyword_and_page(self):
+        amap = carpool.Amap("k")
+        path, params = amap.around_query(Place("", 118, 30), 30)
+        self.assertEqual((path, params["keywords"], params["types"], params["page_size"]), ("/v5/place/around", "火车站", "150200", 25))
+        self.assertNotIn("page_num", params)
+        self.assertEqual(amap.around_query(Place("", 118, 30), 30, 2)[1]["page_num"], 2)
+        calls = []
+        amap._get = lambda path, **p: calls.append((path, p)) or {"pois": []}
+        amap.stations_near(Place("", 118, 30), 80)
+        self.assertEqual([c[0] for c in calls], ["/v5/place/around", "/v5/place/polygon"])  # 自动找站的两种请求都带关键词
+        self.assertTrue(all(c[1]["keywords"] == "火车站" for c in calls))
+
+    def test_route_strategy_and_alt_routes(self):
+        self.assertEqual([carpool.route_strategy(s, a) for s, a in ((0, False), (0, True), (12, True), (19, False))], [0, 10, 12, 19])
+        amap = carpool.Amap("k")
+        self.assertNotIn("strategy", amap.driving_query([Place("", 1, 2), Place("", 3, 4)])[1])
+        self.assertEqual(amap.driving_query([Place("", 1, 2), Place("", 3, 4)], 10)[1]["strategy"], 10)
+        seen = []
+        paths = [{"distance": str(1000 * k), "steps": [{"polyline": f"1,{k};2,{k}"}]} for k in (1, 2, 3)]
+        amap._get = lambda path, **p: seen.append(p) or {"route": {"paths": paths}}
+        one = amap.drive_routes([Place("", 1, 2), Place("", 3, 4)])
+        self.assertEqual((len(one), "strategy" in seen[0]), (1, False))
+        alt = amap.drive_routes([Place("", 1, 2), Place("", 3, 4)], alt=True)
+        self.assertEqual((len(alt), seen[1]["strategy"], alt[1]["km"], alt[2]["path"][0]), (3, 10, 2.0, [3.0, 1.0]))
+
+    def test_pages_stop_when_not_full_and_mark_truncated_after_three(self):
+        def full(n):
+            return lambda c, r, page: [{"name": f"甲{page}{i:02d}站", "location": VENUE, "typecode": "150200"} for i in range(n(page))]
+        amap = FakeAmap(around=full(lambda page: 25 if page == 1 else 3))
+        out = service.suggest_stations(self.cfg(areas=["dest"], dest_radius_km=40), amap)
+        self.assertEqual([c[2] for c in amap.around_calls], [1, 2])
+        self.assertEqual((out["summary"]["searches"], out["summary"]["truncated"], out["summary"]["found"]), (2, [], 28))
+        amap = FakeAmap(around=full(lambda page: 25))
+        out = service.suggest_stations(self.cfg(areas=["dest"], dest_radius_km=40, show_count=5), amap)
+        self.assertEqual([c[2] for c in amap.around_calls], [1, 2, 3])  # 最多 3 页
+        self.assertEqual((out["summary"]["truncated"], out["summary"]["found"]), (["目的地附近"], 75))
+        self.assertTrue(any("可能没列全" in n for n in out["notes"]))
+
+    def test_pages_are_prefetched_in_batches(self):
+        class Rec(carpool.Amap):
+            def __init__(self):
+                super().__init__("k")
+                self.batches, self.gets = [], []
+
+            def prefetch(self, queries):
+                self.batches.append([q[1].get("page_num", 1) for q in queries])
+
+            def _get(self, path, **params):
+                self.gets.append(path)
+                return {"pois": [{"name": f"候车室{i}", "location": VENUE} for i in range(25)]}  # 都是子点：整页满、全部被过滤
+
+        amap = Rec()
+        cfg = self.cfg(areas=["dest", "owner_home"], dest_radius_km=40)
+        cfg["people"] = [person("老王", WANG, car_seats=3)]
+        out = service.suggest_stations(cfg, amap)
+        self.assertEqual([b for b in amap.batches if b], [[1, 1], [2, 2], [3, 3]])  # 先批量取第一页，满页的再批量取下一页
+        self.assertEqual(out["summary"]["searches"], 6)
+        self.assertEqual(out["summary"]["truncated"], ["目的地附近", "老王出发地附近"])
+
+    def test_search_cap_stops_and_says_so(self):
+        amap = FakeAmap()
+        out = service.suggest_stations(self.cfg(areas=["dest", "owner_home", "rider_home"], dest_radius_km=150, max_searches=20), amap)
+        self.assertGreater(out["summary"]["circles"], 20)
+        self.assertEqual((len(amap.around_calls), out["summary"]["searches"], out["summary"]["cap_hit"]), (20, 20, True))
+        self.assertTrue(out["summary"]["unsearched"])  # 没搜的圈写明
+        self.assertEqual(sum(1 for c in out["trace"]["circles"] if not c["searched"]), out["summary"]["circles"] - 20)
+        self.assertTrue(any("单次上限" in n for n in out["notes"]))
+        self.assertTrue(out["estimate"]["over_cap"])
+
+    def test_cap_counts_pages_and_covers_every_circle_first(self):
+        amap = FakeAmap(around=lambda c, r, page: [{"name": f"乙{page}{i:02d}站", "location": VENUE, "typecode": "150200"} for i in range(25)])
+        out = service.suggest_stations(self.cfg(areas=["dest"], dest_radius_km=150, max_searches=20), amap)
+        self.assertGreater(out["summary"]["circles"], 15)
+        self.assertEqual(len(amap.around_calls), 20)
+        self.assertEqual([c[2] for c in amap.around_calls].count(1), out["summary"]["circles"])  # 每个圈先取第一页，剩下的名额才翻页
+        self.assertTrue(out["summary"]["cap_hit"])
+        self.assertEqual(out["summary"]["unsearched"], [])
+        self.assertTrue(out["summary"]["truncated"])  # 本该翻页却没搜的圈，算没列全
+
+    def test_every_drop_reason_is_recorded(self):
+        pois = self.pois(("西站", WEST), ("新站(建设中)", WEST), ("货运站", WEST), ("某线路所", WEST), ("陌生站", WEST), ("老站", WEST),
+                         ("北站进站口", WEST), ("公交站", WEST))
+        pois[-1]["typecode"] = "150500"
+        cfg = self.cfg(areas=["dest"], dest_radius_km=100, stations=(("老站", "117.9,30.0"),))
+        amap = FakeAmap(pois=pois)
+        out = service.suggest_stations(cfg, amap, valid_names={"西", "老"})
+        self.assertEqual([s["name"] for s in out["stations"]], ["西站"])
+        reasons = {d["name"]: d["reason"] for d in out["dropped"]}
+        self.assertIn("建设中", reasons["新站(建设中)"])
+        self.assertIn("货运", reasons["货运站"])
+        self.assertIn("不像火车站", reasons["某线路所"])
+        self.assertIn("12306", reasons["陌生站"])
+        self.assertIn("候选站", reasons["老站"])
+        self.assertIn("进站", reasons["北站进站口"])
+        self.assertIn("类型", reasons["公交站"])
+        self.assertTrue(all(d["where"] for d in out["dropped"]))
+        self.assertEqual(sum(out["summary"]["dropped"].values()), 7)
+        off = service.suggest_stations({**cfg, "options": {"suggest": {"areas": ["dest"], "dest_radius_km": 100, "filter_12306": False}}}, amap, valid_names={"西"})
+        self.assertIn("陌生站", [s["name"] for s in off["stations"]])  # 关掉过滤就不再查 12306
+        self.assertTrue(any("12306" in n for n in off["notes"]))
+
+    def test_unreachable_driver_is_skipped_and_said(self):
+        cfg = self.cfg([person("老王", WANG, car_seats=3), person("老李", "116.0,31.0", car_seats=3), person("小陈", "114.0,34.0")],
+                       areas=["owner_route"])
+        amap = FakeAmap(pois=self.pois(("西站", WEST)), routes_fail={"老王"})
+        out = service.suggest_stations(cfg, amap)
+        self.assertEqual([s["driver"] for s in out["summary"]["skipped_drivers"]], ["老王"])
+        self.assertEqual({c["where"].split("路")[0] for c in out["trace"]["circles"]}, {"老李"})
+        self.assertTrue(any(d["name"] == "老王" and "路线查不到" in d["reason"] for d in out["dropped"]))
+        self.assertEqual([r["driver"] for r in out["trace"]["routes"]], ["老李"])
+
+    def test_each_driver_detour_limit_order_and_checked(self):
+        near_far = self.pois(("近站", NEAR), ("西站", WEST))
+        people = [person("老王", WANG, car_seats=3, max_detour_min=30), person("老周", "120.0,30.0", car_seats=3, max_detour_min=300)]
+        out = service.suggest_stations(self.cfg(people, areas=["dest"], dest_radius_km=100), FakeAmap(pois=near_far))
+        rows = {r["name"]: r for r in out["stations"]}
+        west = rows["西站"]["detours"]
+        self.assertEqual([(d["driver"], d["limit"], d["over"]) for d in west], [("老王", 30, False), ("老周", 300, False)])
+        self.assertEqual(west[0]["minutes"], 0)
+        self.assertEqual(rows["西站"]["best"], {"driver": "老王", "detour": 0})
+        # 都超过上限：老周的上限也调小
+        people[1]["max_detour_min"] = 50
+        out = service.suggest_stations(self.cfg(people, areas=["dest"], dest_radius_km=100), FakeAmap(pois=near_far))
+        west, near = out["stations"]
+        self.assertEqual((west["name"], west["over_all"], west["checked"]), ("西站", False, True))  # 老王不绕路，可用
+        self.assertEqual((near["name"], near["over_all"], near["checked"]), ("近站", True, False))  # 排在后面，不默认勾选
+        self.assertTrue(all(d["over"] for d in near["detours"]))
+        hide = service.suggest_stations(self.cfg(people, areas=["dest"], dest_radius_km=100, over_limit="hide"), FakeAmap(pois=near_far))
+        self.assertEqual([s["name"] for s in hide["stations"]], ["西站"])
+        self.assertEqual([(m["name"], "上限" in m["reason"]) for m in hide["more"]], [("近站", True)])
+        # 到目的地最近的站，所有人都超限时也排在可用的后面
+        by_dest = service.suggest_stations(self.cfg(people, areas=["dest"], dest_radius_km=100, sort="dest"), FakeAmap(pois=near_far))
+        self.assertEqual([s["name"] for s in by_dest["stations"]], ["西站", "近站"])
+
+    def test_three_sorts_show_count_and_checked_count(self):
+        pois = self.pois(("近站", NEAR), ("西站", WEST), ("东站", "118.0,29.5"))
+        people = [person("老王", WANG, car_seats=3, max_detour_min=900), person("小陈", "118.0,31.0")]
+        run = lambda **s: service.suggest_stations(self.cfg(people, areas=["dest", "rider_home"], dest_radius_km=100, **s), FakeAmap(pois=pois))
+        names = lambda out: [r["name"] for r in out["stations"]]
+        self.assertEqual(names(run(sort="detour"))[0], "西站")  # 车主不用绕路
+        self.assertEqual(names(run(sort="dest")), ["东站", "近站", "西站"])  # 东站 55 公里，近站 89，西站 96
+        out = run(sort="rider_home")  # 小陈在目的地正北 111 公里
+        self.assertEqual(names(out), ["近站", "西站", "东站"])
+        self.assertAlmostEqual(out["stations"][0]["rider_km"], km_between(Place("", 118, 30.8), Place("", 118, 31)), delta=0.1)
+        small = run(show_count=5, checked_count=1)
+        self.assertEqual([r["checked"] for r in small["stations"]], [True, False, False])
+        out = service.suggest_stations(self.cfg(people, areas=["dest"], dest_radius_km=100, sort="rider_home"), FakeAmap(pois=pois))
+        self.assertEqual(out["settings"]["sort"], "detour")  # 没找乘客出发地附近，回落并说明
+        self.assertTrue(any("离乘客家最近" in n for n in out["notes"]))
+
+    def test_more_lists_what_was_not_shown(self):
+        pois = [{"name": f"丙{i:02d}站", "location": f"118.{i:02d},30.0", "typecode": "150200"} for i in range(8)]
+        out = service.suggest_stations(self.cfg(areas=["dest"], dest_radius_km=40, show_count=5), FakeAmap(pois=pois))
+        self.assertEqual((len(out["stations"]), len(out["more"]), out["summary"]["found"]), (5, 3, 8))
+        self.assertTrue(all("显示个数" in m["reason"] for m in out["more"]))
+        self.assertEqual(out["summary"]["more"], {"超过显示个数": 3})
+        self.assertEqual(sum(r["checked"] for r in out["stations"]), 5)  # 默认勾 6 个，但只显示 5 个，勾选个数夹到 5
+
+    def test_settings_are_clamped_and_explained(self):
+        st, notes = service.normalize_settings({"dest_radius_km": 9999, "max_searches": "abc", "sort": "乱写", "areas": ["dest", "zzz"],
+                                                "checked_count": 99, "show_count": 5, "route_step_km": 40, "route_radius_km": 10,
+                                                "alt_routes": "yes", "route_strategy": "12", "drivers": "老王", "over_limit": True})
+        self.assertEqual((st["dest_radius_km"], st["max_searches"], st["sort"], st["areas"]), (150, 80, "detour", ["dest"]))
+        self.assertEqual((st["checked_count"], st["alt_routes"], st["route_strategy"], st["drivers"], st["over_limit"]), (5, False, 12, [], "show"))
+        self.assertEqual(st["route_radius_km"], 21)
+        text = "；".join(notes)
+        for part in ("超出", "不合法", "不认识的项", "默认勾选个数"):
+            self.assertIn(part, text)
+        defaults, notes = service.normalize_settings(None)
+        self.assertEqual((notes, defaults), ([], {p.rsplit(".", 1)[1]: f.get("default", []) for p, f in carpool.FIELDS.items() if p.startswith("options.suggest.")}))
+        self.assertEqual(service.normalize_settings({"areas": ["dest", "owner_route"], "route_step_km": 40, "route_radius_km": 10})[1][0],
+                         "沿路范围从 10 公里调到 21 公里（相邻两圈才连得上）")
+
+    def test_plan_only_makes_no_place_search(self):
+        amap = FakeAmap(pois=self.pois(("西站", WEST)))
+        cfg = self.cfg([person("老王", WANG, car_seats=3), person("老李", "116.0,31.0", car_seats=3), person("小陈", "114.0,34.0")])
+        out = service.suggest_stations(cfg, amap, plan_only=True)
+        self.assertEqual(amap.around_calls, [])  # 地点搜索 0 次
+        self.assertEqual(len(amap.route_calls), 2)  # 只查车主路线
+        self.assertEqual((out["stations"], out["more"], out["dropped"]), ([], [], []))
+        est, circles = out["estimate"], out["trace"]["circles"]
+        self.assertEqual((est["circles"], est["searches_min"], est["searches_max"], est["routes"]), (len(circles), len(circles), 3 * len(circles), 2))
+        self.assertEqual({c["kind"] for c in circles}, {"dest", "home", "route"})
+        self.assertEqual(len(out["trace"]["routes"]), 2)
+        self.assertGreater(out["trace"]["corridor_km"], 0)
+        self.assertEqual(est["over_cap"], len(circles) > 80)
+        # 范围调大，估算超过上限
+        big = service.suggest_stations({**cfg, "options": {"suggest": {"max_searches": 20}}}, FakeAmap(), plan_only=True)
+        self.assertTrue(big["estimate"]["over_cap"])
+        self.assertTrue(any("超过单次上限" in n for n in big["notes"]))
+        # 估算和实际一致：圈数相同
+        real = service.suggest_stations(cfg, amap)
+        self.assertEqual(real["summary"]["circles"], est["circles"])
+        self.assertEqual(real["summary"]["searches"], len(amap.around_calls))
+
+    def test_plan_only_skips_routes_when_not_searching_along_them(self):
+        amap = FakeAmap()
+        out = service.suggest_stations(self.cfg(areas=["dest", "owner_home"]), amap, plan_only=True)
+        self.assertEqual((amap.route_calls, out["estimate"]["routes"], out["trace"]["corridor_km"]), ([], 0, None))
+
+    def test_detour_cover_uses_each_drivers_route_and_limit(self):
+        people = [person("老王", WANG, car_seats=3, max_detour_min=10), person("老周", "120.0,30.0", car_seats=3, max_detour_min=60)]
+        amap = FakeAmap()
+        out = service.suggest_stations(self.cfg(people, areas=["owner_route"], route_cover="detour"), amap, plan_only=True)
+        by = {}
+        for c in out["trace"]["circles"]:
+            self.assertEqual((c["kind"], c["radius_km"]), ("detour", 50))
+            by.setdefault(c["where"], 0)
+            by[c["where"]] += 1
+        self.assertEqual(set(by), {"老王绕路范围内", "老周绕路范围内"})
+        self.assertEqual([c[2] for c in amap.route_calls], [False, False])  # 全覆盖不需要备选路线
+        wang = out["trace"]["routes"][0]
+        direct = service.detour_circles(Place("", 116, 30), Place("", 118, 30), wang["km"], 10)
+        self.assertEqual(len(direct), by["老王绕路范围内"])  # 用的是高德给的里程和这位车主自己的上限
+        self.assertIsNone(out["trace"]["corridor_km"])
+
+    def test_alt_routes_add_circles(self):
+        one = service.suggest_stations(self.cfg(areas=["owner_route"]), FakeAmap(), plan_only=True)
+        amap = FakeAmap()
+        alt = service.suggest_stations(self.cfg(areas=["owner_route"], alt_routes=True), amap, plan_only=True)
+        self.assertEqual([r["alt"] for r in one["trace"]["routes"]], [1])
+        self.assertEqual([r["alt"] for r in alt["trace"]["routes"]], [1, 2])
+        self.assertTrue(amap.route_calls[0][2])
+        self.assertGreater(len(alt["trace"]["circles"]), len(one["trace"]["circles"]))
+        self.assertTrue(any("备选路线2" in c["where"] for c in alt["trace"]["circles"]))
+
+    def test_only_selected_drivers_and_riders_homes(self):
+        people = [person("老王", WANG, car_seats=3), person("老李", "116.0,31.0", car_seats=3), person("小陈", "114.0,34.0")]
+        out = service.suggest_stations(self.cfg(people, areas=["owner_home", "rider_home"], drivers=["老李", "路人"]), FakeAmap(), plan_only=True)
+        self.assertEqual([(c["where"], c["kind"]) for c in out["trace"]["circles"]], [("老李出发地附近", "home"), ("小陈出发地附近", "rider")])
+        self.assertTrue(any("路人" in n for n in out["notes"]))
+
+    def test_return_only_follows_the_way_home(self):
+        cfg = ReturnOnlyTest().cfg()
+        cfg["stations"] = []
+        cfg["options"]["suggest"] = {"areas": ["owner_route"]}
+        amap = FakeAmap()
+        service.suggest_stations(cfg, amap, plan_only=True)
+        self.assertEqual(amap.route_calls[0][0][0].name, "目的地")  # 返程：从目的地出发回车主家
+
+    def test_try_mode_estimates_but_refuses_to_search(self):
+        amap = browser.TryAmap()
+        cfg = self.cfg()
+        out = service.suggest_stations(cfg, amap, plan_only=True)
+        self.assertGreater(out["estimate"]["circles"], 0)
+        self.assertEqual(out["trace"]["routes"][0]["path"][0], [30.0, 116.0])  # 路线按直线
+        with self.assertRaises(carpool.AmapError) as cm:
+            service.suggest_stations(cfg, amap)
+        self.assertIn(browser.TryAmap.REFUSE, str(cm.exception))
+
+
 class TomlTest(unittest.TestCase):
     def test_dump_roundtrips(self):
         cfg = {
@@ -1385,6 +1727,10 @@ class UiServerTest(unittest.TestCase):
         cfg = config([person("老王", WANG, car_seats=3)], stations=())
         status, data = self.call("/api/suggest", {"config": cfg})
         self.assertEqual((status, [s["name"] for s in data["stations"]]), (200, ["杭州东站"]))
+        self.app.amap = FakeAmap(pois=pois)  # 只估算：不做地点搜索
+        status, data = self.call("/api/suggest", {"config": cfg, "plan_only": True})
+        self.assertEqual((status, data["stations"], self.app.amap.around_calls), (200, [], []))
+        self.assertGreater(data["estimate"]["circles"], 0)
         with urllib.request.urlopen(self.base + "/stations12306.json") as resp:
             self.assertIn("北京南", json.load(resp)["stations"])
         with urllib.request.urlopen(self.base + "/config-fields.json") as resp:  # 编辑页的占位、范围、中文名取自它
@@ -1444,6 +1790,9 @@ class TryAmapTest(unittest.TestCase):
             msg = self.call(method, **args)["error"]
             self.assertIn("请新建行程", msg)
             self.assertNotIn("高德接口报错", msg)
+        est = self.call("suggest", config=self.cfg, plan_only=True)  # 试玩也能看估算
+        self.assertGreater(est["estimate"]["circles"], 0)
+        self.assertEqual(est["stations"], [])
         no_loc = {**self.cfg, "people": [{"name": "新人", "from": "某地"}]}
         self.assertIn("试玩模式不能查新地点", self.call("plan", config=no_loc)["error"])
 

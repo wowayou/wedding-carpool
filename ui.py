@@ -136,7 +136,7 @@ def make_handler(app: App):
             elif self.path == "/api/plan":
                 self._guard(lambda: app.plan(self._body()["config"]))
             elif self.path == "/api/suggest":
-                self._guard(lambda: suggest_stations(self._body()["config"], app.amap, VALID_STATIONS))
+                self._guard(lambda: (lambda b: suggest_stations(b["config"], app.amap, VALID_STATIONS, plan_only=bool(b.get("plan_only"))))(self._body()))
             elif self.path == "/api/share":
                 self._guard(lambda: app.share(**{k: int(v) for k, v in self._body().items() if k in ("plan", "back_plan")}))
             else:

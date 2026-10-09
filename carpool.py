@@ -30,6 +30,8 @@ from pathlib import Path
 
 API = "https://restapi.amap.com"
 STATION_TYPE = "150200"  # 高德 POI 分类：交通设施服务;火车站
+STATION_KEYWORD = "火车站"  # 周边搜索要同时带上：只靠 types 会连同候车室、进站口等子类一起返回
+PAGE_SIZE = 25  # 周边搜索一页最多条数
 # 火车站 POI 里混着出入口、售票处、停车场等子点，按名字剔除
 STATION_NOISE = ("-", "(", "（", "进站", "出站", "售票", "停车", "候车", "货运", "派出所",
                  "广场", "通道", "上车点", "下车点")
@@ -174,19 +176,25 @@ class Amap:
     def distance_query(self, origins: list[Place], dest: Place) -> tuple[str, dict]:
         return "/v3/distance", {"origins": "|".join(p.loc for p in origins), "destination": dest.loc, "type": 1}
 
-    def around_query(self, center: Place, radius_km: float) -> tuple[str, dict]:
-        return "/v5/place/around", {"location": center.loc, "types": STATION_TYPE, "sortrule": "distance",
-                                    "radius": min(int(radius_km * 1000), 50000), "page_size": 25}
+    def around_query(self, center: Place, radius_km: float, page: int = 1) -> tuple[str, dict]:
+        # types 照旧 150200，再加 keywords：否则大站的候车室、进站口等子点会占满一页（实测，见 docs/v3.8-plan.md 第四节）
+        params = {"location": center.loc, "types": STATION_TYPE, "keywords": STATION_KEYWORD, "sortrule": "distance",
+                  "radius": min(int(radius_km * 1000), 50000), "page_size": PAGE_SIZE}
+        if page > 1:
+            params["page_num"] = page
+        return "/v5/place/around", params
 
-    def stations_around(self, center: Place, radius_km: float) -> list[dict]:
-        """一个点周围的火车站 POI（一页，按距离排序）。"""
-        path, params = self.around_query(center, radius_km)
+    def stations_around(self, center: Place, radius_km: float, page: int = 1) -> list[dict]:
+        """一个点周围的火车站 POI（一页，按距离排序）；page 从 1 开始。"""
+        path, params = self.around_query(center, radius_km, page)
         return self._get(path, **params).get("pois") or []
 
-    def driving_query(self, places: list[Place]) -> tuple[str, dict]:
+    def driving_query(self, places: list[Place], strategy: int | None = None) -> tuple[str, dict]:
         params = {"origin": places[0].loc, "destination": places[-1].loc, "extensions": "base"}
         if len(places) > 2:
             params["waypoints"] = ";".join(p.loc for p in places[1:-1])
+        if strategy:  # 不写就是高德默认（0）
+            params["strategy"] = strategy
         return "/v3/direction/driving", params
 
     def prefetch(self, queries: list[tuple[str, dict]]) -> None:
@@ -221,6 +229,21 @@ class Amap:
         stride = max(1, len(pts) // max_points)
         return pts[::stride] + ([pts[-1]] if pts and (len(pts) - 1) % stride else [])
 
+    def drive_routes(self, places: list[Place], strategy: int = 0, alt: bool = False,
+                     max_points: int = 600) -> list[dict]:
+        """驾车路线 [{"path": [[lat, lng], ...], "km": 里程}, ...]。不开 alt 只取第一条；
+        开了 alt 时，策略 0 改用 10（高德 strategy 10 到 20 返回最多 3 条路线），其余策略本身就是多路线。"""
+        api, params = self.driving_query(places, route_strategy(strategy, alt))
+        paths = self._get(api, **params)["route"]["paths"][:3 if alt else 1]
+        out = []
+        for path in paths:
+            pts = [[float(y), float(x)] for step in path["steps"]
+                   for x, y in (pair.split(",") for pair in step["polyline"].split(";"))]
+            stride = max(1, len(pts) // max_points)
+            out.append({"path": pts[::stride] + ([pts[-1]] if pts and (len(pts) - 1) % stride else []),
+                        "km": float(path["distance"]) / 1000})
+        return out
+
     def geocode(self, address: str, city: str | None = None) -> Place | None:
         path, params = self.geocode_query(address, city)
         hits = self._get(path, **params).get("geocodes") or []
@@ -243,7 +266,7 @@ class Amap:
 
     def stations_near(self, center: Place, radius_km: float, max_pages: int = 8) -> list[dict]:
         # 周边搜索最大 50km 且按距离排序，保证近处的站不漏；矩形搜索补上更远的站
-        pois = self._get("/v5/place/around", location=center.loc, types=STATION_TYPE,
+        pois = self._get("/v5/place/around", location=center.loc, types=STATION_TYPE, keywords=STATION_KEYWORD,
                          radius=min(int(radius_km * 1000), 50000), sortrule="distance",
                          page_size=25).get("pois") or []
         dlat = radius_km / 111.0
@@ -251,7 +274,7 @@ class Amap:
         polygon = (f"{center.lng - dlng:.6f},{center.lat + dlat:.6f}|"
                    f"{center.lng + dlng:.6f},{center.lat - dlat:.6f}")
         for page in range(1, max_pages + 1):
-            batch = self._get("/v5/place/polygon", polygon=polygon, types=STATION_TYPE,
+            batch = self._get("/v5/place/polygon", polygon=polygon, types=STATION_TYPE, keywords=STATION_KEYWORD,
                               page_size=25, page_num=page).get("pois") or []
             pois += batch
             if len(batch) < 25:
@@ -296,14 +319,32 @@ class Amap:
         return int(best["duration"]) / 60, "；".join(trains) or "无火车段"
 
 
+def route_strategy(strategy: int, alt: bool) -> int:
+    """实际传给高德驾车接口的 strategy：开备选路线且是默认策略 0 时改用 10。"""
+    return 10 if alt and not strategy else strategy
+
+
+def reject_reason(poi: dict) -> str | None:
+    """这个 POI 不是客运火车站的原因；None 表示可以留下。"""
+    name = poi.get("name") or ""
+    if m := re.search(r"[(（]([^)）]*)", name):
+        return f"站名带标注「{m.group(1)}」"
+    for noise in STATION_NOISE:
+        if noise in name:
+            return f"站名里有「{noise}」，不是客运站点"
+    if not name.endswith("站"):
+        return "名字不像火车站"
+    if poi.get("typecode") and not str(poi["typecode"]).startswith("1502"):
+        return "类型不是火车站"
+    return None
+
+
 def pick_stations(pois: list[dict], venue: Place, radius_km: float, limit: int) -> list[Place]:
     seen: set[str] = set()
     out = []
     for poi in pois:
         name = poi.get("name") or ""
-        if name in seen or not name.endswith("站") or any(n in name for n in STATION_NOISE):
-            continue
-        if poi.get("typecode") and not str(poi["typecode"]).startswith("1502"):
+        if name in seen or reject_reason(poi):
             continue
         seen.add(name)
         place = Place(name, *parse_loc(poi["location"]),
