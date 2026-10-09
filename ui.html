@@ -181,55 +181,10 @@
   .hist .meta { font-size: var(--fs-12); color: var(--ink-2); }
   .hist .notes { margin: 2px 0; }
   .hist .diff { font-size: var(--fs-12); background: var(--surface-2); border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
-  /* 推荐车站：找站设置、估算、结果。类名不带 c- 前缀，定稿后移到 design.css（切片 E） */
-  .sg { min-width: 0; }
-  .sg-sumrow { display: flex; gap: var(--sp-3); align-items: flex-start; justify-content: space-between; }
-  .sg-sum { margin: 0; padding-top: 4px; font-size: var(--fs-13); color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; }
-  .sg-sumrow .c-btn { flex: none; }
-  .sg-panel { margin-top: var(--sp-4); padding-top: var(--sp-4); border-top: 1px solid var(--line); }
-  .sg-group { border: 0; margin: 0 0 var(--sp-4); padding: 0; min-width: 0; }
-  .sg-group > legend { padding: 0; margin-bottom: var(--sp-3); font-size: var(--fs-13); font-weight: 600; color: var(--ink-2); letter-spacing: .04em; }
-  .sg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 var(--sp-3); }
-  .sg-grid > [hidden] { display: none; }
-  .sg-f { margin-bottom: var(--sp-3); min-width: 0; }
-  .sg-f--wide { grid-column: 1 / -1; }
-  .sg-inp { position: relative; }
-  .sg-inp .c-input { padding-right: 3.4em; }
-  .sg-suffix { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-2); font-size: var(--fs-13); pointer-events: none; }
-  .sg-foot { margin: 0 calc(-1 * var(--sp-4)); padding: 0 var(--sp-4); background: var(--surface); }
-  .sg.is-editing .sg-foot { position: sticky; bottom: calc(-1 * var(--sp-4)); z-index: 2; padding-top: var(--sp-2); padding-bottom: var(--sp-3); border-top: 1px solid var(--line-strong); box-shadow: 0 -6px 8px -8px var(--line-strong); }
-  .sg-pills { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
-  .sg-radios { display: grid; gap: 6px; }
-  .sg-radios .c-check { align-items: flex-start; }
-  .sg-est { margin: var(--sp-3) 0 var(--sp-2); font-size: var(--fs-14); }
-  .sg.is-editing .sg-est { margin-top: var(--sp-1); }
-  .sg.is-editing .sg-foot .c-alert { margin-bottom: var(--sp-2); }
-  .sg-est b { font-variant-numeric: tabular-nums; }
-  .sg-notes { margin: 0; padding-left: 18px; font-size: var(--fs-13); }
-  .sg-act { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; margin: var(--sp-3) 0 var(--sp-2); }
-  .sg-why { margin: 0 0 var(--sp-3); }
-  .sg-why--try { color: var(--ink); background: var(--info-soft); border-left: 4px solid var(--info); border-radius: var(--r-ctl); padding: 8px 12px; font-size: var(--fs-13); }
+  /* 推荐车站专用的小样式；通用的设置面板、估算条、标签行、折叠区在 design.css（c-settings、c-estimate、c-pick-row、c-fold 等） */
   .sg-line { font-size: var(--fs-13); margin: var(--sp-2) 0; }
-  .sg-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; padding: var(--sp-2) 6px; margin: 0 -6px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: var(--r-ctl); }
-  .sg-row input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
-  .sg-row small { display: block; color: var(--ink-2); }
-  .sg-row.is-off { background: var(--surface-2); }
-  .sg-row:has(input:focus-visible), .sg-mrow:has(button:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .sg-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-  .sg-tags .c-tag { white-space: normal; }
-  .sg-over { color: var(--ink-2); background: var(--surface-2); border: 1px dashed var(--line-strong); line-height: 18px; }
-  .sg-best { font-weight: 700; }
-  .sg-more { margin-top: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-card); padding: 0 var(--sp-3); }
-  .sg-more > summary { cursor: pointer; padding: var(--sp-3) 0; font-weight: 600; font-size: var(--fs-13); }
-  .sg-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-ctl); }
-  .sg-more[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: var(--sp-2); }
-  .sg-h { margin: var(--sp-3) 0 4px; font-size: var(--fs-13); color: var(--ink-2); }
-  .sg-mrow { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
-  .sg-mrow > span:first-child { min-width: 0; }
-  .sg-mrow small { display: block; color: var(--ink-2); }
   .sg-names { margin: 0 0 var(--sp-2); font-size: var(--fs-13); overflow-wrap: anywhere; }
   @media (min-width: 960px) { .sg-peek { display: none; } }
-  .leaflet-sug-pane svg { max-width: none !important; max-height: none !important; } /* 自建图层：Leaflet 只给自带的 overlayPane 取消了 svg 的最大宽度，不加这条会被压成 0 宽 */
   .legend .lg-route { width: 14px; height: 0; border-radius: 0; border-top: 3px dotted var(--drive); vertical-align: 3px; }
   .legend .lg-circle { width: 12px; height: 12px; border: 1px solid var(--station); background: transparent; }
   .kv { display: grid; grid-template-columns: 78px 1fr; gap: 10px 10px; align-items: start; margin-bottom: var(--sp-3); font-size: var(--fs-13); }
@@ -1471,7 +1426,7 @@ async function reportError(action, e) {
 // 找站设置存在 cfg.options.suggest（只存和默认值不同的项）；中文名、默认值、范围、单位、可选项、说明都取自 config-fields.json
 const SG_PREFIX = 'options.suggest.';
 const SG_GROUPS = [
-  { title: '在哪找', keys: ['areas', 'dest_radius_km', 'home_radius_km'] },
+  { title: '在哪找', keys: ['areas', 'dest_radius_km', 'home_radius_km'], quietFirst: true }, // 第一项的名字和分组标题重复：只留给读屏，不显示
   { title: '车主路上', keys: ['route_cover', 'route_step_km', 'route_radius_km', 'drivers', 'route_strategy', 'alt_routes'] },
   { title: '结果怎么排', keys: ['sort', 'over_limit', 'show_count', 'checked_count', 'filter_12306', 'max_searches'] },
 ];
@@ -1560,40 +1515,41 @@ function sgProblems() {
 }
 
 // 从 FIELDS 生成一项设置的控件
-function sgFieldHtml(key) {
+function sgFieldHtml(key, quiet = false) {
   const f = sgField(key);
   if (!f) return '';
   const id = `sg-${key}`, val = sgVal(key), stored = sgStored(key);
   const hint = f.hint ? `<span class="c-field__hint" id="${id}-hint">${esc(f.hint)}</span>` : '';
   const err = `<span class="c-field__error" id="${id}-err" data-sg-err="${key}" hidden></span>`;
   const desc = `${f.hint ? `${id}-hint ` : ''}${id}-err`;
-  const wrap = (inner, wide) => `<div class="c-field sg-f${wide ? ' sg-f--wide' : ''}" data-sg-wrap="${key}">${inner}${hint}${err}</div>`;
+  const wrap = (inner, wide) => `<div class="c-field c-settings__field${wide ? ' c-settings__field--wide' : ''}" data-sg-wrap="${key}">${inner}${hint}${err}</div>`;
   const label = esc(f.label);
+  const lc = `c-field__label${quiet ? ' c-sr-only' : ''}`; // quiet：名字不显示，读屏照读
   if (f.type === 'number' || f.type === 'integer') {
-    return wrap(`<label class="c-field__label" for="${id}">${label}</label>
-      <div class="sg-inp"><input class="c-input" id="${id}" type="number" inputmode="${f.type === 'integer' ? 'numeric' : 'decimal'}" data-sg="${key}"${f.min !== undefined ? ` min="${f.min}"` : ''}${f.max !== undefined ? ` max="${f.max}"` : ''} step="${f.type === 'integer' ? 1 : 'any'}"
-        placeholder="${esc(f.default)}" value="${esc(stored ?? '')}" aria-describedby="${desc}">${f.unit ? `<span class="sg-suffix" aria-hidden="true">${esc(f.unit)}</span>` : ''}</div>`);
+    return wrap(`<label class="${lc}" for="${id}">${label}</label>
+      <div class="c-unit-input"><input class="c-input" id="${id}" type="number" inputmode="${f.type === 'integer' ? 'numeric' : 'decimal'}" data-sg="${key}"${f.min !== undefined ? ` min="${f.min}"` : ''}${f.max !== undefined ? ` max="${f.max}"` : ''} step="${f.type === 'integer' ? 1 : 'any'}"
+        placeholder="${esc(f.default)}" value="${esc(stored ?? '')}" aria-describedby="${desc}">${f.unit ? `<span class="c-unit-input__unit" aria-hidden="true">${esc(f.unit)}</span>` : ''}</div>`);
   }
   if (f.type === 'choice' && f.choices.length > 2) {
-    return wrap(`<label class="c-field__label" for="${id}">${label}</label>
+    return wrap(`<label class="${lc}" for="${id}">${label}</label>
       <select class="c-select" id="${id}" data-sg="${key}" aria-describedby="${desc}">${f.choices.map((c) => `<option value="${esc(c.value)}"${c.value === val ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}</select>`);
   }
   if (f.type === 'choice') {
     const pill = f.choices.every((c) => c.label.length <= 10);
-    return wrap(`<span class="c-field__label" id="${id}-l">${label}</span>
-      <div class="${pill ? 'sg-pills' : 'sg-radios'}" role="radiogroup" aria-labelledby="${id}-l" aria-describedby="${desc}">${f.choices.map((c) => `<label class="c-check${pill ? ' c-check--pill' : ''}"><input type="radio" name="${id}" value="${esc(c.value)}" data-sg="${key}"${c.value === val ? ' checked' : ''}> ${esc(c.label)}</label>`).join('')}</div>`, true);
+    return wrap(`<span class="${lc}" id="${id}-l">${label}</span>
+      <div class="${pill ? 'c-choices' : 'c-choices c-choices--stack'}" role="radiogroup" aria-labelledby="${id}-l" aria-describedby="${desc}">${f.choices.map((c) => `<label class="c-check${pill ? ' c-check--pill' : ''}"><input type="radio" name="${id}" value="${esc(c.value)}" data-sg="${key}"${c.value === val ? ' checked' : ''}> ${esc(c.label)}</label>`).join('')}</div>`, true);
   }
   if (f.type === 'multi') {
-    return wrap(`<span class="c-field__label" id="${id}-l">${label}</span>
-      <div class="sg-pills" role="group" aria-labelledby="${id}-l" aria-describedby="${desc}">${f.choices.map((c) => `<label class="c-check c-check--pill"><input type="checkbox" value="${esc(c.value)}" data-sg="${key}"${val.includes(c.value) ? ' checked' : ''}> ${esc(c.label)}</label>`).join('')}</div>`, true);
+    return wrap(`<span class="${lc}" id="${id}-l">${label}</span>
+      <div class="c-choices" role="group" aria-labelledby="${id}-l" aria-describedby="${desc}">${f.choices.map((c) => `<label class="c-check c-check--pill"><input type="checkbox" value="${esc(c.value)}" data-sg="${key}"${val.includes(c.value) ? ' checked' : ''}> ${esc(c.label)}</label>`).join('')}</div>`, true);
   }
   if (f.type === 'boolean') {
     return wrap(`<label class="c-switch"><input type="checkbox" role="switch" id="${id}" data-sg="${key}"${val ? ' checked' : ''} aria-describedby="${desc}"><span class="c-switch__track"></span>${esc(f.label)}</label>`, true);
   }
   // list：按名字勾选车主；一个都不勾和全勾一样，都是用全部车主
   const names = sgDrivers(), chosen = stored || [];
-  return wrap(`<span class="c-field__label" id="${id}-l">${label}</span>
-    ${names.length ? `<div class="sg-pills" role="group" aria-labelledby="${id}-l" aria-describedby="${desc}">${names.map((n) => `<label class="c-check c-check--pill"><input type="checkbox" value="${esc(n)}" data-sg="${key}"${!chosen.length || chosen.includes(n) ? ' checked' : ''}> ${esc(n)}</label>`).join('')}</div>`
+  return wrap(`<span class="${lc}" id="${id}-l">${label}</span>
+    ${names.length ? `<div class="c-choices" role="group" aria-labelledby="${id}-l" aria-describedby="${desc}">${names.map((n) => `<label class="c-check c-check--pill"><input type="checkbox" value="${esc(n)}" data-sg="${key}"${!chosen.length || chosen.includes(n) ? ' checked' : ''}> ${esc(n)}</label>`).join('')}</div>`
       : '<div class="muted">还没有开车的成员</div>'}
     <span class="c-field__hint">${esc(f.default_note || '')}${f.default_note ? '。' : ''}取消勾选的车主，不沿他的路线找站</span>`, true);
 }
@@ -1615,7 +1571,7 @@ function sgReadControl(t) {
 function renderSgPanel() {
   const panel = $('#sgPanel');
   if (!panel) return;
-  panel.innerHTML = SG_GROUPS.map((g) => `<fieldset class="sg-group"><legend>${esc(g.title)}</legend><div class="sg-grid">${g.keys.map(sgFieldHtml).join('')}</div></fieldset>`).join('')
+  panel.innerHTML = SG_GROUPS.map((g) => `<fieldset class="c-settings__group"><legend>${esc(g.title)}</legend><div class="c-settings__grid">${g.keys.map((k, i) => sgFieldHtml(k, Boolean(g.quietFirst) && i === 0)).join('')}</div></fieldset>`).join('')
     + '<button class="c-btn c-btn--sm" data-sg-reset>恢复默认</button>';
   sgRefresh();
 }
@@ -1692,20 +1648,20 @@ function renderSugEst() {
   const waiting = sug.estBusy || sug.pending;
   let html = '', notesHtml = '';
   let why = '';
-  if (waiting) html = '<p class="sg-est muted">正在估算要搜多少次…</p>';
+  if (waiting) html = '<p class="c-estimate muted">正在估算要搜多少次…</p>';
   else if (sug.estErr) {
     html = `<div class="c-alert c-alert--danger"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div><p>估算没成功：${esc(sug.estErr)}</p><p><button class="c-btn c-btn--sm" data-sg-retry-est>重试估算</button></p></div></div>`;
   } else if (est) {
     const S = out.settings, cap = S.max_searches;
-    html = `<p class="sg-est"><b>${esc(sgEstimateText(est, S))}</b></p>`;
+    html = `<p class="c-estimate"><b>${esc(sgEstimateText(est, S))}</b></p>`;
     if (est.over_cap) {
       html += `<div class="c-alert c-alert--warn"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>这次至少要 ${est.searches_min} 次地点搜索，超过单次上限 ${cap} 次（${esc(sgCircleKinds(out.trace))}）。把范围调小，或者把「${esc(sgField('max_searches').label)}」调高（最多 ${sgField('max_searches').max} ${esc(sgField('max_searches').unit)}）。</div></div>`;
     } else if (est.may_exceed) {
-      html += `<p class="sg-est muted">翻页多的话，可能会到上限 ${cap} 次，到了就停，结果里会写明。</p>`;
+      html += `<p class="c-estimate muted">翻页多的话，可能会到上限 ${cap} 次，到了就停，结果里会写明。</p>`;
     }
     const notes = (out.notes || []).filter((x) => !/^这次至少要/.test(x));
     if (notes.length && !sug.result) { // 找过以后，说明放在结果里
-      notesHtml = `<div class="c-callout"><ul class="sg-notes">${notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+      notesHtml = `<div class="c-callout"><ul class="c-callout__list">${notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
     }
     if (est.over_cap) why = '估算超过单次上限，先把范围调小，或者调高上限。';
   }
@@ -1719,7 +1675,7 @@ function renderSugEst() {
   go.classList.toggle('is-loading', sug.running);
   $('#sgWhy').textContent = why;
   $('#sgWhy').hidden = !why;
-  $('#sgWhy').classList.toggle('sg-why--try', isTry);
+  $('#sgWhy').classList.toggle('c-why--info', isTry);
 }
 
 function scheduleSugEstimate(delay = SG_ESTIMATE_DELAY) {
@@ -1828,16 +1784,16 @@ function sgTags(r) {
   const tags = r.detours.map((d) => {
     const title = d.minutes == null ? `${d.driver}：量不出绕路` : `${d.driver}：${outboundOn() ? '家 → 站 → 目的地' : '目的地 → 站 → 家'}比直达多 ${d.minutes} 分钟，上限 ${d.limit} 分钟`;
     if (d.minutes == null) return `<span class="c-tag" title="${esc(title)}">${esc(d.driver)} 量不出</span>`;
-    if (d.over) return `<span class="c-tag sg-over" title="${esc(title)}">${esc(d.driver)} +${sgMin(d.minutes)} · 超过上限</span>`;
-    return `<span class="c-tag ${d.minutes === best ? 'c-tag--accent sg-best' : 'c-tag--ok'}" title="${esc(title)}">${esc(d.driver)} +${sgMin(d.minutes)}</span>`;
+    if (d.over) return `<span class="c-tag c-tag--over" title="${esc(title)}">${esc(d.driver)} +${sgMin(d.minutes)} · 超过上限</span>`;
+    return `<span class="c-tag ${d.minutes === best ? 'c-tag--accent c-tag--best' : 'c-tag--ok'}" title="${esc(title)}">${esc(d.driver)} +${sgMin(d.minutes)}</span>`;
   });
   if (r.over_all) tags.push('<span class="c-tag c-tag--danger">车主都要绕很远</span>');
-  return tags.length ? `<span class="sg-tags">${tags.join('')}</span>` : '';
+  return tags.length ? `<span class="c-tags">${tags.join('')}</span>` : '';
 }
 function sgRowHtml(r, i, have) {
   const inList = have.has(r.name);
   const on = inList ? false : sug.checked[r.name] ?? r.checked;
-  return `<label class="sg-row${r.over_all ? ' is-off' : ''}"><input type="checkbox" data-sug="${i}"${on ? ' checked' : ''}${inList ? ' disabled' : ''}>
+  return `<label class="c-pick-row${r.over_all ? ' is-off' : ''}"><input type="checkbox" data-sug="${i}"${on ? ' checked' : ''}${inList ? ' disabled' : ''}>
     <span><b>${esc(r.name)}</b> <span class="muted">${esc(r.where)}</span>${inList ? ' <span class="c-tag c-tag--info">已在候选站</span>' : ''}
       <small>${outboundOn() ? '到目的地约' : '从目的地到站约'} ${r.to_venue == null ? '?' : fmtMin(r.to_venue)}</small>${sgTags(r)}</span></label>`;
 }
@@ -1874,7 +1830,7 @@ function renderSugOut() {
   html += `<p class="sg-line"><b>搜了 ${searched} 个圈（地点搜索 ${out.summary.searches} 次），找到 ${out.summary.found} 个可用的站${esc(dropText)}${moreText}。</b></p>
     <p class="muted sg-line">这次的设置：${esc(sgSummary(S, sgDriverCount(S)))}</p>`;
   for (const d of out.summary.skipped_drivers) html += `<div class="c-alert c-alert--warn"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>${esc(d.driver)}：${esc(d.reason)}</div></div>`;
-  if (out.notes.length) html += `<div class="c-callout"><ul class="sg-notes">${out.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+  if (out.notes.length) html += `<div class="c-callout"><ul class="c-callout__list">${out.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
   if (out.stations.length) {
     html += `<p class="muted sg-line">按「${esc(sgChoiceLabel('sort', S.sort))}」排序。标签是每位车主${outboundOn() ? '「家 → 站 → 目的地」' : '「目的地 → 站 → 家」'}比直达多绕的时间；超过各自上限的标灰，默认不勾选。勾上的会加入候选站，算方案时再按各自的上限决定谁去${outboundOn() ? '接' : '送'}。${outboundOn() ? '' : '只规划返程，顺路是指「目的地 → 站 → 车主家」。'}</p>
       ${out.stations.map((r, i) => sgRowHtml(r, i, have)).join('')}
@@ -1883,11 +1839,11 @@ function renderSugOut() {
     html += '<div class="c-empty">附近没找到可用的火车站，可以手动添加，或者看下面没列出的站。</div>';
   }
   if (out.more.length || dropped.length) {
-    html += `<details class="sg-more"><summary>没列出的站（${out.more.length + dropped.length} 个）</summary>`;
+    html += `<details class="c-fold"><summary>没列出的站（${out.more.length + dropped.length} 个）</summary>`;
     for (const [reason, list] of sgGroupBy(out.more)) {
-      html += `<h4 class="sg-h">${esc(reason)}（${list.length} 个）</h4>${sgReasonNote(reason, list)}${list.map((r) => {
+      html += `<h4 class="c-fold__title">${esc(reason)}（${list.length} 个）</h4>${sgReasonNote(reason, list)}${list.map((r) => {
         const j = out.more.indexOf(r);
-        return `<div class="sg-mrow"><span><b>${esc(r.name)}</b> <span class="muted">${esc(r.where)}</span>
+        return `<div class="c-fold__row"><span><b>${esc(r.name)}</b> <span class="muted">${esc(r.where)}</span>
           <small>${outboundOn() ? '到目的地约' : '从目的地到站约'} ${r.to_venue == null ? '?' : fmtMin(r.to_venue)}</small>${sgTags(r)}</span>
           ${have.has(r.name) ? '<span class="c-tag c-tag--info">已在候选站</span>' : `<button class="c-btn c-btn--sm" data-sg-more="${j}">加入</button>`}</div>`;
       }).join('')}`;
@@ -1895,7 +1851,7 @@ function renderSugOut() {
     if (dropped.length) {
       html += '<p class="muted sg-line">下面这些没有坐标，只列名字和原因。要用的话，点「+ 手动添加」搜站名。</p>';
       for (const [reason, list] of sgGroupBy(dropped)) {
-        html += `<h4 class="sg-h">${esc(reason)}（${list.length} 个）</h4>${sgReasonNote(reason, list)}<p class="sg-names">${list.map((d) => `${esc(d.name)}<span class="muted">（${esc(d.where)}）</span>`).join('、')}</p>`;
+        html += `<h4 class="c-fold__title">${esc(reason)}（${list.length} 个）</h4>${sgReasonNote(reason, list)}<p class="sg-names">${list.map((d) => `${esc(d.name)}<span class="muted">（${esc(d.where)}）</span>`).join('、')}</p>`;
       }
     }
     html += '</details>';
@@ -1966,19 +1922,19 @@ function suggestStations() {
   scheduleSugEstimate(0);
 }
 function sgShellHtml() {
-  return `<div class="sg" id="sgRoot">
+  return `<div class="c-settings" id="sgRoot">
     <section class="sg-set" aria-label="找站设置">
-      <div class="sg-sumrow"><p class="sg-sum" id="sgSummary"></p><button class="c-btn c-btn--sm" id="sgToggle" data-sg-toggle aria-expanded="false" aria-controls="sgPanel">改设置</button></div>
-      <div class="sg-panel" id="sgPanel" hidden></div>
+      <div class="c-settings__bar"><p class="c-settings__sum" id="sgSummary"></p><button class="c-btn c-btn--sm" id="sgToggle" data-sg-toggle aria-expanded="false" aria-controls="sgPanel">改设置</button></div>
+      <div class="c-settings__panel" id="sgPanel" hidden></div>
     </section>
-    <div class="sg-foot">
+    <div class="c-settings__foot">
       <div id="sgEst" aria-live="polite"></div>
-      <div class="sg-act">
+      <div class="c-settings__actions">
         <button class="c-btn c-btn--primary" id="sgGo" data-sg-go>开始找</button>
         <label class="c-switch"><input type="checkbox" role="switch" data-sg-layer${sug.layerOn ? ' checked' : ''}><span class="c-switch__track"></span>在地图上显示找站过程</label>
         <button class="c-btn c-btn--sm sg-peek" data-sg-map>去地图上看</button>
       </div>
-      <p class="c-field__hint sg-why" id="sgWhy" hidden></p>
+      <p class="c-field__hint c-why" id="sgWhy" hidden></p>
     </div>
     <div id="sgNotes"></div>
     <div id="sgOut"></div>

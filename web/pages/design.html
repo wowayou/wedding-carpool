@@ -193,6 +193,90 @@
     </div>
   </section>
 
+  <section class="c-section" id="suggest-parts">
+    <h2>设置面板、估算和结果列表</h2>
+    <p class="c-muted">编辑页「推荐车站」抽屉里的做法，规范见 <code>docs/design-system.md</code> 的「交互规范」。下面是静态示例；真实页面里字段由 <code>config-fields.json</code> 生成。</p>
+    <h3>设置面板：一行摘要，点按钮展开分组</h3>
+    <div class="dg-demo">
+      <div class="c-settings">
+        <div class="c-settings__bar"><p class="c-settings__sum">目的地周边 90 公里 · 沿 2 位车主的路线每 30 公里搜 25 公里 · 按车主最少绕路 <span class="c-tag c-tag--accent">改了 1 项</span></p><button class="c-btn c-btn--sm" type="button" aria-expanded="true" aria-controls="dgsPanel">收起设置</button></div>
+        <div class="c-settings__panel" id="dgsPanel">
+          <fieldset class="c-settings__group"><legend>在哪找</legend>
+            <div class="c-settings__grid">
+              <div class="c-field c-settings__field c-settings__field--wide">
+                <span class="c-field__label c-sr-only" id="dgs-areas-l">在哪些地方找</span>
+                <div class="c-choices" role="group" aria-labelledby="dgs-areas-l">
+                  <label class="c-check c-check--pill"><input type="checkbox" checked> 目的地周边</label>
+                  <label class="c-check c-check--pill"><input type="checkbox" checked> 车主出发地附近</label>
+                  <label class="c-check c-check--pill"><input type="checkbox"> 乘客出发地附近</label>
+                </div>
+              </div>
+              <div class="c-field c-settings__field">
+                <label class="c-field__label" for="dgs-radius">目的地周边多大范围</label>
+                <div class="c-unit-input"><input class="c-input" id="dgs-radius" type="number" placeholder="90" aria-describedby="dgs-radius-hint"><span class="c-unit-input__unit" aria-hidden="true">公里</span></div>
+                <span class="c-field__hint" id="dgs-radius-hint">不填就用默认值 90</span>
+              </div>
+              <div class="c-field c-settings__field has-error">
+                <label class="c-field__label" for="dgs-home">出发地附近多大范围</label>
+                <div class="c-unit-input"><input class="c-input" id="dgs-home" type="number" value="500" aria-invalid="true" aria-describedby="dgs-home-err"><span class="c-unit-input__unit" aria-hidden="true">公里</span></div>
+                <span class="c-field__error" id="dgs-home-err">要在 5 到 80 公里之间，现在会按 80 算</span>
+              </div>
+            </div>
+          </fieldset>
+          <fieldset class="c-settings__group"><legend>车主路上</legend>
+            <div class="c-field c-settings__field">
+              <span class="c-field__label" id="dgs-cover-l">车主路上怎么圈范围</span>
+              <div class="c-choices" role="radiogroup" aria-labelledby="dgs-cover-l">
+                <label class="c-check c-check--pill"><input type="radio" name="dgs-cover" checked> 沿路线取点</label>
+                <label class="c-check c-check--pill"><input type="radio" name="dgs-cover"> 绕路上限内全覆盖</label>
+              </div>
+            </div>
+            <div class="c-field c-settings__field">
+              <span class="c-field__label" id="dgs-sort-l">结果怎么排</span>
+              <div class="c-choices c-choices--stack" role="radiogroup" aria-labelledby="dgs-sort-l">
+                <label class="c-check"><input type="radio" name="dgs-sort" checked> 车主最少绕路</label>
+                <label class="c-check"><input type="radio" name="dgs-sort"> 离目的地最近</label>
+              </div>
+            </div>
+          </fieldset>
+          <button class="c-btn c-btn--sm" type="button">恢复默认</button>
+        </div>
+        <div class="c-settings__foot">
+          <div aria-live="polite">
+            <p class="c-estimate"><b>这次大约要 106–318 次地点搜索（单次上限 20），另查 2 条车主路线</b></p>
+            <div class="c-alert c-alert--warn">{{icon:alert}}<div>这次至少要 106 次地点搜索，超过单次上限 20 次。把范围调小，或者把上限调高。</div></div>
+          </div>
+          <div class="c-settings__actions">
+            <button class="c-btn c-btn--primary" type="button" disabled>开始找</button>
+            <label class="c-switch"><input type="checkbox" role="switch" checked><span class="c-switch__track"></span>在地图上显示找站过程</label>
+          </div>
+          <p class="c-field__hint c-why">估算超过单次上限，先把范围调小，或者调高上限。</p>
+          <p class="c-field__hint c-why c-why--info">试玩不能实际搜索，新建行程后就能用。</p>
+        </div>
+      </div>
+    </div>
+    <h3>结果行、标签和折叠区</h3>
+    <p class="c-muted">标签按语义着色：最好的用强调色并加粗，可用的用 ok，超限的标灰虚线，全部超限的用 danger。</p>
+    <div class="dg-demo">
+      <label class="c-pick-row"><input type="checkbox" checked><span><b>泾县站</b> <span class="c-muted">老张路上</span><small>到目的地约 1 小时 46 分</small>
+        <span class="c-tags">
+          <span class="c-tag c-tag--accent c-tag--best">老王 +12 分</span>
+          <span class="c-tag c-tag--ok">小赵 +18 分</span>
+          <span class="c-tag c-tag--over">老张 +25 分 · 超过上限</span>
+        </span></span></label>
+      <label class="c-pick-row is-off"><input type="checkbox"><span><b>绩溪北站</b> <span class="c-muted">目的地周边</span><small>到目的地约 40 分</small>
+        <span class="c-tags"><span class="c-tag c-tag--over">老王 +70 分 · 超过上限</span><span class="c-tag c-tag--danger">车主都要绕很远</span></span></span></label>
+      <details class="c-fold" open><summary>没列出的站（3 个）</summary>
+        <h4 class="c-fold__title">超过显示数量（2 个）</h4>
+        <div class="c-fold__row"><span><b>黟县站</b> <span class="c-muted">老王路上</span><small>到目的地约 55 分</small></span><button class="c-btn c-btn--sm" type="button">加入</button></div>
+        <div class="c-fold__row"><span><b>歙县站</b> <span class="c-muted">目的地周边</span><small>到目的地约 30 分</small></span><span class="c-tag c-tag--info">已在候选站</span></div>
+        <h4 class="c-fold__title">12306 里没有（1 个）</h4>
+        <p class="c-hint" style="margin: 0 0 var(--sp-2)">莘庄（目的地周边）：没有坐标，只列名字和原因。</p>
+      </details>
+      <div class="c-callout" style="margin: var(--sp-4) 0 0"><ul class="c-callout__list"><li>沿路取点有缝隙：两圈之间可能漏掉小站。</li></ul></div>
+    </div>
+  </section>
+
   <section class="c-section" id="structure">
     <h2>页面结构</h2>
     <p class="c-muted">本页的页头和页脚就是站点页头页脚（<code>web/partials/</code>）：页头右侧是「试玩」和「新建行程」，页脚左边是品牌和引导行、右边四列链接，最下面是只用语义变量描出的 carpool 大字标。编辑页和管理页用精简页头，不加页脚：</p>
