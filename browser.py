@@ -116,6 +116,11 @@ class TryAmap:
     def drive_path(self, places: list[carpool.Place], max_points: int = 600) -> list[list[float]]:
         return [[p.lat, p.lng] for p in places]
 
+    def drive_routes(self, places: list[carpool.Place], strategy: int = 0, alt: bool = False, max_points: int = 600) -> list[dict]:
+        """试玩：只有一条直线路线，里程按直线乘折算系数（找站的估算用）。"""
+        km = sum(carpool.km_between(a, b) for a, b in zip(places, places[1:])) * self.DETOUR
+        return [{"path": self.drive_path(places), "km": km, "minutes": km / self.SPEED_KMH * 60 + self.CITY_MIN}]
+
 
 BATCH_LIMIT = 40  # Worker 免费套餐单次请求最多 50 个子请求
 
@@ -146,7 +151,7 @@ def handle(method: str, args_json: str) -> str:
             result = {"ok": True}
         elif method == "suggest":
             valid = set(args["valid_names"]) if args.get("valid_names") else None
-            result = service.suggest_stations(args["config"], amap, valid)
+            result = service.suggest_stations(args["config"], amap, valid, plan_only=bool(args.get("plan_only")))
         elif method == "plan":
             _last = service.compute(args["config"], amap)
             result = service.plan_payload(_last)

@@ -27,7 +27,7 @@
   {"path": "return.date", "type": "date", "label": "返程日期", "section": "return", "placeholder": "YYYY-MM-DD", "default_note": "同出发日期", "hint": "只规划返程时必填"},
   {"path": "options.suggest.areas", "type": "multi", "label": "在哪些地方找", "section": "suggest", "default": ["dest", "owner_home", "owner_route"], "choices": [{"value": "dest", "label": "目的地周边"}, {"value": "owner_home", "label": "车主出发地附近"}, {"value": "owner_route", "label": "车主路上"}, {"value": "rider_home", "label": "乘客出发地附近"}]},
   {"path": "options.suggest.route_cover", "type": "choice", "label": "车主路上怎么圈范围", "section": "suggest", "default": "along", "choices": [{"value": "along", "label": "沿路线取点"}, {"value": "detour", "label": "绕路上限内全覆盖"}], "hint": "全覆盖按每位车主的绕路上限圈出范围，更全，但搜索次数更多"},
-  {"path": "options.suggest.dest_radius_km", "type": "number", "label": "目的地周边多大范围", "section": "suggest", "default": 100, "min": 30, "max": 150, "unit": "公里"},
+  {"path": "options.suggest.dest_radius_km", "type": "number", "label": "目的地周边多大范围", "section": "suggest", "default": 90, "min": 30, "max": 150, "unit": "公里"},
   {"path": "options.suggest.home_radius_km", "type": "number", "label": "出发地附近多大范围", "section": "suggest", "default": 30, "min": 10, "max": 50, "unit": "公里"},
   {"path": "options.suggest.route_step_km", "type": "number", "label": "车主路上每隔多远找一次", "section": "suggest", "default": 30, "min": 10, "max": 60, "unit": "公里"},
   {"path": "options.suggest.route_radius_km", "type": "number", "label": "车主路上每次找多大范围", "section": "suggest", "default": 25, "min": 5, "max": 60, "unit": "公里", "greater_than": {"path": "options.suggest.route_step_km", "factor": 0.5}, "hint": "要大于间隔的一半，两圈之间才连得上"},
