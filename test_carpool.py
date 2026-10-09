@@ -5,10 +5,12 @@
     python3 -m unittest -v test_carpool.py
 """
 
+import contextlib
 import datetime as dt
 import io
 import json
 import math
+import os
 import random
 import re
 import tempfile
@@ -2006,6 +2008,181 @@ class CliTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             carpool.main(["trip.example.toml", "--key", ""])
         self.assertEqual(ctx.exception.code, 2)
+
+
+# ---------- 金标准：固定报告、方案页、界面数据的现有输出 ----------
+
+GOLDEN_DIR = Path(__file__).parent / "tests" / "golden"
+GOLDEN_GENERATED = dt.datetime(2026, 10, 9, 12, 0)  # 方案页的「生成时间」固定，否则每次都变
+GOLDEN_EXPIRES = dt.date(2026, 10, 23)              # 方案页的「自动删除日期」固定
+
+
+class NoPathAmap(FakeAmap):
+    """取不到某位车主的行车轨迹（高德没返回路线）：界面数据里 path 为空，方案页退回直线示意。"""
+
+    def __init__(self, missing, **kw):
+        super().__init__(**kw)
+        self.missing = missing
+
+    def drive_path(self, places):
+        if any(self.missing in p.name for p in places):
+            raise carpool.AmapError("没有轨迹")
+        return super().drive_path(places)
+
+
+def _golden_return(c, **ret):
+    c["return"] = {"enabled": True, "depart_time": "18:00", **ret}
+    return c
+
+
+def _golden_out_mixed():
+    # 有车次/没车次的方案、到家附近接、同站多人、打车（省钱）、车主有备注、乘客有备注
+    return config([person("老王", WANG, car_seats=3, note="尾号 1234"),
+                   person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→09:00"}, note="带一个行李箱"),
+                   person("小李", "116.5,30.4", trains={"近站": "G3 08:00→10:00"}),
+                   person("小赵", "117.6,30.0")], travel_date="2026-10-17"), FakeAmap()
+
+
+def _golden_out_taxi_save():
+    # 省钱拼车：同行 2 人的一组、没填车次的人（按同一时间算）、站上拼满 4 人；另一个站只有一位没填车次的人（不知道时刻）
+    return config([person("甲", "114.0,34.0", trains={"近站": "G1 07:00→10:00"}, stations=["近站"]),
+                   person("乙", "114.0,34.0", stations=["近站"]),
+                   person("丙家", "114.0,34.0", party=2, trains={"近站": "G9 07:00→10:10"}, stations=["近站"]),
+                   person("丁", "113.0,35.0", stations=["西站"])], travel_date="2026-10-17", taxi_mode="save"), FakeAmap()
+
+
+def _golden_out_taxi_fast():
+    # 各人走自己最快的站，分成两辆车
+    return config([person("老王", WANG, car_seats=3),
+                   person("小李", "116.5,30.4", trains={"西站": "G2 06:30→08:30", "近站": "G4 07:00→09:30"}),
+                   person("小陈", "114.0,34.0", trains={"西站": "G6 06:00→09:00", "近站": "G8 06:00→08:00"})],
+                  travel_date="2026-10-17", taxi_mode="fast"), FakeAmap()
+
+
+def _golden_out_drivers():
+    # 只有车主：没有要接的人；一位车主 0 个空座；一位车主的行车轨迹取不到
+    return config([person("老王", WANG, car_seats=3), person("老刘", "118.0,29.0", car_seats=0)],
+                  travel_date="2026-10-17"), NoPathAmap("老刘")
+
+
+def _golden_out_stranded():
+    # 有人没有任何能去的站（待安排），还有一个人搭车
+    return config([person("老王", WANG, car_seats=3),
+                   person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→09:00"}),
+                   person("小钱", "114.0,34.0", stations=["西站"], pickup_at_home=False),  # 搭车去西站，没填车次
+                   person("小孙", "114.0,34.0", stations=["不存在站"], pickup_at_home=False, note="只能自己想办法")],
+                  travel_date="2026-10-17"), FakeAmap()
+
+
+def _golden_back_people():
+    return [person("老王", WANG, car_seats=3, leave_time="18:45"),   # 18:45 才走，乘客要等
+            person("老刘", "118.0,29.0", car_seats=0),                # 不能载人，直接回家
+            person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站22:30→小陈家23:30"}, leave_time="18:00"),
+            person("小周", "117.5,30.0"),                              # 顺路送到家附近
+            person("小孙", "114.0,34.0", stations=["西站"], pickup_at_home=False),  # 没填返程车次
+            person("甲", "113.0,35.0", return_trains={"西站": "G5 西站22:30→a"}, leave_time="19:30", stations=["西站"]),
+            person("乙", "113.0,35.0", return_trains={"西站": "G6 西站22:40→b"}, leave_time="19:40", stations=["西站"]),
+            person("小赵", "113.5,35.0", return_trains={"近站": "G7 近站18:30→b"}, stations=["近站"])]  # 赶不上，待安排
+
+
+def _golden_back_only():
+    c = config(_golden_back_people(), outbound=False)
+    return _golden_return(c, max_wait_min=60, date="2026-10-18"), NoPathAmap("老刘")
+
+
+def _golden_both():
+    people = _golden_back_people()
+    people[2]["trains"] = {"西站": "G1 07:00→09:00"}
+    people[5]["trains"] = {"西站": "G3 06:30→08:30"}
+    return _golden_return(config(people, travel_date="2026-10-17"), max_wait_min=60), FakeAmap()
+
+
+def _golden_back_taxi():
+    # 车主不开车回去：返程全部打车，离场时间差得远的各打各的车，赶不上车次的待安排
+    return _golden_return(config([person("老王", WANG, car_seats=3, return_drives=False),
+                                  person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站22:30→a"}, leave_time="17:30", stations=["西站"]),
+                                  person("小李", "113.0,35.0", return_trains={"西站": "G2 西站22:30→b"}, leave_time="19:00", stations=["西站"]),
+                                  person("小孙", "114.0,34.0", leave_time="20:00", stations=["西站"], pickup_at_home=False),  # 没填返程车次，离场晚，单独一辆
+                                  person("小赵", "113.5,35.0", return_trains={"西站": "G7 西站19:00→c"}, stations=["西站"])],
+                                 travel_date="2026-10-17")), FakeAmap()
+
+
+def _golden_two_cars():
+    # 两位车主各带一位乘客（去程、返程都是）；乘客和车主同时离场（不用等）、车主晚走（要等）
+    c = config([person("老王", WANG, car_seats=1),
+                person("老刘", "118.0,29.0", car_seats=1, leave_time="18:20"),
+                person("小李", "116.5,30.0", trains={"西站": "G1 07:00→09:00"}, return_trains={"西站": "G2 西站22:30→a"}),
+                person("小周", "118.0,29.5", trains={"近站": "G3 08:00→10:00"}, return_trains={"近站": "G4 近站22:30→b"}, leave_time="18:00")],
+               travel_date="2026-10-17", max_stops=2)
+    return _golden_return(c, max_wait_min=60), FakeAmap()
+
+
+# 场景名 -> (配置和假高德, 方案页要生成的「去程 i, 返程 j」组合；None 表示这一段没规划)
+GOLDEN_SCENARIOS = {
+    "out_mixed": (_golden_out_mixed, [(0, None), (1, None), (2, None)]),
+    "out_taxi_save": (_golden_out_taxi_save, [(0, None)]),
+    "out_taxi_fast": (_golden_out_taxi_fast, [(0, None), (2, None)]),
+    "out_drivers": (_golden_out_drivers, [(0, None)]),
+    "out_stranded": (_golden_out_stranded, [(0, None)]),
+    "back_only": (_golden_back_only, [(None, 0), (None, 1)]),
+    "back_taxi": (_golden_back_taxi, [(None, 0)]),
+    "both": (_golden_both, [(0, 0), (1, 1), (2, 0)]),
+    "two_cars": (_golden_two_cars, [(0, 0), (1, 1)]),
+}
+
+
+def golden_outputs(name: str) -> dict[str, bytes]:
+    """一个场景的全部输出：{文件名: 内容}。报告、界面数据各一份，方案页每个组合一份。"""
+    build, combos = GOLDEN_SCENARIOS[name]
+    cfg, amap = build()
+    with contextlib.redirect_stderr(io.StringIO()):  # 进度提示不属于输出
+        state = service.compute(cfg, amap)
+    payload = service.plan_payload(state)
+    out = {
+        "report.md": carpool.render(state["trip"], state["pts"], state["T"], state["plans"]),
+        "payload.json": json.dumps(payload, sort_keys=True, indent=1, ensure_ascii=False) + "\n",
+    }
+    for i, j in combos:
+        label = "-".join(f"{k}{n + 1}" for k, n in (("o", i), ("b", j)) if n is not None)
+        out[f"share-{label}.html"] = share.render_share(state, i or 0, j or 0, generated=GOLDEN_GENERATED, expires=GOLDEN_EXPIRES)
+    return {k: v.encode("utf-8") for k, v in out.items()}
+
+
+class GoldenTest(unittest.TestCase):
+    """金标准：报告、方案页、界面数据的现有输出逐字节固定下来，重构时用来证明「一个字都没变」。
+    重新生成（只在输出该变时才做，并检查 git diff）：GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest"""
+
+    def check(self, name):
+        got = golden_outputs(name)
+        folder = GOLDEN_DIR / name
+        if os.environ.get("GOLDEN_UPDATE") == "1":
+            folder.mkdir(parents=True, exist_ok=True)
+            for old in folder.iterdir():
+                if old.name not in got:
+                    old.unlink()
+            for file, data in got.items():
+                (folder / file).write_bytes(data)
+            return
+        actual = Path(tempfile.gettempdir()) / "wedding-carpool-golden-actual" / name
+        for file, data in got.items():
+            with self.subTest(scenario=name, file=file):
+                want = (folder / file).read_bytes() if (folder / file).exists() else None
+                if want == data:
+                    continue
+                actual.mkdir(parents=True, exist_ok=True)
+                (actual / file).write_bytes(data)
+                hint = (f"还没有这个金标准文件。确认输出正确后再生成：GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest"
+                        if want is None else f"看差异：diff -u tests/golden/{name}/{file} {actual / file}")
+                self.fail(f"场景 {name} 的 {file} 和金标准不一致。{hint}")
+        with self.subTest(scenario=name, file="（多余的文件）"):
+            extra = sorted(f.name for f in folder.iterdir() if f.name not in got) if folder.exists() else []
+            self.assertEqual(extra, [], f"tests/golden/{name}/ 里有现在不会生成的文件：{extra}")
+
+    def test_scenarios(self):
+        for name in GOLDEN_SCENARIOS:
+            self.check(name)
+        folders = sorted(f.name for f in GOLDEN_DIR.iterdir()) if GOLDEN_DIR.exists() else []
+        self.assertEqual(folders, sorted(GOLDEN_SCENARIOS), "tests/golden/ 下的文件夹要和场景一一对应")
 
 
 if __name__ == "__main__":
