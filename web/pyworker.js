@@ -10,11 +10,15 @@ const ready = (async () => {
   self.postMessage({ progress: { label: '下载计算环境（第一次约 12MB）', done: null, total: null } });
   const py = await loadPyodide({ indexURL: PYODIDE }); // Worker 里推断不出文件位置，要显式给
   self.postMessage({ progress: { label: '计算环境就绪，开始计算', done: null, total: null } });
-  for (const name of ['carpool.py', 'share.py', 'service.py', 'browser.py', 'config-fields.json']) {
+  // 要加载哪些文件由构建时的清单决定（源头是 web/py-manifest.json），新增 Python 模块不用改这里
+  const listRes = await fetch('py/manifest.json', { cache: 'no-cache' });
+  if (!listRes.ok) throw new Error(`加载文件清单失败（${listRes.status}）`);
+  const { files } = await listRes.json();
+  await Promise.all(files.map(async (name) => {
     const res = await fetch('py/' + name, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`加载 ${name} 失败（${res.status}）`);
     py.FS.writeFile(name, await res.text());
-  }
+  }));
   py.runPython('import sys\nif "." not in sys.path: sys.path.insert(0, ".")');
   return py.pyimport('browser').handle;
 })();

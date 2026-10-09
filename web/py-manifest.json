@@ -1,0 +1,19 @@
+{
+  "note": "网页版（Pyodide）要加载的文件：构建时复制到 dist/py/ 并生成 dist/py/manifest.json，web/pyworker.js 按它逐个下载。新增或改名 Python 模块时只改这里；test_carpool.py 会核对它和仓库根目录的模块一致。ui.py（本地版界面）和测试不在其内。",
+  "files": [
+    "carpool.py",
+    "base.py",
+    "geo.py",
+    "model.py",
+    "routes.py",
+    "taxi.py",
+    "solver.py",
+    "timetable.py",
+    "reporting.py",
+    "tomlio.py",
+    "share.py",
+    "service.py",
+    "browser.py",
+    "config-fields.json"
+  ]
+}
