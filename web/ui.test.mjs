@@ -176,9 +176,9 @@ test('试玩模式：地址只读、没有搜索按钮和清除坐标，车站�
   assert.match(off.stationRow({ name: '黄山北站', city: '', location: '' }, 0), /data-search="stations\.0"/);
 });
 
-test('试玩模式：不能加成员和车站、不能推荐车站，横幅有恢复示例和新建行程', () => {
+test('试玩模式：不能加成员和车站、不能实际推荐车站（但能打开看设置），横幅有恢复示例和新建行程', () => {
   const code = scripts(ui).at(-1);
-  for (const guard of ['function addItem(kind) {\n  if (mode === \'try\') return;', 'async function suggestStations() {\n  if (mode === \'try\') return;', 'async function importConfig(file) {\n  if (mode === \'try\') return;']) {
+  for (const guard of ['function addItem(kind) {\n  if (mode === \'try\') return;', 'async function importConfig(file) {\n  if (mode === \'try\') return;']) {
     assert.ok(code.includes(guard), `缺少试玩守卫：${guard.split('\n')[0]}`);
   }
   const form = /function renderForm\(\) \{[\s\S]*?\n\}\n/.exec(code)[0];
@@ -325,4 +325,237 @@ test('冲突提示里的中文名取自定义（含找站设置）', () => {
   assert.equal(labelOf('venue.address'), '目的地地址');
   const renamed = run(fieldsFile.fields.map((f) => (f.path === 'options.max_stops' ? { ...f, label: '改名后' } : f)));
   assert.equal(renamed('options.max_stops'), '选项「改名后」');
+});
+
+// ---------- 推荐车站：找站设置、先估算、把过程摊开（v3.8 切片 C） ----------
+// 把「推荐车站」那一整段脚本放进沙箱，页面元素用最小的替身
+function sugSandbox({ fields = fieldsFile.fields, cfg = { options: {}, venue: {}, stations: [], people: [] }, mode = 'online', backend = {} } = {}) {
+  const code = scripts(ui).at(-1);
+  const section = /\/\/ ---------- 推荐车站 ----------[\s\S]*?(?=\/\/ ---------- 计算方案 ----------)/.exec(code);
+  assert.ok(section, '找不到推荐车站那一段脚本');
+  const els = {};
+  const el = (sel) => (els[sel] ??= { sel, dataset: {}, hidden: false, innerHTML: '', textContent: '', disabled: false, classList: { toggle() {}, add() {} }, setAttribute() {}, querySelector: () => null, querySelectorAll: () => [] });
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ctx = vm.createContext({ cfg, mode, $: el, esc, same: (a, b) => JSON.stringify(a) === JSON.stringify(b), fmtMin: (m) => `${m}分钟`, outboundOn: () => true,
+    parseLoc: () => null, backend, toast() {}, markDirty() {}, openDrawer() {}, startProgress() {}, stopProgress() {}, applyResolved() {}, isQuotaError: () => false,
+    showQuota() {}, themeVar: () => '#000', map: null, L: undefined, document: { activeElement: null, querySelector: () => null }, setTimeout, clearTimeout });
+  vm.runInContext(`${fieldsPrelude(fields)}\n${section[0]}`, ctx);
+  return { ctx, els, run: (expr) => vm.runInContext(expr, ctx) };
+}
+const suggestFields = fieldsFile.fields.filter((f) => f.path.startsWith('options.suggest.'));
+const plain = (x) => JSON.parse(JSON.stringify(x)); // 沙箱里造出来的对象换成本域的
+
+test('找站设置的中文名、默认值、可选项、说明都取自 config-fields.json，页面里没有副本，改定义界面就跟着变', () => {
+  assert.deepEqual(plain(sugSandbox().run('sgKeys()')).sort(), suggestFields.map((f) => f.path.slice('options.suggest.'.length)).sort(), '设置面板的分组要把定义里的每一项都列出来');
+  // 页面源码里不能再写一份定义里的文字
+  for (const f of suggestFields) {
+    assert.ok(!ui.includes(f.label), `页面里写死了「${f.label}」`);
+    for (const c of (f.choices || []).filter((x) => x.label.length >= 8)) assert.ok(!ui.includes(c.label), `页面里写死了选项「${c.label}」`);
+    if (f.hint) assert.ok(!ui.includes(f.hint), `页面里写死了说明「${f.hint}」`);
+  }
+  const base = sugSandbox();
+  const html = (box, key) => box.run(`sgFieldHtml('${key}')`);
+  const radius = html(base, 'dest_radius_km');
+  assert.match(radius, /目的地周边多大范围/);
+  assert.match(radius, /placeholder="90"/);
+  assert.match(radius, /min="30" max="150"/);
+  assert.match(radius, /sg-suffix" aria-hidden="true">公里</);
+  assert.match(html(base, 'route_strategy'), /<option value="12">躲避拥堵<\/option>/);
+  assert.match(html(base, 'route_cover'), /绕路上限内全覆盖/);
+  assert.match(html(base, 'route_cover'), /全覆盖按每位车主的绕路上限圈出范围/); // 说明
+  // 改定义：名字、默认值、范围、单位、选项、说明都跟着变
+  const changed = fieldsFile.fields.map((f) => {
+    if (f.path === 'options.suggest.dest_radius_km') return { ...f, label: '改了名的范围', default: 77, min: 11, max: 222, unit: '里' };
+    if (f.path === 'options.suggest.route_strategy') return { ...f, choices: [...f.choices, { value: 99, label: '新加的走法' }] };
+    if (f.path === 'options.suggest.alt_routes') return { ...f, hint: '改过的说明' };
+    return f;
+  });
+  const box = sugSandbox({ fields: changed });
+  const r2 = html(box, 'dest_radius_km');
+  assert.match(r2, /改了名的范围/);
+  assert.match(r2, /placeholder="77"/);
+  assert.match(r2, /min="11" max="222"/);
+  assert.match(r2, /sg-suffix" aria-hidden="true">里</);
+  assert.match(html(box, 'route_strategy'), /<option value="99">新加的走法<\/option>/);
+  assert.match(html(box, 'alt_routes'), /改过的说明/);
+  // 一行摘要里的名字也取自定义
+  const fixed = box.run(`sgSummary({ areas: ['dest', 'owner_route'], dest_radius_km: 90, route_cover: 'along', route_step_km: 30, route_radius_km: 25, sort: 'detour' }, 2)`);
+  assert.equal(fixed, '目的地周边 90 里 · 沿 2 位车主的路线每 30 公里搜 25 公里 · 按车主最少绕路');
+  const defaults = base.run('sgSummary(sgEffective(), 2)');
+  assert.equal(defaults, '目的地周边 90 公里 · 车主出发地附近 30 公里 · 沿 2 位车主的路线每 30 公里搜 25 公里 · 按车主最少绕路');
+});
+
+test('找站设置只存和默认值不同的项，全是默认时不留 suggest', () => {
+  const cfg = { options: { max_detour_min: 30 }, venue: {}, stations: [], people: [] };
+  const box = sugSandbox({ cfg });
+  box.run(`setSuggest('dest_radius_km', 60)`);
+  assert.deepEqual(plain(cfg.options.suggest), { dest_radius_km: 60 });
+  box.run(`setSuggest('dest_radius_km', 90)`); // 改回默认：删掉
+  assert.equal(cfg.options.suggest, undefined);
+  assert.equal(cfg.options.max_detour_min, 30); // 别的选项不动
+  box.run(`setSuggest('filter_12306', false)`);
+  box.run(`setSuggest('filter_12306', true)`);
+  box.run(`setSuggest('route_cover', 'detour')`);
+  box.run(`setSuggest('areas', ['owner_route', 'dest', 'owner_home'])`); // 和默认一样，只是顺序不同
+  box.run(`setSuggest('drivers', ['老王'])`);
+  assert.deepEqual(plain(cfg.options.suggest), { route_cover: 'detour', drivers: ['老王'] });
+  box.run(`setSuggest('areas', ['rider_home', 'dest'])`);
+  assert.deepEqual(plain(cfg.options.suggest.areas), ['dest', 'rider_home']); // 按定义里的顺序存
+  box.run(`setSuggest('drivers', [])`); // 空名单就是全部车主，是默认
+  box.run(`setSuggest('areas', ['dest', 'owner_home', 'owner_route'])`);
+  box.run(`setSuggest('route_cover', 'along')`);
+  assert.equal(cfg.options.suggest, undefined);
+  box.run(`setSuggest('max_searches', '')`); // 清空输入框：回到默认
+  assert.equal(cfg.options.suggest, undefined);
+  assert.match(scripts(ui).at(-1), /markDirty\(\);\n  sgRefresh\(\);/); // 改了设置要 markDirty，一起编辑的人才看得到
+});
+
+test('超出范围的输入就地提示，并说清楚会按什么算', () => {
+  const cfg = { options: { suggest: { dest_radius_km: 500, max_searches: 3.5, show_count: 10, checked_count: 12, route_step_km: 60 } }, venue: {}, stations: [], people: [] };
+  const problems = plain(sugSandbox({ cfg }).run('sgProblems()'));
+  assert.match(problems.dest_radius_km, /30 到 150 公里之间.*按 150 算/);
+  assert.match(problems.max_searches, /要填整数/);
+  assert.match(problems.checked_count, /比显示个数（10）还多，现在会按 10 算/);
+  assert.match(problems.route_radius_km, /要大于 30 公里/); // 间隔 60、范围默认 25：两圈连不上
+  assert.deepEqual(plain(sugSandbox().run('sgProblems()')), {});
+  assert.match(ui, /class="c-field sg-f/); // 就地提示用 c-field 的错误样式
+  assert.match(ui, /class="c-field__error" id="\$\{id\}-err"/);
+});
+
+test('三种模式都把 plan_only 传给后端', async () => {
+  const code = scripts(ui).at(-1);
+  const m = /const backend = \{[\s\S]*?\n\};\n/.exec(code);
+  assert.ok(m);
+  const run = async (mode, planOnly) => {
+    const sent = [];
+    const ctx = { mode, API: '/api/t/x', api: async (path, body) => { sent.push(['api', path, body]); return {}; }, py: async (method, args) => { sent.push(['py', method, args]); return {}; },
+      load12306: async () => ({ stations: { 黄山北: 1 } }), URLSearchParams };
+    const b = vm.runInNewContext(`${m[0]}\nbackend`, ctx);
+    await b.suggest({ options: {} }, planOnly);
+    return sent[0];
+  };
+  assert.deepEqual(plain(await run('local', true)), ['api', '/api/suggest', { config: { options: {} }, plan_only: true }]);
+  assert.deepEqual(plain(await run('local', false)), ['api', '/api/suggest', { config: { options: {} }, plan_only: false }]);
+  for (const mode of ['online', 'try']) {
+    const [kind, method, args] = await run(mode, true);
+    assert.equal(kind + method, 'pysuggest');
+    assert.equal(args.plan_only, true);
+    assert.deepEqual([...args.valid_names], ['黄山北']);
+    assert.equal((await run(mode, false))[2].plan_only, false);
+  }
+});
+
+test('试玩模式：能估算，但「开始找」不能点，并写明原因；点了也不会调用后端搜索', async () => {
+  const box = sugSandbox({ mode: 'try', backend: { suggest: async () => { throw new Error('试玩不应该搜索'); } } });
+  box.run('sug').est = { estimate: { searches_min: 7, searches_max: 21, routes: 2, over_cap: false, may_exceed: false }, settings: { max_searches: 80 }, notes: [], trace: { circles: [] } };
+  box.run('renderSugEst()');
+  assert.equal(box.els['#sgGo'].disabled, true);
+  assert.match(box.els['#sgWhy'].textContent, /试玩不能实际搜索，新建行程后就能用/);
+  assert.equal(box.els['#sgWhy'].hidden, false);
+  assert.match(box.els['#sgEst'].innerHTML, /这次大约要 7–21 次地点搜索（单次上限 80），另查 2 条车主路线/);
+  await box.run('runSuggest()'); // 试玩直接返回，backend 里的 throw 不会触发
+  assert.equal(box.run('sug').running, false);
+  assert.equal(box.run('sug').error, null);
+  // 在线模式同样的估算，按钮可以点
+  const on = sugSandbox({ mode: 'online' });
+  on.run('sug').est = box.run('sug').est;
+  on.run('renderSugEst()');
+  assert.equal(on.els['#sgGo'].disabled, false);
+  assert.equal(on.els['#sgGo'].textContent, '开始找');
+  assert.equal(on.els['#sgWhy'].hidden, true);
+  // 打开推荐车站的入口在试玩里没有被挡住
+  assert.doesNotMatch(/function suggestStations\(\) \{[\s\S]*?\n\}\n/.exec(scripts(ui).at(-1))[0], /mode === 'try'\) return/);
+});
+
+test('估算超过单次上限：「开始找」不能点，用 c-alert--warn 写明原因；可能到上限只提醒', () => {
+  const trace = { circles: [{ kind: 'dest' }, { kind: 'dest' }, { kind: 'detour' }] };
+  const est = (over) => ({ estimate: { searches_min: 90, searches_max: 270, routes: 1, over_cap: over, may_exceed: true }, settings: { max_searches: 80 }, notes: ['这次至少要 90 次地点搜索，超过单次上限 80 次；把范围调小，或者调高上限'], trace });
+  const box = sugSandbox();
+  box.run('sug').est = est(true);
+  box.run('renderSugEst()');
+  assert.equal(box.els['#sgGo'].disabled, true);
+  assert.match(box.els['#sgEst'].innerHTML, /c-alert c-alert--warn/);
+  assert.match(box.els['#sgEst'].innerHTML, /超过单次上限 80 次（目的地周边 2 个圈，绕路上限内全覆盖 1 个圈）/);
+  assert.match(box.els['#sgWhy'].textContent, /超过单次上限/);
+  box.run('sug').est = est(false);
+  box.run('renderSugEst()');
+  assert.equal(box.els['#sgGo'].disabled, false);
+  assert.doesNotMatch(box.els['#sgEst'].innerHTML, /c-alert--warn/);
+  assert.match(box.els['#sgEst'].innerHTML, /翻页多的话，可能会到上限 80 次，到了就停/);
+  // 估算失败：显示原因和重试，不卡住，仍可以点开始找
+  box.run('sug').est = null;
+  box.run('sug').estErr = '高德接口报错：额度用完';
+  box.run('renderSugEst()');
+  assert.match(box.els['#sgEst'].innerHTML, /估算没成功：高德接口报错：额度用完/);
+  assert.match(box.els['#sgEst'].innerHTML, /data-sg-retry-est/);
+  assert.equal(box.els['#sgGo'].disabled, false);
+  assert.match(ui, /id="sgEst" aria-live="polite"/); // 估算放在 aria-live 区域里
+});
+
+test('抽屉里不再有和实现不符的那句话，换成如实的说明', () => {
+  assert.doesNotMatch(ui, /不会\$\{outboundOn\(\) \? '去接' : '去送'\}/);
+  assert.doesNotMatch(ui, /绕路超过各自上限的车主不会/);
+  assert.match(ui, /超过各自上限的标灰，默认不勾选。勾上的会加入候选站，算方案时再按各自的上限决定谁去/);
+});
+
+test('结果里每位车主各绕多少：超过上限标灰并写明，最顺路的突出，所有车主都超过的写「车主都要绕很远」', () => {
+  const box = sugSandbox();
+  const row = { name: '泾县站', where: '老张路上', to_venue: 106, checked: true, over_all: false,
+    detours: [{ driver: '老王', minutes: 12, limit: 30, over: false }, { driver: '老张', minutes: 25, limit: 20, over: true }, { driver: '小赵', minutes: 18, limit: 30, over: false }] };
+  const html = box.run(`sgTags(${JSON.stringify(row)})`);
+  assert.match(html, /c-tag--accent sg-best" title="[^"]*">老王 \+12 分</); // 最顺路
+  assert.match(html, /c-tag--ok" title="[^"]*">小赵 \+18 分</);
+  assert.match(html, /c-tag sg-over" title="[^"]*">老张 \+25 分 · 超过上限</);
+  assert.doesNotMatch(html, /车主都要绕很远/);
+  const all = box.run(`sgTags(${JSON.stringify({ ...row, over_all: true, detours: [{ driver: '老张', minutes: 70, limit: 20, over: true }] })})`);
+  assert.match(all, /车主都要绕很远/);
+  assert.match(all, /老张 \+[^<]*· 超过上限/);
+  // 「没列出的站」折叠，按原因分组；有坐标的能加入，没有坐标的提示手动添加
+  const code = scripts(ui).at(-1);
+  assert.match(code, /<details class="sg-more"><summary>没列出的站/);
+  assert.match(code, /data-sg-more="\$\{j\}">加入<\/button>/);
+  assert.match(code, /要用的话，点「\+ 手动添加」搜站名/);
+});
+
+test('「找站过程」图层：重新计算方案时清掉，关抽屉时隐藏', () => {
+  const code = scripts(ui).at(-1);
+  assert.match(/async function runPlan\(\) \{[\s\S]*?\n\}\n/.exec(code)[0], /clearSugLayer\(\);/);
+  const removed = [];
+  const cleared = [];
+  const box = sugSandbox();
+  box.ctx.map = { removeLayer: (l) => removed.push(l), hasLayer: () => true };
+  box.run('sugLayer = { clearLayers: () => cleared.push(1) }'.replace('cleared.push(1)', 'globalThis.__cleared = (globalThis.__cleared || 0) + 1'));
+  box.run('sug').peek = true;
+  box.run('clearSugLayer()');
+  assert.equal(box.ctx.__cleared, 1);
+  assert.equal(removed.length, 1);
+  assert.equal(box.run('sug').peek, false);
+  // 抽屉不在「推荐车站」上，或者开关关了：图层从地图上拿掉
+  const hide = (panel, layerOn) => {
+    const b = sugSandbox();
+    const gone = [];
+    b.ctx.map = { removeLayer: (l) => gone.push(l), hasLayer: () => true };
+    b.run('sugLayer = {}');
+    b.els['#drawer'] = { dataset: { panel }, hidden: panel === '' };
+    b.run('sug').layerOn = layerOn;
+    b.run('syncSugLayer()');
+    return gone.length;
+  };
+  assert.equal(hide('', true), 1); // 抽屉关了
+  assert.equal(hide('history', true), 1); // 开着别的面板
+  assert.equal(hide('suggest', false), 1); // 开关关了
+  assert.match(code, /function closeDrawer\(keepSug = false\) \{[\s\S]*?syncSugLayer\(\);/);
+  assert.match(code, /data-sg-layer\$\{sug\.layerOn \? ' checked' : ''\}/); // 开关，打开抽屉时默认开
+  assert.match(ui, /在地图上显示找站过程/);
+});
+
+test('推荐车站的样式：自己的类不带 c- 前缀并写明定稿后移走，颜色只用语义变量，可交互元素有焦点样式', () => {
+  const css = /\/\* 推荐车站：找站设置、估算、结果[\s\S]*?(?=\n  \.kv )/.exec(ui);
+  assert.ok(css, '找不到推荐车站的样式');
+  assert.match(css[0], /定稿后移到 design\.css（切片 E）/);
+  assert.doesNotMatch(css[0], /#[0-9a-fA-F]{3,8}\b/, '样式里不能写死颜色');
+  assert.doesNotMatch(css[0], /rgba?\(/);
+  assert.match(css[0], /sg-row:has\(input:focus-visible\)/);
+  assert.match(css[0], /sg-more > summary:focus-visible/);
+  assert.match(ui, /@media \(min-width: 960px\) \{ \.sg-peek \{ display: none; \} \}/);
 });
