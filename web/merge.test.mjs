@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// 页面里三方合并函数的测试：从 ui.html 里取出 merge3 单独跑。运行：npm test
-import { readFileSync } from 'node:fs';
+// 编辑页三方合并函数（web/editor/merge.js）的测试：直接 import merge3 跑。运行：npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-const html = readFileSync(new URL('../ui.html', import.meta.url), 'utf8');
-const src = ['clone', 'same', 'isPlain'].map((n) => html.match(new RegExp(`const ${n} = .*;`))[0]).join('\n')
-  + '\n' + html.match(/function merge3[\s\S]*?\n}\n/)[0];
-const merge3 = new Function(src + '; return merge3;')();
+import { merge3 } from './editor/merge.js';
 test('配置三方合并', () => {
 const base = { venue: { name: '饭店' }, people: [{ name: '老王', car_seats: 3 }, { name: '小陈' }] };
 // 改不同字段：都保留

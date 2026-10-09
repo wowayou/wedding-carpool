@@ -8,6 +8,7 @@ import { vendor } from './vendor.mjs';
 rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist/py', { recursive: true });
 cpSync('ui.html', 'dist/edit.html'); // 行程编辑页，Worker 把 /t/<行程> 指到这里
+cpSync('web/editor', 'dist/editor', { recursive: true }); // 编辑页的脚本模块（ES 模块，同源加载；ui.html 里是 <script type="module" src="/editor/main.js">）
 cpSync('web/pyworker.js', 'dist/pyworker.js');
 cpSync('web/stations12306.json', 'dist/stations12306.json');
 // 图标和首屏示例：站点根目录；/demo 是静态的示例方案页（虚构行程，由 demo 流程生成，不经过 Worker）
