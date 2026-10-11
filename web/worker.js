@@ -70,8 +70,9 @@ const ADMIN_OPS_LIMIT = 50; // 管理操作记录保留条数
 const TRACKED_TRIPS_LIMIT = 200; // 最近用过公共额度的行程，最多记这么多个
 const OWNER_RESERVE_RATIO = 0.8; // 公共额度用过八成后，当天还没用过公共额度的行程不再分配，留给已经在算的
 const CREATE_PER_DAY = 200;
-// 成功结果在 Cloudflare 节点上缓存：地点类变化慢，行车时间和路线跟路况走，缓存短一些
-const CACHE_SECONDS = { '/v3/distance': 1200, '/v3/direction/driving': 1200, '/v3/direction/transit/integrated': 3600 };
+// 成功结果在 Cloudflare 节点上短期缓存，只为短时间内不重复调用，最长 1 小时；行车时间和路线跟路况走，20 分钟
+const CACHE_SECONDS = { '/v3/distance': 1200, '/v3/direction/driving': 1200 };
+const CACHE_MAX_SECONDS = 3600;
 const BATCH_LIMIT = 40; // 免费套餐单次请求最多 50 个子请求
 const AMAP_QPS = 3; // 高德个人 Key 的每秒调用上限按 3 算
 const QUOTA_RE = /DAILY_QUERY_OVER_LIMIT|QUOTA_PLAN_RUN_OUT|SERVICE_EXPIRED/;
@@ -555,7 +556,7 @@ async function fetchAmap(origin, item, apiKey, quotaKey, env) { // quotaKey：�
     await env.DATA.put(quotaKey, String(until), { expiration: Math.floor(until / 1000) + 3600 }); // 过了次日零点就没用了，自动删除
   } else if (String(data.status) === '1' && globalThis.caches?.default) {
     await caches.default.put(cacheKeyOf(origin, item.path, item.query), new Response(JSON.stringify(data), {
-      headers: { 'content-type': 'application/json', 'cache-control': `max-age=${CACHE_SECONDS[item.path] ?? 7 * 86400}` },
+      headers: { 'content-type': 'application/json', 'cache-control': `max-age=${CACHE_SECONDS[item.path] ?? CACHE_MAX_SECONDS}` },
     }));
   }
   return data;

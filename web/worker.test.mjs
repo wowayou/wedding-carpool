@@ -181,6 +181,27 @@ test('高德代理：只放行白名单，按行程用对应的 Key', async () =
   assert.equal((await call(`${owner.base}/amap/v3/distance`)).status, 401);
 });
 
+test('高德结果的节点缓存：最长 1 小时，行车时间和路线 20 分钟；缓存键不含 Key，命中不再调用高德', async () => {
+  const store = new Map();
+  globalThis.caches = { default: {
+    async match(req) { return store.get(req.url)?.clone(); },
+    async put(req, res) { store.set(req.url, res); },
+  } };
+  try {
+    const t = await newTrip();
+    const paths = ['/v3/geocode/geo', '/v3/geocode/regeo', '/v5/place/text', '/v5/place/around', '/v5/place/polygon',
+      '/v3/distance', '/v3/direction/driving', '/v3/direction/transit/integrated'];
+    await batchOf(t, paths.map((path) => ({ path, query: 'q=1' })));
+    const maxAge = Object.fromEntries([...store].map(([u, res]) => [new URL(u).pathname.replace('/__amap_cache', ''), Number(res.headers.get('cache-control').match(/max-age=(\d+)/)[1])]));
+    assert.deepEqual(Object.keys(maxAge).sort(), [...paths].sort());
+    for (const [path, s] of Object.entries(maxAge)) assert.equal(s, ['/v3/distance', '/v3/direction/driving'].includes(path) ? 1200 : 3600, path);
+    assert.doesNotMatch([...store.keys()].join(), /key=/);
+    upstream = [];
+    await batchOf(t, paths.map((path) => ({ path, query: 'q=1' })));
+    assert.equal(upstream.length, 0);
+  } finally { delete globalThis.caches; }
+});
+
 test('行程每日上限和站长 Key 全站上限', async () => {
   env.TRIP_DAILY_LIMIT = '2';
   env.OWNER_DAILY_LIMIT = '3';
