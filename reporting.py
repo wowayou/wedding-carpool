@@ -123,7 +123,7 @@ def ticket_tips(trip: Trip) -> list[str]:
         return []
     text = f"火车票：{'，'.join(parts)}（12306 提前 {PRESALE_DAYS} 天开售，含乘车当天），车次、余票以 12306 为准。"
     if spring:
-        text += "这几天在春运期间，热门方向开售后很快卖完：开售当天准点买，买不到就提交候补。"
+        text += f"{'这几天' if len(by_day) > 1 else '这天'}在春运期间，热门方向开售后很快卖完：开售当天准点买，买不到就提交候补。"
     return [text]
 
 

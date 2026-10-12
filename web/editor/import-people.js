@@ -79,13 +79,15 @@ const describe = (p) => [p.car_seats !== undefined ? `开车，空 ${p.car_seats
 function showPeople({ label, people }) {
   Object.assign(loaded, { label, people });
   const have = new Set(state.cfg.people.map((p) => (p.name || '').trim()).filter(Boolean));
+  const fresh = people.filter((p) => !have.has((p.name || '').trim())).length;
   $('#ipOut').innerHTML = people.length ? `<h3 class="sec">「${esc(label)}」的成员（${people.length} 位）</h3>
     ${people.map((p, k) => {
       const dup = have.has((p.name || '').trim());
       return `<label class="c-pick-row${dup ? ' is-off' : ''}"><input type="checkbox" data-ip-pick="${k}"${dup ? ' disabled' : ' checked'}>
         <span>${esc(p.name || '未命名')}<small>${dup ? '已经有同名的成员，不导入' : esc(describe(p))}</small></span></label>`;
     }).join('')}
-    <div class="row" style="margin-top:var(--sp-3)"><button class="c-btn c-btn--primary" data-ip-go>导入选中的成员</button></div>`
+    ${fresh ? '<div class="row" style="margin-top:var(--sp-3)"><button class="c-btn c-btn--primary" data-ip-go>导入选中的成员</button></div>'
+    : '<p class="muted">这些成员这个行程里都有了，没有要导入的。</p>'}`
     : `<p class="muted">「${esc(label)}」里还没有成员。</p>`;
 }
 
