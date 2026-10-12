@@ -14,17 +14,36 @@ import { esc, isQuotaError } from './util.js';
 export const candidates = {}; // 每个输入框最近一次的搜索结果
 
 // ---------- 搜索与定位 ----------
+// 认出来的分享位置：给一个候选，点了就定位（不调用高德）
+export function offerShared(base, shared) {
+  const box = document.querySelector(`[data-cands="${base}"]`);
+  const detail = [shared.address, `分享的位置，坐标 ${shared.location}（按高德坐标）`].filter(Boolean).join(' · ');
+  candidates[base] = [{ name: shared.name || '分享的位置', detail, location: shared.location, shared: true }];
+  if (box) box.innerHTML = `<button data-pick="${base}" data-k="0">${esc(candidates[base][0].name)}<small>${esc(detail)}</small></button>`;
+}
+
+// 往目的地、出发地的地址框里粘贴：认出分享的位置或链接，框里只留名称和地址，链接（含分享追踪参数）不进配置和历史。
+// 认出坐标的直接给候选；只认出文字的，留下去掉链接和套话后的文字，点「搜索」再搜。返回 true 表示已经处理了这次粘贴
+export function pasteShared(base, textKey, text) {
+  const shared = parseShared(text);
+  if (!shared) return false;
+  const clean = shared.location ? [shared.name, shared.address].filter(Boolean).join(' ') || shared.location : shared.query;
+  setPath(`${base}.${textKey}`, clean);
+  markDirty();
+  const input = document.querySelector(`#form [data-bind="${base}.${textKey}"]`);
+  if (input) input.value = clean;
+  if (shared.location) offerShared(base, shared);
+  else toast('去掉了链接，点「搜索」找这个地点');
+  return true;
+}
+
 // 粘贴来的分享（高德链接、坐标）直接给一个候选，不调用高德；分享文字里的链接和套话去掉后再搜
 export async function search(base, textKey) {
   const typed = (getPath(`${base}.${textKey}`) || '').trim();
   const box = document.querySelector(`[data-cands="${base}"]`);
   if (!typed) { toast('先输入要搜索的名称'); return; }
   const shared = base.startsWith('stations.') ? null : parseShared(typed);
-  if (shared?.location) {
-    candidates[base] = [{ name: shared.name || '分享的位置', detail: `分享的位置，坐标 ${shared.location}（按高德坐标）`, location: shared.location, shared: true }];
-    box.innerHTML = `<button data-pick="${base}" data-k="0">${esc(candidates[base][0].name)}<small>${esc(candidates[base][0].detail)}</small></button>`;
-    return;
-  }
+  if (shared?.location) { offerShared(base, shared); return; }
   const q = shared?.query || typed;
   box.innerHTML = '<button disabled>搜索中…</button>';
   try {

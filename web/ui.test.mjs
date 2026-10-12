@@ -851,6 +851,14 @@ const { ticketSale, saleHint, PRESALE_DAYS } = await import('./editor/rail12306.
 const importPeople = await import('./editor/import-people.js');
 
 test('粘贴分享的位置：高德链接和坐标直接认出来，分享文字去掉链接和套话再搜，普通文字原样搜', () => {
+  // 高德 App「分享 → 复制链接」的格式（2026-10 的真实样例，追踪参数换成了假值）：__p=POI编号,纬度,经度,名称,地址
+  const app = 'https://m.amap.com/poi/detail?__p=B0M21XZAFD%2C32.73760556252852%2C120.13335898518561%2C%E5%90%9B%E5%92%8C%E5%AE%B4%E4%BC%9A%E4%B8%AD%E5%BF%83%2C%E6%88%B4%E5%8D%97%E9%95%87%E8%BF%8E%E5%AE%BE%E5%A4%A7%E9%81%9313%E5%8F%B7%E6%88%B4%E5%8D%97%E4%B8%8D%E9%94%88%E9%92%A2%E4%BA%A4%E6%98%93%E5%9F%8E&src=app_share&userRelationToken=dummytoken0000&share_type=url&poiid=B0M21XZAFD';
+  const hit = { location: '120.133359,32.737606', name: '君和宴会中心', address: '戴南镇迎宾大道13号戴南不锈钢交易城' };
+  assert.deepEqual(parseShared(app), hit);
+  assert.deepEqual(parseShared(`demo my, [2026/10/12 22:00]\n${app}`), hit); // 从聊天记录里连名字带时间一起复制
+  assert.equal(parseShared('君和宴会中心 泰州市戴南镇迎宾路123号交易城46幢'), null); // 只有地址文字：照常搜索
+  assert.match(src.wire, /addEventListener\('paste'/); // 粘贴时就清理，链接和追踪参数不进配置
+  assert.match(src.actions, /export function pasteShared\(/);
   assert.deepEqual(parseShared('https://uri.amap.com/marker?position=119.815696,32.928919&name=%E5%90%9B%E5%92%8C%E5%AE%B4%E4%BC%9A%E4%B8%AD%E5%BF%83&src=wedding-carpool'),
     { location: '119.815696,32.928919', name: '君和宴会中心' }); // 方案页「在高德里看目的地」的链接
   assert.deepEqual(parseShared('https://uri.amap.com/navigation?to=120.212,30.291,%E6%9D%AD%E5%B7%9E%E4%B8%9C%E7%AB%99&mode=car'),

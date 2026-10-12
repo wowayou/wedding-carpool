@@ -1,7 +1,7 @@
 // ---------- 事件：把页面上的按钮、输入框和键盘绑到各模块的函数上 ----------
 // 由 main.js 在启动时调一次（模块导入时不碰页面）。
 
-import { addItem, deleteItem, deleteStations, pick, renameStation, search, setStationValue, toggleCar } from './actions.js';
+import { addItem, deleteItem, deleteStations, pasteShared, pick, renameStation, search, setStationValue, toggleCar } from './actions.js';
 import { backend } from './backend.js';
 import { caps } from './caps.js';
 import { showConflicts } from './conflict.js';
@@ -116,6 +116,13 @@ export function bindEvents() {
     if (e.key !== 'Enter' || !e.target.dataset.bind) return;
     const m = e.target.dataset.bind.match(/^(venue|people\.\d+)\.(address|from)$/);
     if (m) { e.preventDefault(); search(m[1], m[2]); }
+  });
+
+  // 目的地、出发地的地址框里粘贴别人分享的位置：认出来就清理掉链接并给出候选（见 actions.js 的 pasteShared）
+  $('#form').addEventListener('paste', (e) => {
+    const m = (e.target.dataset?.bind || '').match(/^(venue|people\.\d+)\.(address|from)$/);
+    if (!m || caps.fixedSample) return;
+    if (pasteShared(m[1], m[2], e.clipboardData?.getData('text') || '')) e.preventDefault();
   });
 
   $('#form').addEventListener('focusin', sendFocus);

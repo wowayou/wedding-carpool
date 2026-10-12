@@ -1,8 +1,11 @@
 // ---------- 粘贴来的位置：从别人分享的链接、文字或坐标里认出地点 ----------
 // 地址框里粘贴后点「搜索」：认得出坐标就直接给一个候选（不调用高德）；认不出就去掉链接和套话，用剩下的名称和地址去搜。
-// 认得的坐标：高德 URI 链接（uri.amap.com 的 marker?position=经度,纬度&name=…、navigation?to=经度,纬度,名称），
-// 以及文字里的「经度,纬度」或「纬度,经度」（按中国的经纬度范围分辨）。坐标按高德坐标（GCJ-02）理解。
-// 高德 App 分享的短链接（surl.amap.com）要联网展开，这里不展开，只用它旁边的文字搜索。不依赖其他模块，导入时不碰页面
+// 认得的坐标：
+//   - 高德 App 分享地点的链接：m.amap.com/poi/detail?__p=POI编号,纬度,经度,名称,地址（2026-10 站长从 App 分享的真实样例就是这样）；
+//   - 高德 URI 链接：uri.amap.com 的 marker?position=经度,纬度&name=…、navigation?to=经度,纬度,名称（方案页上的链接）；
+//   - 文字里的「经度,纬度」或「纬度,经度」（按中国的经纬度范围分辨）。
+// 坐标按高德坐标（GCJ-02）理解。链接里的其他参数（比如分享追踪用的 userRelationToken）一律不留。
+// 短链接（surl.amap.com）要联网才能展开，这里不展开，只用它旁边的文字搜索。不依赖其他模块，导入时不碰页面
 
 const LNG = [73, 136], LAT = [3, 54]; // 中国的经纬度大致范围；纬度上限小于经度下限，两个数谁是经度一看便知
 const inRange = (v, [lo, hi]) => v >= lo && v <= hi;
@@ -21,6 +24,12 @@ function fromUrl(text) {
   try { url = new URL(text); } catch { return null; }
   if (!/(^|\.)amap\.com$/i.test(url.hostname)) return null;
   const q = url.searchParams;
+  const shared = q.get('__p') || q.get('p'); // POI编号,纬度,经度,名称,地址
+  if (shared) {
+    const [, a, b, name = '', ...address] = shared.split(',');
+    const location = pair(a, b);
+    if (location) return { location, name: name.trim(), address: address.join(',').trim() };
+  }
   const position = q.get('position');
   if (position) {
     const [a, b] = position.split(',');
@@ -48,7 +57,7 @@ export function parseShared(raw) {
     const hit = fromUrl(u);
     if (hit) {
       const rest = text.replace(URL_RE, ' ').replace(NOISE_RE, ' ').replace(/\s+/g, ' ').trim();
-      return { location: hit.location, name: hit.name || rest.split(' ')[0] || '' };
+      return { location: hit.location, name: hit.name || rest.split(' ')[0] || '', ...(hit.address ? { address: hit.address } : {}) };
     }
   }
   const coord = text.match(/(-?\d{1,3}\.\d{3,})\s*[,，\s]\s*(-?\d{1,3}\.\d{3,})/);
