@@ -6,8 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from base import INF
-from model import OUT, Leg, Trip, train_times
-from routes import Plan, Route, arrival_at, leave_of, stop_times
+from model import OUT, Leg, Person, Trip, train_times
+from routes import Plan, Route, arrival_at, leave_of, leg_minutes, rider_options, stop_times
 from taxi import taxi_cars
 
 
@@ -104,12 +104,29 @@ class Stranded:
 
 
 @dataclass
+class PersonTime:
+    """一个人在这个方案里的全程用时（约数，分钟）。只用来看每个人的负担，不参与排序。
+    去程是出门到目的地，返程是离场到家；坐火车的人含车次用时和去车站、候车的时间（和排序时「到上车点」的口径一样）。"""
+    name: str
+    role: str                # drive 开车、ride 搭顺风车、taxi 打车、stranded 待安排
+    minutes: float | None    # 全程；待安排、或缺路段算不出时是 None
+    wait: float              # 其中等人：车主在接人点等乘客，乘客等车主或同车的人
+    solo: float | None       # 自己单独走最快要多久：车主是直达，不开车的人是从自己最快的站单独打车；没有可比的是 None
+
+    @property
+    def extra(self) -> float | None:
+        """比自己单独走多花的分钟（负数是更快）。"""
+        return None if self.minutes is None or self.solo is None else self.minutes - self.solo
+
+
+@dataclass
 class Timeline:
     """一个方案（去程或返程）的行程表。cars 和 plan.routes 一一对应。"""
     cars: list[CarTrip]
     riders: list[Rider]      # 搭私家车的人，顺序同 plan.rides
     taxis: list[TaxiCar]
     stranded: list[Stranded]
+    people: list[PersonTime]  # 每个人的全程用时，顺序同 trip.people
 
 
 @dataclass
@@ -160,7 +177,80 @@ def timeline(plan: Plan, trip: Trip, T, leg: Leg) -> Timeline:
         members = [rider(n, None, car["stop"], t, end, n in car["unknown"]) for n in car["names"]]
         taxis.append(TaxiCar(car["stop"], car["names"], car["n"], t, ride, car["unknown"], members))
     stranded = [Stranded(n, leave_of(people[n], leg) if back else None) for n in plan.stranded]
-    return Timeline(cars, riders, taxis, stranded)
+    return Timeline(cars, riders, taxis, stranded, person_times(plan, trip, T, leg, cars, riders, taxis))
+
+
+def _finite(m: float | None) -> float | None:
+    return None if m is None or m == INF else m
+
+
+def solo_minutes(p: Person, opts: dict[str, float], T, leg: Leg, trip: Trip) -> float | None:
+    """不开车的人自己单独走最快要多久：从能去的站里挑最快的，单独打车。
+    去程：到站用时 + 出站 + 站到目的地；返程：离场后打车去站，填了车次的从离场等到发车（赶不上的站不算），没填的按发车前提前量算，再加回程用时。"""
+    best = None
+    for stop, cost in opts.items():
+        ride = leg.station_to_venue(T, stop)
+        if not stop.startswith("st:") or ride == INF:
+            continue
+        if not leg.reverse:
+            m = cost + trip.exit_buffer + ride
+        else:
+            leave, times = leave_of(p, leg), train_times(p.back_trains.get(stop[3:], ""))
+            if times and leave + ride > times[0] - leg.margin:
+                continue
+            m = (times[0] - leave if times else ride + leg.margin) + cost
+        best = m if best is None else min(best, m)
+    return best
+
+
+def person_times(plan: Plan, trip: Trip, T, leg: Leg, cars: list[CarTrip], riders: list[Rider], taxis: list[TaxiCar]) -> list[PersonTime]:
+    """每个人的全程用时。知道时刻时按时刻算（含等人）；不知道时按出站时间、车程估。"""
+    people = {p.name: p for p in trip.people}
+    names = [s.name for s in trip.stations]
+    opts = {p.name: rider_options(p, names, trip.station_cost, leg) for p in trip.people if not p.drives}
+    routes = {r.driver: r for r in plan.routes}
+    out: dict[str, PersonTime] = {}
+    for car in cars:
+        total, wait = car.minutes, 0.0
+        if not leg.reverse and car.depart is not None and _finite(car.arrive) is not None:
+            total = car.arrive - car.depart  # 含在接人点等人
+            wait = max(0.0, total - car.minutes)
+        out[car.driver] = PersonTime(car.driver, "drive", _finite(total), wait, _finite(car.minutes - car.detour))
+
+    def train_leg(name: str, stop: str, arrive, first, last, leave, wait_known: float, ride: float) -> tuple[float | None, float]:
+        """坐火车的人：去程是到站用时 + 列车到站后到目的地；返程是离场到发车 + 回程用时。返回 (全程, 等人)。"""
+        cost = opts[name].get(stop)
+        if cost is None:
+            return None, 0.0
+        if leg.reverse:
+            ahead = first - leave if first is not None else (arrive - leave if arrive is not None else ride) + leg.margin
+            return _finite(ahead + cost), wait_known
+        if arrive is not None and last is not None:
+            after = arrive - last
+            return _finite(cost + after), max(0.0, after - trip.exit_buffer - ride)
+        return _finite(cost + trip.exit_buffer + ride), 0.0
+
+    for rd in riders:
+        seq = leg.sequence(rd.driver, routes[rd.driver].stops)
+        i = seq.index(rd.stop)
+        ride = leg_minutes(T, seq[:i + 1] if leg.reverse else seq[i:])  # 返程：目的地到下车点；去程：上车点到目的地
+        if rd.stop.startswith("st:"):
+            total, wait = train_leg(rd.name, rd.stop, rd.arrive, rd.train_depart, rd.train_arrive, rd.leave, rd.wait or 0.0, ride)
+        elif leg.reverse:
+            total, wait = _finite(rd.arrive - rd.leave), rd.wait or 0.0
+        elif rd.board is not None and rd.arrive is not None:
+            total = _finite(rd.arrive - rd.board)
+            wait = max(0.0, total - ride) if total is not None else 0.0
+        else:
+            total, wait = _finite(ride), 0.0
+        out[rd.name] = PersonTime(rd.name, "ride", total, wait, solo_minutes(people[rd.name], opts[rd.name], T, leg, trip))
+    for car in taxis:
+        for m in car.members:
+            total, wait = train_leg(m.name, car.stop, m.arrive, m.train_depart, m.train_arrive, m.leave, m.wait or 0.0, car.ride)
+            out[m.name] = PersonTime(m.name, "taxi", total, wait, solo_minutes(people[m.name], opts[m.name], T, leg, trip))
+    for name in plan.stranded:
+        out[name] = PersonTime(name, "stranded", None, 0.0, solo_minutes(people[name], opts[name], T, leg, trip))
+    return [out[p.name] for p in trip.people if p.name in out]
 
 
 def timelines(trip: Trip, T, plans: list[Plan]) -> Timelines:

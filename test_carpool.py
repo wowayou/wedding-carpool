@@ -2424,6 +2424,98 @@ class TimelineTest(unittest.TestCase):
         self.assertEqual(driver(payload["back"]["plans"][back_i]["routes"], back_car.driver)["depart"], "04:13")
 
 
+class PersonTimeTest(unittest.TestCase):
+    """每个人的全程用时（v3.12）：行程表里算一次（PersonTime），报告和方案页都读它；只显示，不参与排序。"""
+
+    @staticmethod
+    def state(name):
+        build, _ = GOLDEN_SCENARIOS[name]
+        cfg, amap = build()
+        with contextlib.redirect_stderr(io.StringIO()):
+            return service.compute(cfg, amap)
+
+    def test_taxi_pool_wait_counts_as_extra(self):
+        people = {pt.name: pt for pt in self.state("out_taxi_save")["timelines"].out[0].people}
+        a = people["甲"]
+        # 到站用时 = 车次 3 小时 + 去车站和候车 45 分钟；列车 10:00 到，10:25 和同车的人汇合，车程 89 分钟，11:54 到
+        self.assertEqual((a.role, round(a.minutes), round(a.wait), round(a.extra)), ("taxi", 225 + 114, 10, 10))
+        self.assertEqual(round(people["乙"].wait), 0)  # 没填车次的人不知道时刻，不算等人
+
+    def test_driver_extra_is_detour_and_rider_wait(self):
+        st = self.state("out_mixed")
+        plan, tl = st["plans"][0], st["timelines"].out[0]
+        wang = next(pt for pt in tl.people if pt.name == "老王")
+        self.assertEqual((wang.role, round(wang.extra)), ("drive", round(plan.routes[0].detour)))
+        jia = next(pt for pt in self.state("both")["timelines"].out[0].people if pt.name == "甲")
+        self.assertEqual((jia.role, round(jia.wait), round(jia.extra)), ("ride", 30, 30))  # 在站里等车主 30 分钟
+
+    def test_return_and_stranded(self):
+        people = {pt.name: pt for pt in self.state("both")["timelines"].back[0].people}
+        self.assertIsNone(people["小赵"].minutes)  # 待安排
+        self.assertEqual(people["小赵"].role, "stranded")
+        chen = people["小陈"]  # 填了回程车次：多等车主的 45 分钟反正要在站里等车，不算多花
+        self.assertEqual((round(chen.wait), round(chen.extra)), (45, 0))
+        sun = people["小孙"]  # 没填回程车次：等车主的时间就是多花的
+        self.assertEqual((round(sun.wait), round(sun.extra)), (45, 45))
+
+    def test_report_table_and_share_cards(self):
+        st = self.state("out_taxi_save")
+        report = carpool.render(st["trip"], st["pts"], st["T"], st["plans"], st["timelines"])
+        self.assertIn("| 成员 | 出门到目的地 | 其中等人 | 比自己单独走 |", report)
+        self.assertIn("| 甲（打车） | 5小时39分 | 10分钟 | 多 10分钟 |", report)
+        self.assertIn("| 丙家（2 人）（打车） |", report)
+        html = share.render_share(st, 0)
+        self.assertIn("出门到目的地约 5小时39分，其中等人 10分钟；比自己单独坐火车再打车多 10分钟", html)
+
+
+class SharePageReviewTest(unittest.TestCase):
+    """v3.12 看线上方案页发现的问题：没人开车、同行人数、备注换行、图例和提示按场景写、打车费。"""
+
+    def test_taxi_only_plan(self):
+        html = share.render_share(PersonTimeTest.state("out_taxi_save"), 0)
+        self.assertNotIn("<h2>开车的</h2>", html)  # 没人开车就不出这一节
+        self.assertIn("<h3>丙家（2 人）<span", html)  # 卡片标题写同行人数，和摘要里的人数对得上
+        self.assertIn("和 丙家（2 人）、乙 汇合", html)
+        self.assertIn("粗估 180–270 元，4 人分摊每人约 45–68 元", html)
+        self.assertIn("灰色虚线：打车，画成直线，只是示意。", html)
+        self.assertNotIn("不接人时的直达路线", html)
+        self.assertNotIn("车主时间来自高德", html)
+        self.assertNotIn("停车场", html)
+
+    def test_note_keeps_line_breaks(self):
+        self.assertRegex(share.TEMPLATE, r"\.note \{[^}]*white-space: pre-line")
+
+    def test_drivers_keep_driver_tips(self):
+        html = share.render_share(PersonTimeTest.state("out_mixed"), 0)
+        self.assertIn("<h2>开车的</h2>", html)
+        self.assertIn("车主时间来自高德路况估算", html)
+        self.assertIn("彩色线：接人后的实际路线", html)
+
+
+class TicketSaleTest(unittest.TestCase):
+    """火车票开售日：12306 预售期 15 天（含乘车当天）；春运按春节前 15 天到后 24 天。"""
+
+    def test_dates(self):
+        cases = {  # 2026 年春运 2 月 2 日到 3 月 13 日，2 月 2 日的票 1 月 19 日开售（铁路部门公布）
+            "2026-02-02": ("2026-01-19", True), "2026-2-1": ("2026-01-18", False),
+            "2026-03-13": ("2026-02-27", True), "2026-03-14": ("2026-02-28", False),
+            "2027-02-13": ("2027-01-30", True), "2026/10/18": ("2026-10-04", False),
+            "2031-02-01": ("2031-01-18", False),  # 表外的年份只给开售日
+        }
+        for date, (sale, spring) in cases.items():
+            with self.subTest(date=date):
+                _, start, busy = carpool.ticket_sale(date)
+                self.assertEqual((start.isoformat(), busy), (sale, spring))
+        for bad in ("", "2026-02-30", "明天"):
+            self.assertIsNone(carpool.ticket_sale(bad))
+
+    def test_editor_uses_the_same_rules(self):
+        js = (Path(__file__).parent / "web" / "editor" / "rail12306.js").read_text(encoding="utf-8")
+        self.assertEqual(int(re.search(r"PRESALE_DAYS = (\d+)", js)[1]), carpool.PRESALE_DAYS)
+        table = dict(re.findall(r"(\d{4}): '(\d{4}-\d{2}-\d{2})'", re.search(r"SPRING_FESTIVAL = \{([^}]*)\}", js)[1]))
+        self.assertEqual({int(k): v for k, v in table.items()}, carpool.SPRING_FESTIVAL)
+
+
 class GoldenTest(unittest.TestCase):
     """金标准：报告、方案页、界面数据的现有输出逐字节固定下来，重构时用来证明「一个字都没变」。
     重新生成（只在输出该变时才做，并检查 git diff）：GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest"""

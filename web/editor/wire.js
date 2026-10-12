@@ -1,15 +1,16 @@
 // ---------- 事件：把页面上的按钮、输入框和键盘绑到各模块的函数上 ----------
 // 由 main.js 在启动时调一次（模块导入时不碰页面）。
 
-import { addItem, deleteItem, pick, renameStation, search, setStationValue, toggleCar } from './actions.js';
+import { addItem, deleteItem, deleteStations, pick, renameStation, search, setStationValue, toggleCar } from './actions.js';
 import { backend } from './backend.js';
 import { caps } from './caps.js';
 import { showConflicts } from './conflict.js';
 import { alertDialog, confirmDialog, toast } from './dialogs.js';
 import { closeDrawer } from './drawer.js';
 import { on } from './events.js';
-import { refreshDerived, renderForm, rerenderKeepingFocus } from './form.js';
+import { refreshDerived, renderForm, rerenderKeepingFocus, syncPicked } from './form.js';
 import { openHistory, previewVersion, restoreVersion } from './history.js';
+import { importPicked, loadFromFile, loadFromTrip, openImportPeople } from './import-people.js';
 import { narrow, setPane } from './layout.js';
 import { declutter, drawPlan, drawPreview, initMap, view } from './map.js';
 import { importConfig, openMenu, refreshMenu } from './menu.js';
@@ -79,7 +80,11 @@ export function bindEvents() {
 
   $('#form').addEventListener('change', (e) => {
     const t = e.target;
-    if (t.dataset.stationName !== undefined) renameStation(Number(t.dataset.stationName), t);
+    if (t.dataset.stPick !== undefined) syncPicked(); // 勾选要批量删除的车站：只更新工具条，不重画
+    else if (t.dataset.stAll !== undefined) {
+      document.querySelectorAll('#form [data-st-pick]').forEach((b) => { b.checked = t.checked; });
+      syncPicked();
+    } else if (t.dataset.stationName !== undefined) renameStation(Number(t.dataset.stationName), t);
     else if (t.dataset.car !== undefined) toggleCar(Number(t.dataset.car), t.checked);
     else if (t.dataset.returnToggle !== undefined) {
       if (!t.checked && !outboundOn()) { t.checked = true; toast('去程已经关了，返程要留着：至少规划一段'); return; }
@@ -124,6 +129,8 @@ export function bindEvents() {
     else if (t.dataset.clearloc) { setPath(t.dataset.clearloc + '.location', ''); markDirty(); rerenderKeepingFocus(); }
     else if (t.dataset.add) addItem(t.dataset.add);
     else if (t.dataset.del) deleteItem(t.dataset.del);
+    else if (t.dataset.stDel !== undefined) deleteStations();
+    else if (t.dataset.importPeople !== undefined) openImportPeople();
     else if (t.dataset.suggest !== undefined) suggestStations();
     else if (t.dataset.tryReset !== undefined) resetTry();
   });
@@ -180,7 +187,10 @@ export function bindEvents() {
       } else if (t.dataset.sgMore !== undefined) {
         const added = addSuggested([sug.result.more[Number(t.dataset.sgMore)]]);
         if (added) { markDirty(); renderForm(); renderSugOut(); toast('加了 1 个车站，接下来给不开车的人填车次'); }
-      } else if (t.dataset.preview) await previewVersion(Number(t.dataset.preview), t.closest('.hist').querySelector('.slot'));
+      } else if (t.dataset.ipTrip) await loadFromTrip(t.dataset.ipTrip);
+      else if (t.dataset.ipFile !== undefined) $('#drawerBody [data-ip-input]').click();
+      else if (t.dataset.ipGo !== undefined) importPicked();
+      else if (t.dataset.preview) await previewVersion(Number(t.dataset.preview), t.closest('.hist').querySelector('.slot'));
       else if (t.dataset.restore) await restoreVersion(Number(t.dataset.restore));
       else if (t.dataset.copy !== undefined) { await navigator.clipboard.writeText(t.dataset.copy); toast('已复制'); }
     } catch (err) {
@@ -194,6 +204,12 @@ export function bindEvents() {
     if (t.dataset.sg) sgChanged(t);
     else if (t.dataset.sug !== undefined) sug.checked[sug.result.stations[Number(t.dataset.sug)].name] = t.checked;
     else if (t.dataset.sgLayer !== undefined) { sug.layerOn = t.checked; syncSugLayer(true); }
+  });
+
+  // 「从别的行程导入成员」里选了 JSON 文件
+  $('#drawerBody').addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.ipInput !== undefined && t.files?.[0]) { loadFromFile(t.files[0]); t.value = ''; }
   });
 
   $('#historyBtn').addEventListener('click', openHistory);

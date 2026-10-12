@@ -109,7 +109,12 @@
   .rail-row > span:first-child { font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rail-row .span2 { grid-column: span 2; }
   .rail-row a.c-btn { padding: 0; min-width: 32px; }
-  .station { display: grid; grid-template-columns: 1fr 96px auto auto; gap: 6px; align-items: center; margin-bottom: var(--sp-2); position: relative; }
+  .station { display: grid; grid-template-columns: auto 1fr 96px auto auto; gap: 6px; align-items: center; margin-bottom: var(--sp-2); position: relative; }
+  /* 候选车站的批量删除：每行前面一个复选框（点击范围比框大），勾了以后工具条上的「删除选中（N）」才能点 */
+  .st-pick { display: inline-grid; place-items: center; min-width: 28px; min-height: 32px; cursor: pointer; }
+  .st-pick input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+  .st-bulk { display: flex; gap: var(--sp-3); align-items: center; justify-content: space-between; margin: 0 0 var(--sp-2); padding: 0 0 var(--sp-2) 5px; border-bottom: 1px dashed var(--line); }
+  .ip-trips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
   .station .loc, .station .cands { grid-column: 1 / -1; margin: 0; }
   .adders { display: flex; gap: var(--sp-2); }
   .peer-on { outline: 2px solid var(--peer, #7c3aed) !important; outline-offset: 1px; }
@@ -129,7 +134,8 @@
     .rail-row .span2 { grid-column: span 2; }
     .rail-row .c-input { min-height: 44px; }
     .rail-row a.c-btn { min-height: 44px; }
-    .station { grid-template-columns: 1fr 1fr; }
+    .station { grid-template-columns: auto 1fr 1fr; }
+    .station .st-pick { grid-row: span 2; align-self: start; min-height: 44px; }
     .station .c-input { min-height: 44px; }
     .c-input, .c-select, .c-textarea { font-size: 16px; } /* 避免 iOS 聚焦时自动放大 */
   }

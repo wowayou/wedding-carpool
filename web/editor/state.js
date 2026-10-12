@@ -14,7 +14,11 @@ export const state = {
   peers: [], // 在线的人
   fitted: false, // 预览地图已经缩放过
   showRequired: false, // 点过「计算方案」以后，才把缺少的必填项标出来
+  pickedStations: new Set(), // 候选车站里勾选了要批量删除的（按 stationKey 记，表单重画、别人改了别的格子都还在）
 };
+
+// 候选车站的勾选按站名记；还没起名的按它在第几行记
+export const stationKey = (s, i) => (s?.name ? `n:${s.name}` : `i:${i}`);
 
 export const trip = {}; // 行程信息（名称、保留期、方案页、口令……）；本地版只有 file
 export const me = { clientId: Math.random().toString(36).slice(2), name: '' };
@@ -35,7 +39,7 @@ export const isStale = () => Boolean(state.result) && state.resultHash !== confi
 // 测试用：回到刚启动的样子
 export function resetState() {
   Object.assign(state, { cfg: null, dirty: false, synced: null, version: null, tripId: null, result: null, resultHash: null, active: 0, activeBack: 0,
-    viewLeg: 'out', peers: [], fitted: false, showRequired: false });
+    viewLeg: 'out', peers: [], fitted: false, showRequired: false, pickedStations: new Set() });
   for (const k of Object.keys(trip)) delete trip[k];
   Object.assign(sug, { settingsOpen: false, est: null, estKey: null, estBusy: false, estErr: null, pending: false, seq: 0, timer: null,
     running: false, result: null, resultKey: null, error: null, checked: {}, layerOn: true, peek: false, fitted: false, trace: null });

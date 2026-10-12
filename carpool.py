@@ -61,10 +61,11 @@ from routes import (Plan, Route, arrival_at, assign, _assign_groups, back_deadli
                     rider_options, stop_times)
 from taxi import Arrangement, TaxiPool, pack_cars, taxi_cars, taxi_slot
 from solver import evaluate, plan_trip, solve
-from timetable import (CarTrip, Rider, Stop, Stranded, TaxiCar, Timeline, Timelines, pickup_ready, route_schedule,
-                       timeline, timelines)
-from reporting import (cost_parts, describe, describe_back, fmt_min, marker_url, nav_url, paragraphs, rail_section,
-                       rank_basis, render, route_links, route_nav, station_table, stop_label, taxi_fare, who)
+from timetable import (CarTrip, PersonTime, Rider, Stop, Stranded, TaxiCar, Timeline, Timelines, _finite, person_times,
+                       pickup_ready, route_schedule, solo_minutes, timeline, timelines)
+from reporting import (cost_parts, describe, describe_back, fare_range, fmt_min, marker_url, month_day, nav_url, paragraphs,
+                       rail_section, rank_basis, render, route_links, route_nav, station_table, stop_label, taxi_fare,
+                       ticket_sale, ticket_tips, time_table, versus, who)
 from tomlio import dump_toml, _toml_key, _toml_value
 
 _OWNERS = (base, geo, model, routes, taxi, solver, timetable, reporting, tomlio)  # 依赖顺序：底层在前

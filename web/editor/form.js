@@ -6,8 +6,9 @@ import { defaultOf, fieldOf, noteOf, placeholderOf } from './fields.js';
 import { schedulePreview } from './map.js';
 import { elementOf, getPath, pathOf } from './paths.js';
 import { markPeers } from './peers.js';
-import { link12306 } from './rail12306.js';
-import { isStale, outboundOn, state, trip } from './state.js';
+import { link12306, saleHint } from './rail12306.js';
+import { isStale, outboundOn, state, stationKey, trip } from './state.js';
+import { bjDate } from './time.js';
 import { $, esc } from './util.js';
 import { decorateProblems } from './validate.js';
 
@@ -31,14 +32,17 @@ export function placeField(label, base, textKey, placeholder, hint = '') {
     ${hint ? `<div class="place-hint">${esc(hint)}</div>` : ''}${locLine(base)}<div class="cands" data-cands="${base}"></div>`;
 }
 
+// 每行前面的复选框：勾几个再「删除选中」
+const stationPick = (s, i) => `<label class="st-pick"><input type="checkbox" data-st-pick="${i}"${state.pickedStations.has(stationKey(s, i)) ? ' checked' : ''} aria-label="选中${esc(s.name || `第 ${i + 1} 个车站`)}"></label>`;
+
 export function stationRow(s, i) {
-  if (caps.fixedSample) return `<div class="station">
+  if (caps.fixedSample) return `<div class="station">${stationPick(s, i)}
     <input class="c-input" data-station-name="${i}" data-old="${esc(s.name)}" value="${esc(s.name)}" aria-label="站名" readonly>
     <input class="c-input" data-bind="stations.${i}.city" value="${esc(s.city)}" aria-label="城市" readonly>
     <button class="c-btn c-btn--link is-danger" data-del="stations.${i}">删除</button>
     ${s.location ? `<div class="loc">示意坐标 ${esc(s.location)}</div>` : ''}
   </div>`;
-  return `<div class="station">
+  return `<div class="station">${stationPick(s, i)}
     <input class="c-input" data-station-name="${i}" data-old="${esc(s.name)}" value="${esc(s.name)}" placeholder="站名，如 杭州东站" aria-label="站名">
     <input class="c-input" data-bind="stations.${i}.city" value="${esc(s.city)}" placeholder="城市" aria-label="城市">
     <button class="c-btn c-btn--sm" data-search="stations.${i}" data-text="name">搜索</button>
@@ -85,7 +89,7 @@ export function personCard(p, i) {
     <div class="row head">${field('名字', base + '.name', { placeholder: '比如 老王' })}
       <label class="toggle"><input type="checkbox" data-car="${i}" ${drives ? 'checked' : ''}> 开车</label>
       <button class="c-btn c-btn--link is-danger" data-del="people.${i}">删除</button></div>
-    ${placeField('出发地', base, 'from', '如 浙江省杭州市西湖区某某小区', '不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。')}
+    ${placeField('出发地', base, 'from', '如 浙江省杭州市西湖区某某小区', '不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。也可以粘贴高德分享的位置。')}
     ${drives ? driverPart : riderPart}
     <label class="f"><span>备注</span><textarea class="c-textarea" rows="2" data-bind="${base}.note" style="min-height:64px">${esc(p.note)}</textarea></label>
   </div>`;
@@ -123,13 +127,40 @@ export function refreshDerived() {
   }
   const back = document.querySelector('#form [data-bind="return.date"]');
   if (back) back.placeholder = returnDatePlaceholder();
+  for (const el of document.querySelectorAll('#form [data-sale]')) { // 日期下面写火车票哪天开售
+    const date = getPath(el.dataset.sale) || (el.dataset.sale === 'return.date' && outboundOn() ? state.cfg.options?.travel_date : '');
+    el.textContent = saleHint(date, bjDate(Date.now()));
+    el.hidden = !el.textContent;
+  }
+  updateStationBulk();
   for (const el of document.querySelectorAll('#form [data-bind$=".leave_time"]')) el.placeholder = leavePlaceholder();
   renderSteps();
   decorateProblems();
 }
 
+// 页面上勾了哪几行（行号）；勾选记录 state.pickedStations 跟着它更新，表单重画后照着它再勾上
+export function pickedRows() {
+  return [...document.querySelectorAll('#form [data-st-pick]')].filter((b) => b.checked).map((b) => Number(b.dataset.stPick));
+}
+export function syncPicked() {
+  state.pickedStations = new Set(pickedRows().map((i) => stationKey(state.cfg.stations[i], i)));
+  updateStationBulk();
+}
+
+// 批量删除车站的工具条：勾了几个、「全选」是全勾还是半勾，原地更新，不重画表单
+export function updateStationBulk() {
+  const boxes = [...document.querySelectorAll('#form [data-st-pick]')];
+  const n = boxes.filter((b) => b.checked).length;
+  const all = document.querySelector('#form [data-st-all]');
+  const del = document.querySelector('#form [data-st-del]');
+  if (all) { all.checked = n > 0 && n === boxes.length; all.indeterminate = n > 0 && n < boxes.length; }
+  if (del) { del.disabled = !n; del.textContent = n ? `删除选中（${n}）` : '删除选中'; }
+}
+
 export function renderForm() {
   state.cfg.venue ??= {}; state.cfg.options ??= {}; state.cfg.stations ??= []; state.cfg.people ??= [];
+  const keys = new Set(state.cfg.stations.map(stationKey)); // 已经不在的车站（被删了、改了名）不再算勾选
+  for (const k of [...state.pickedStations]) if (!keys.has(k)) state.pickedStations.delete(k);
   const left = trip.expiresAt ? Math.ceil((trip.expiresAt - Date.now()) / 864e5) : Infinity;
   const fixed = caps.fixedSample; // 固定示例（试玩）：没有加成员、加车站和搜索
   $('#form').innerHTML = `${fixed ? `<div class="c-alert c-alert--info try-banner" id="tryBanner"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>试玩模式：虚构的行程，行车时间按直线距离估算，不保存。想规划你们自己的出行，请新建行程（需要邀请码或高德 Key）。<div class="row"><button class="c-btn c-btn--sm" data-try-reset>恢复示例</button><a class="c-btn c-btn--sm c-btn--primary" href="/#create">新建行程</a></div></div></div>` : ''}${left <= 7 ? `<div class="c-alert c-alert--warn" style="margin:var(--sp-3) var(--sp-4) 0"><svg class="c-icon" aria-hidden="true" focusable="false"><use href="/icons.svg#i-alert"/></svg><div>这个行程 ${left <= 0 ? '即将' : `${left} 天后`}自动删除（出行日期过后 60 天、或 180 天没人编辑）。需要留存的话，在「更多」里导出配置。</div></div>` : ''}
@@ -140,12 +171,14 @@ export function renderForm() {
     </section>
     <section id="sec-venue"><h2>① 目的地</h2>
       ${field('名称', 'venue.name', { placeholder: '如 某某大酒店' })}
-      ${placeField('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准')}
+      ${placeField('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准', '别人用高德分享的位置，把整段文字或链接粘贴进来再点「搜索」也行。')}
     </section>
-    <section id="sec-people"><h2>② 成员${fixed ? '' : ' <span class="adders"><button class="c-btn c-btn--link" data-add="driver">+ 开车的</button><button class="c-btn c-btn--link" data-add="rider">+ 不开车的</button></span>'}</h2>
-      ${state.cfg.people.map(personCard).join('') || '<div class="muted">先加几位成员：开车的填空座，不开车的之后填车次。</div>'}
+    <section id="sec-people"><h2>② 成员${fixed ? '' : ` <span class="adders"><button class="c-btn c-btn--link" data-add="driver">+ 开车的</button><button class="c-btn c-btn--link" data-add="rider">+ 不开车的</button>${caps.canImport ? '<button class="c-btn c-btn--link" data-import-people>从别的行程导入</button>' : ''}</span>`}</h2>
+      ${state.cfg.people.map(personCard).join('') || `<div class="muted">先加几位成员：开车的填空座，不开车的之后填车次。${caps.canImport ? '以前一起出行过的，点「从别的行程导入」，出发地和空座都带过来。' : ''}</div>`}
     </section>
     <section id="sec-stations"><h2>③ 候选车站 <span class="adders"><button class="c-btn c-btn--link" data-suggest>推荐车站</button>${fixed ? '' : '<button class="c-btn c-btn--link" data-add="station">+ 手动添加</button>'}</span></h2>
+      ${state.cfg.stations.length >= 2 ? `<div class="st-bulk"><label class="c-check"><input type="checkbox" data-st-all> 全选</label>
+        <button class="c-btn c-btn--sm c-btn--danger" data-st-del disabled>删除选中</button></div>` : ''}
       ${state.cfg.stations.map(stationRow).join('') || (fixed ? '<div class="muted">候选站都删光了：点上面的「恢复示例」。</div>' : '<div class="muted">点「推荐车站」：在目的地周边、车主出发地附近和沿途找火车站，按顺路程度排好。</div>')}
       ${fixed ? '<div class="muted">试玩里的候选站是固定的，只能删除。「推荐车站」可以打开看看设置、估算和地图上的搜索范围，但试玩不能实际搜索；自己的行程可以用它在目的地周边和车主沿途找火车站，按顺路程度排好。</div>' : ''}
     </section>
@@ -153,6 +186,7 @@ export function renderForm() {
       <div class="row">${field('散场后几点出发', 'return.depart_time')}
         ${field('发车前多久到站（分钟）', 'return.security_min', { type: 'number' })}
         ${field(outboundOn() ? '返程日期' : '返程日期（必填）', 'return.date', { placeholder: returnDatePlaceholder() })}</div>
+      <div class="place-hint" data-sale="return.date" hidden></div>
       <div class="row">${field('乘客最多等车主（分钟）', 'return.max_wait_min', { type: 'number' })}</div>
       <div class="muted">每个人可以在自己的卡片里填离场时间，不填就是上面的散场时间：车主几点走，车就几点走；乘客准备好后最多等这么久，车主走得比乘客早就带不了。不开车的人填返程车次；车主可以设返程是否开车送人。</div>
     </section>` : ''}
@@ -160,7 +194,7 @@ export function renderForm() {
       <div class="row">${field('默认最多绕路（分钟）', 'options.max_detour_min', { type: 'number' })}
         ${field('每车最多停几次', 'options.max_stops', { type: 'number' })}</div>
       ${outboundOn() ? `<div class="row">${field('出发日期', 'options.travel_date')}
-        ${field('出发时间', 'options.travel_time')}</div>` : ''}
+        ${field('出发时间', 'options.travel_time')}</div><div class="place-hint" data-sale="options.travel_date" hidden></div>` : ''}
       <div class="row">${outboundOn() ? field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number' }) : ''}
         ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number' })}</div>
       <label class="f"><span>没搭上车的人怎么打车</span><select class="c-select" data-bind="options.taxi_mode" data-type="text">

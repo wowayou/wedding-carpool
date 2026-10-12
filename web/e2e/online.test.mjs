@@ -206,3 +206,45 @@ test('在线：推荐车站的设置面板；估算请求被换成假错误后�
   assert.equal(await A.page.locator('#progress').isHidden(), true);
   assert.deepEqual(A.guard.amapHits, [], '没有真正发往高德代理的请求');
 });
+
+test('在线：新建第二个行程，从第一个行程导入成员（不带车次）；粘贴高德链接直接定位，不调用高德；日期下面写开售日', { timeout: SLOW }, async () => {
+  const res = await admin.context.request.post(`${base}/api/trips`, { data: { code: inviteCode, name: 'e2e 第二个行程' } });
+  assert.equal(res.ok(), true, await res.text());
+  const second = await res.json();
+  const { page } = A;
+  await page.goto(`${base}${second.url}`);
+  if (await page.locator('#nameBox').isVisible()) await enterName(page, '甲');
+  await waitFormReady(page);
+  assert.equal(await page.locator('#title').innerText(), 'e2e 第二个行程');
+  // 从第一个行程导入成员：这台设备打开过它，列在抽屉里
+  await page.locator('#form [data-import-people]').click();
+  await page.locator('#drawer:not([hidden])').waitFor();
+  assert.equal(await page.locator('#drawerTitle').innerText(), '从别的行程导入成员');
+  await page.locator(`#drawer [data-ip-trip="${trip.id}"]`).click();
+  const picks = page.locator('#drawer [data-ip-pick]');
+  await picks.first().waitFor();
+  const n = await picks.count();
+  assert.ok(n >= 4, `第一个行程的成员都列出来了（${n} 位）`);
+  await page.locator('#drawer [data-ip-go]').click();
+  await page.locator('#toasts .c-toast', { hasText: `导入了 ${n} 位成员` }).waitFor();
+  assert.equal(await page.locator('#form [data-bind$=".name"][data-bind^="people."]').count(), n);
+  assert.equal(await page.locator('#form [data-train]').count(), 0, '这个行程还没有候选站，车次不带过来');
+  await page.locator('#status', { hasText: '已同步' }).waitFor();
+  // 粘贴方案页里「在高德里看目的地」的链接：直接给一个候选，点了就定位
+  await bind(page, 'venue.address').fill('https://uri.amap.com/marker?position=119.815696,32.928919&name=%E5%90%9B%E5%92%8C%E5%AE%B4%E4%BC%9A%E4%B8%AD%E5%BF%83&src=wedding-carpool');
+  await page.locator('#form [data-search="venue"]').click();
+  const cand = page.locator('#form [data-cands="venue"] [data-pick]');
+  await cand.waitFor();
+  assert.match(await cand.innerText(), /君和宴会中心[\s\S]*分享的位置/);
+  await cand.click();
+  await page.locator('#sec-venue .loc', { hasText: '已定位 119.815696,32.928919' }).waitFor();
+  assert.equal(await bind(page, 'venue.name').inputValue(), '君和宴会中心');
+  assert.equal(await bind(page, 'venue.address').inputValue(), '君和宴会中心', '地址框里的链接换成认出来的名称');
+  // 出发日期在 2027 年春运期间：写开售日，并提醒开售当天买
+  await bind(page, 'options.travel_date').fill('2027-02-13');
+  await bind(page, 'options.travel_time').click(); // 失焦触发 change
+  const hint = page.locator('#form [data-sale="options.travel_date"]');
+  await hint.waitFor({ state: 'visible' });
+  assert.match(await hint.innerText(), /火车票 1月30日（周六）开售.*春运期间/);
+  assert.deepEqual(A.guard.amapHits, [], '导入和粘贴定位都没有调用高德');
+});

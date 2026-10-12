@@ -134,9 +134,9 @@ test('三处地图（编辑页、方案页模板、示例页）的角标一样�
   assert.deepEqual(new Set(found.map(([, list]) => list[0])), new Set(['© 高德地图 GS(2025)5996号']));
 });
 
-test('成员的出发地下面有提示，目的地没有', () => {
-  assert.match(src.form, /placeField\('出发地', base, 'from', [^\n]*'不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。'\)/);
-  assert.match(src.form, /placeField\('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准'\)/);
+test('成员的出发地下面有提示（不用精确、可以粘贴分享的位置），目的地写明可以粘贴分享的位置', () => {
+  assert.match(src.form, /placeField\('出发地', base, 'from', [^\n]*'不用精确到门牌号，填小区、地标或附近路口就够了；方案页不会显示精确的出发地。也可以粘贴高德分享的位置。'\)/);
+  assert.match(src.form, /placeField\('地址或店名', 'venue', 'address', '搜索后选一个，坐标最准', '别人用高德分享的位置，[^']*'\)/);
 });
 
 // ---------- 测试里用的小工具 ----------
@@ -222,7 +222,8 @@ test('试玩模式：不能加成员和车站、不能实际推荐车站（但�
   assert.deepEqual(plain(state.cfg.stations), [], '试玩不能加车站');
   await importConfig({ text: async () => { throw new Error('试玩不能导入，不该去读文件'); } }); // 直接返回，不读文件
   const form = /export function renderForm\(\) \{[\s\S]*?\n\}\n/.exec(src.form)[0];
-  assert.match(form, /\$\{fixed \? '' : ' <span class="adders">/g); // 成员和车站的“添加/推荐”按钮在试玩里不渲染
+  assert.match(form, /② 成员\$\{fixed \? '' : ` <span class="adders">/); // 成员的「添加」「导入」按钮在试玩里不渲染
+  assert.match(form, /\$\{fixed \? '' : '<button class="c-btn c-btn--link" data-add="station">/); // 车站的「手动添加」也不渲染
   assert.match(form, /试玩模式：虚构的行程，行车时间按直线距离估算，不保存。想规划你们自己的出行，请新建行程（需要邀请码或高德 Key）。/);
   assert.match(form, /data-try-reset>恢复示例<\/button>/);
   assert.match(form, /href="\/#create">新建行程<\/a>/);
@@ -842,4 +843,77 @@ test('兜底脚本：到点没报到就在表单里显示提示，主模块报�
   };
   assert.equal(run(false), 1);
   assert.equal(run(true), 0);
+});
+
+// ---------- v3.12：粘贴分享的位置、火车票开售日、从别的行程导入成员、批量删除车站 ----------
+const { parseShared } = await import('./editor/shared-place.js');
+const { ticketSale, saleHint, PRESALE_DAYS } = await import('./editor/rail12306.js');
+const importPeople = await import('./editor/import-people.js');
+
+test('粘贴分享的位置：高德链接和坐标直接认出来，分享文字去掉链接和套话再搜，普通文字原样搜', () => {
+  assert.deepEqual(parseShared('https://uri.amap.com/marker?position=119.815696,32.928919&name=%E5%90%9B%E5%92%8C%E5%AE%B4%E4%BC%9A%E4%B8%AD%E5%BF%83&src=wedding-carpool'),
+    { location: '119.815696,32.928919', name: '君和宴会中心' }); // 方案页「在高德里看目的地」的链接
+  assert.deepEqual(parseShared('https://uri.amap.com/navigation?to=120.212,30.291,%E6%9D%AD%E5%B7%9E%E4%B8%9C%E7%AB%99&mode=car'),
+    { location: '120.212000,30.291000', name: '杭州东站' });
+  assert.deepEqual(parseShared('32.928919, 119.815696'), { location: '119.815696,32.928919', name: '' }); // 纬度在前也认
+  assert.deepEqual(parseShared('119.815696，32.928919 君和宴会中心'), { location: '119.815696,32.928919', name: '君和宴会中心' });
+  assert.deepEqual(parseShared('【高德地图】君和宴会中心 江苏省盐城市 https://surl.amap.com/abc123'), { query: '君和宴会中心 江苏省盐城市' });
+  assert.deepEqual(parseShared('我在高德地图分享了一个位置：君和宴会中心 https://surl.amap.com/xyz'), { query: '君和宴会中心' });
+  assert.equal(parseShared('杭州东站'), null);
+  assert.equal(parseShared('https://example.com/?position=119.8,32.9'), null); // 只认高德的链接
+  assert.equal(parseShared('1.2345, 6.7890'), null); // 不在中国范围的数字不当坐标
+});
+
+test('火车票开售日：乘车日前 14 天（预售期 15 天含当天），春运期间加一句；开售日过了写已经开售', () => {
+  assert.equal(PRESALE_DAYS, 15);
+  assert.deepEqual(ticketSale('2026-02-02'), { sale: '2026-01-19', saleLabel: '1月19日（周一）', spring: true }); // 2026 年春运首日，铁路部门公布 1 月 19 日开售
+  assert.equal(ticketSale('2026-03-14').spring, false);
+  assert.equal(ticketSale('2027/2/13').sale, '2027-01-30');
+  assert.equal(ticketSale('2026-02-30'), null);
+  assert.match(saleHint('2027-02-13', '2026-10-12'), /^火车票 1月30日（周六）开售.*春运期间.*候补$/);
+  assert.equal(saleHint('2026-10-17', '2026-10-12'), '火车票 10月3日（周六）已经开售，尽早买');
+  assert.equal(saleHint('', '2026-10-12'), '');
+});
+
+test('从别的行程导入成员：只带跟着人走的字段，不带车次和离场时间', () => {
+  const p = { name: '老王', from: '杭州', location: '120.1,30.2', city: '杭州市', car_seats: 3, max_detour_min: 40, party: 2, pickup_at_home: false,
+    note: '尾号 1234', trains: { 东站: 'G1 08:00→10:00' }, rail_min: { 东站: 90 }, return_trains: { 东站: 'G2 20:00→22:00' }, leave_time: '21:00', stations: ['东站'] };
+  assert.deepEqual(importPeople.portable(p), { name: '老王', from: '杭州', location: '120.1,30.2', city: '杭州市', car_seats: 3, max_detour_min: 40, party: 2, pickup_at_home: false, note: '尾号 1234' });
+  assert.deepEqual(importPeople.peopleOfFile(JSON.stringify({ name: '小王婚礼', config: { people: [{ name: 'a' }, null, 3] } })), { label: '小王婚礼', people: [{ name: 'a' }] });
+  assert.throws(() => importPeople.peopleOfFile('不是 JSON'), /JSON 格式不对/);
+  assert.throws(() => importPeople.peopleOfFile('{"venue": {}}'), /不是这个工具导出的配置/);
+});
+
+test('从别的行程导入成员：先直接取配置，打不开再用记住的编辑链接换 Cookie；删除、口令、链接失效都说清楚', async () => {
+  const reply = (status, body) => ({ ok: status < 400, status, statusText: '', json: async () => body });
+  const run = async (answers) => {
+    const calls = [];
+    globalThis.fetch = async (url, opts) => { calls.push(`${opts?.method || 'GET'} ${url}`); return answers.shift(); };
+    try { return { config: await importPeople.fetchTripConfig('abcdefghij', 'k'.repeat(24)), calls }; }
+    catch (e) { return { error: e.message, calls }; }
+    finally { restoreFetch(); }
+  };
+  let r = await run([reply(200, { config: { people: [{ name: 'a' }] } })]);
+  assert.deepEqual([r.config.people.length, r.calls], [1, ['GET /api/t/abcdefghij/config']]);
+  r = await run([reply(401, { info: 'UNAUTHORIZED' }), reply(200, { name: 'x' }), reply(200, { config: { people: [] } })]);
+  assert.deepEqual(r.calls, ['GET /api/t/abcdefghij/config', 'POST /api/t/abcdefghij/session', 'GET /api/t/abcdefghij/config']);
+  r = await run([reply(404, { info: 'TRIP_GONE' })]);
+  assert.match(r.error, /删除或到期.*JSON 文件/);
+  r = await run([reply(401, { info: 'UNAUTHORIZED' }), reply(401, { info: 'EDIT_CODE_REQUIRED' })]);
+  assert.match(r.error, /编辑口令/);
+  r = await run([reply(401, { info: 'UNAUTHORIZED' }), reply(401, { info: 'UNAUTHORIZED' })]);
+  assert.match(r.error, /编辑链接已经失效/);
+});
+
+test('批量删除车站：每行一个复选框（试玩也有），两个站以上才有工具条；删除走危险确认，同名站留下的车次不删', () => {
+  fresh('online', { cfg: { options: {}, venue: {}, people: [], stations: [{ name: '东站' }, { name: '' }] } });
+  assert.match(stationRow({ name: '东站' }, 0), /<label class="st-pick"><input type="checkbox" data-st-pick="0" aria-label="选中东站"><\/label>/);
+  assert.match(stationRow({ name: '' }, 1), /aria-label="选中第 2 个车站"/);
+  setCaps(capsFor('try'));
+  assert.match(stationRow({ name: '东站' }, 0), /data-st-pick="0"/); // 试玩本来就能删站
+  assert.match(src.form, /state\.cfg\.stations\.length >= 2 \? `<div class="st-bulk">/);
+  const del = /export async function deleteStations\(\) \{[\s\S]*?\n\}\n/.exec(src.actions)[0];
+  assert.match(del, /confirmDialog\([^)]*\{ title: `删除 \$\{doomed\.length\} 个候选站？`, okText: '删除', danger: true \}/);
+  assert.match(del, /if \(left\.has\(s\.name\)\) continue;/);
+  assert.match(src.wire, /else if \(t\.dataset\.stDel !== undefined\) deleteStations\(\);/);
 });
