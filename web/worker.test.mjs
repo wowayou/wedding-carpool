@@ -41,7 +41,7 @@ beforeEach(() => {
   background = [];
   sharedInvite = null;
   sockets = [fakeSocket(), fakeSocket()];
-  const usage = new Usage({ storage: memoryStorage() });
+  let usage = null; // 全站计数也要拿到 env：邀请码名额满了要去问各个行程实例
   env = {
     AMAP_KEY: 'server-key',
     ACCESS_CODE: 'open-sesame',
@@ -64,6 +64,7 @@ beforeEach(() => {
     },
     USAGE: { idFromName: (n) => n, get: () => usage },
   };
+  usage = new Usage({ storage: memoryStorage() }, env);
   upstream = [];
   globalThis.nextAmapReply = null;
   globalThis.fetch = async (url) => {
@@ -651,7 +652,7 @@ test('邀请码：建行程有次数上限，口令不对或过期都拒绝', as
   for (let i = 0; i < 2; i++) await newTrip({ name: `行程${i}`, code: inv.code.toUpperCase() }); // 大小写都行
   const full = await call('/api/trips', { method: 'POST', body: { code: inv.code } });
   assert.equal(full.status, 403);
-  assert.match((await full.json()).error, /最多能建 2 个/);
+  assert.match((await full.json()).error, /最多同时有 2 个行程/);
   assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'wrongcode' } })).status, 401);
   const old = await createInvite(cookie, { days: 1 });
   const realNow = Date.now;
@@ -679,6 +680,80 @@ test('邀请码的每日上限、停用后不能再用公共额度', async () =>
   assert.equal((await call('/api/trips', { method: 'POST', body: { code: inv.code } })).status, 403);
   stats = await (await call('/api/admin/stats', { cookie })).json();
   assert.equal(stats.invites[0].active, false);
+});
+
+const inviteSlots = async (cookie, code) => (await (await call('/api/admin/stats', { cookie })).json()).invites.find((x) => x.code === code).trips.length;
+
+test('邀请码名额：删除行程、到期自动删除、改用自己的 Key，都还回名额', async () => {
+  const cookie = await adminCookie();
+  const inv = await createInvite(cookie, { maxTrips: 1 });
+  const full = () => call('/api/trips', { method: 'POST', body: { code: inv.code } }).then((r) => r.status);
+  // 删除
+  const a = await newTrip({ code: inv.code });
+  assert.equal(await full(), 403);
+  assert.equal((await call(`${a.base}/delete`, { method: 'POST', cookie: a.cookie })).status, 200);
+  assert.equal(await inviteSlots(cookie, inv.code), 0);
+  // 到期
+  const b = await newTrip({ code: inv.code });
+  assert.equal(await full(), 403);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 200 * 86400e3; // 没填出行日期：180 天没人编辑就到期
+  try { await rooms.get(b.id).alarm(); } finally { Date.now = realNow; }
+  assert.equal((await call(`${b.base}/config`, { cookie: b.cookie })).status, 404);
+  assert.equal(await inviteSlots(cookie, inv.code), 0);
+  // 改用自己的 Key：不再用公共额度，不占名额；行程本身还在
+  const c = await newTrip({ code: inv.code });
+  assert.equal((await call(`${c.base}/key`, { method: 'POST', cookie: c.cookie, body: { amapKey: OWN_KEY } })).status, 200);
+  assert.equal(await inviteSlots(cookie, inv.code), 0);
+  assert.equal((await call(`${c.base}/config`, { cookie: c.cookie })).status, 200);
+  await newTrip({ code: inv.code });
+  assert.equal(await full(), 403);
+});
+
+test('邀请码名额：修复前删掉的行程还占着名额，满了时核对一遍就还回来；刚在新建的不算', async () => {
+  const cookie = await adminCookie();
+  const inv = await createInvite(cookie, { maxTrips: 1 });
+  const a = await newTrip({ code: inv.code });
+  await rooms.get(a.id).ctx.storage.deleteAll(); // 模拟修复前：行程删了，没有通知全站计数
+  const create = () => call('/api/trips', { method: 'POST', body: { code: inv.code } }).then((r) => r.status);
+  assert.equal(await create(), 403); // 刚建的一分钟内不核对（可能还在初始化）
+  const realNow = Date.now;
+  Date.now = () => realNow() + 2 * 60e3;
+  try { assert.equal(await create(), 200); } finally { Date.now = realNow; }
+  assert.equal(await inviteSlots(cookie, inv.code), 1);
+  // 领了名额、还没初始化完的行程（实例里还没有数据），核对时不会被当成「已不在」
+  const other = await createInvite(cookie, { maxTrips: 1 });
+  const use = (tripId) => env.USAGE.get().fetch(new Request('https://internal/invite-use', { method: 'POST', body: JSON.stringify({ code: other.code, tripId }) }));
+  assert.equal((await use('pendingaaa')).status, 200);
+  assert.equal((await use('pendingbbb')).status, 403);
+  assert.equal(await inviteSlots(cookie, other.code), 1);
+});
+
+test('行程实例的 /exists 只能内部调用，只回答在不在、用的哪个邀请码', async () => {
+  const cookie = await adminCookie();
+  const inv = await createInvite(cookie, { maxTrips: 3 });
+  const t = await newTrip({ code: inv.code });
+  assert.equal((await rooms.get(t.id).fetch(new Request('https://internal/exists', { method: 'POST', body: '{}' }))).status, 404); // 没有内部标记
+  const ask = (id) => env.ROOM.get(id).fetch(new Request('https://internal/exists', { method: 'POST', body: '{}', headers: { 'x-carpool-internal': '1' } })).then((r) => r.json());
+  assert.deepEqual(await ask(t.id), { exists: true, invite: inv.code });
+  assert.deepEqual(await ask('nosuchtrip'), { exists: false, invite: null });
+  assert.equal((await call(`${t.base}/exists`, { method: 'POST', cookie: t.cookie, body: {} })).status, 404); // 外面到不了
+});
+
+test('邀请码每天合计上限是「名额 × 每个行程每天上限」：删了再建不能绕开', async () => {
+  const cookie = await adminCookie();
+  const inv = await createInvite(cookie, { maxTrips: 1, tripDailyLimit: 2 });
+  const batch = (t, n, tag) => call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie,
+    body: { requests: Array.from({ length: n }, (_, i) => ({ path: '/v3/distance', query: `${tag}=${i}` })) } }).then((r) => r.json());
+  const a = await newTrip({ code: inv.code });
+  assert.deepEqual((await batch(a, 2, 'a')).results.map((r) => r.info), ['OK', 'OK']);
+  await call(`${a.base}/delete`, { method: 'POST', cookie: a.cookie });
+  const b = await newTrip({ code: inv.code }); // 名额还回来了，能再建
+  const [r] = (await batch(b, 1, 'b')).results;
+  assert.equal(r.info, 'INVITE_DAILY_LIMIT');
+  assert.match(r.error, /额度/);
+  assert.match(r.error, /自己的高德 Key/);
+  assert.equal((await (await call(`${b.base}/config`, { cookie: b.cookie })).json()).usage, 0); // 没给的退回行程当天的计数
 });
 
 test('公共额度用过八成后，当天还没用过的行程暂停分配，已经在算的继续', async () => {

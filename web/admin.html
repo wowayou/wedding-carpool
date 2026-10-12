@@ -126,18 +126,18 @@
       <h2>发一个邀请码</h2>
       <div class="grid">
         <label class="c-field"><span class="c-field__label">备注（发给谁、什么活动）</span><input class="c-input" id="note" maxlength="60" placeholder="比如 小王婚礼"></label>
-        <label class="c-field"><span class="c-field__label">最多建几个行程</span><input class="c-input" id="maxTrips" type="number" min="1" value="3"></label>
+        <label class="c-field"><span class="c-field__label">最多同时几个行程</span><input class="c-input" id="maxTrips" type="number" min="1" value="3"></label>
         <label class="c-field"><span class="c-field__label">有效期（天，0 为不限）</span><input class="c-input" id="days" type="number" min="0" value="30"></label>
         <label class="c-field"><span class="c-field__label">每个行程每天高德上限</span><input class="c-input" id="tripDailyLimit" type="number" min="1" placeholder="默认"></label>
         <button class="c-btn c-btn--primary">生成</button>
       </div>
-      <p class="c-muted" style="margin-top: var(--sp-3)">拿到邀请码的人在首页新建行程时填它，或者直接打开邀请链接。用它建的行程用站点的公共额度；停用后，这些行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。</p>
+      <p class="c-muted" style="margin-top: var(--sp-3)">拿到邀请码的人在首页新建行程时填它，或者直接打开邀请链接。用它建的行程用站点的公共额度；停用后，这些行程要改用自己的高德 Key 才能继续计算，已有数据不受影响。行程删除、到期或改用自己的 Key 后不再占名额；一个邀请码每天的公共额度合计不超过「名额 × 每个行程每天上限」。</p>
     </form>
 
     <div class="c-card">
       <h2>邀请码</h2>
       <div class="c-table-wrap"><table class="c-table">
-        <thead><tr><th>邀请码</th><th>备注</th><th>已建 / 上限</th><th>今天用量</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>邀请码</th><th>备注</th><th>占用 / 上限</th><th>今天用量</th><th>有效期</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="invites"></tbody>
       </table></div>
     </div>

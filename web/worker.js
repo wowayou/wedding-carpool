@@ -69,6 +69,7 @@ const ADMIN_SESSION_SECONDS = 86400;
 const ADMIN_OPS_LIMIT = 50; // 管理操作记录保留条数
 const TRACKED_TRIPS_LIMIT = 200; // 最近用过公共额度的行程，最多记这么多个
 const OWNER_RESERVE_RATIO = 0.8; // 公共额度用过八成后，当天还没用过公共额度的行程不再分配，留给已经在算的
+const INVITE_CREATING_MS = 60e3; // 刚领了邀请码名额、还在初始化的行程，这么久之内核对名额时不算「已不在」
 const CREATE_PER_DAY = 200;
 // 成功结果在 Cloudflare 节点上短期缓存，只为短时间内不重复调用，最长 1 小时；行车时间和路线跟路况走，20 分钟
 const CACHE_SECONDS = { '/v3/distance': 1200, '/v3/direction/driving': 1200 };
@@ -154,7 +155,7 @@ const FORWARDABLE = [
   ['GET', /^\/history$/], ['GET', /^\/history\/\d+$/], ['POST', /^\/restore$/], ['POST', /^\/rename$/],
 ];
 // 行程实例里只接受内部请求的路径
-const ROOM_INTERNAL_ONLY = new Set(['/init', '/auth', '/whoami', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/amap-refund', '/set-key', '/delete']);
+const ROOM_INTERNAL_ONLY = new Set(['/init', '/exists', '/auth', '/whoami', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/amap-refund', '/set-key', '/delete']);
 const TRIP_MODES = new Set(['owner', 'own']);
 
 // ---------- 流量统计：写入 Usage 实例，不拖慢响应 ----------
@@ -568,6 +569,7 @@ function ownerLimitError(reason, cls) {
   const own = '改用自己的高德 Key 能马上继续';
   const errors = {
     INVITE_DISABLED: '建这个行程用的邀请码已停用，不能再用站点的公共额度；改用自己的高德 Key 就能继续',
+    INVITE_DAILY_LIMIT: `建这个行程用的邀请码，今天的公共额度合计用完了（名下所有行程一起算）；${own}，或者明天再来`,
     OWNER_RESERVED: '站点今天的公共额度快用完了，剩下的优先留给已经在算的行程；改用自己的高德 Key 能马上继续，或者明天再来',
     PUBLIC_PAUSED: `站点暂时停用了公共额度；${own}`,
     TRIP_BLOCKED: `这个行程的公共额度被停用了；${own}`,
@@ -634,7 +636,7 @@ async function tripAmap(request, env, url, room, auth, sub) {
     for (const i of todo) want[quotaClass(items[i].path)] += 1;
     const res = await usageOf(env).fetch(internal('/owner-take', {
       want, limit: limitOf(env, 'OWNER_DAILY_LIMIT', DEFAULT_OWNER_DAILY_LIMIT), budgets: budgetsOf(env),
-      invite, fresh: usedBefore === 0, tripId, createdAt,
+      tripLimit: limitOf(env, 'TRIP_DAILY_LIMIT', DEFAULT_TRIP_DAILY_LIMIT), invite, fresh: usedBefore === 0, tripId, createdAt,
     }));
     const { granted: ownerGranted, reasons } = await res.json();
     const given = { lbs: 0, search: 0 };
@@ -719,6 +721,8 @@ export class ConfigRoom {
     const path = url.pathname;
     if (path === '/init') return this.init(await request.json());
     const meta = await this.storage.get('meta');
+    // 全站计数核对邀请码名额时问：这个行程还在不在、是不是还用这个邀请码的公共额度（不用密钥，只回答这两件事）
+    if (path === '/exists') return json({ exists: Boolean(meta), invite: meta && meta.mode !== 'own' ? meta.invite || null : null });
     if (!meta) { // 行程已删除或到期：和「密钥不对」分开，让编辑页能提示。行程 id 是 10 位随机串，说出「存在与否」不会帮人猜到什么
       return json({ error: '这个行程已经删除或到期', status: '0', info: 'TRIP_GONE' }, 404);
     }
@@ -789,6 +793,7 @@ export class ConfigRoom {
       Object.assign(meta, { mode: 'own', amapKey: body.amapKey });
       await this.storage.put('meta', meta);
       await this.storage.delete('usage'); // 之前的用量算在站长 Key 上，换 Key 后重新计
+      await this.tellUsage('/invite-release', { id: meta.id }); // 不再用公共额度，还回邀请码的名额
       this.broadcast({ type: 'meta', name: meta.name, mode: 'own' });
       return json({ mode: 'own' });
     }
@@ -883,11 +888,14 @@ export class ConfigRoom {
     await this.storage.setAlarm(deadline);
   }
 
-  // 行程删除或到期后，全站计数里「最近用过公共额度的行程」也去掉它
-  async forget(id) {
-    try { await this.env.USAGE.get(this.env.USAGE.idFromName('global')).fetch(internal('/trip-forget', { id })); }
+  // 通知全站计数；失败只记日志（邀请码名额满时，全站计数会自己核对一遍，见 Usage 的 /invite-use）
+  async tellUsage(path, body) {
+    try { await this.env.USAGE.get(this.env.USAGE.idFromName('global')).fetch(internal(path, body)); }
     catch (err) { console.error('通知全站计数失败', err); }
   }
+
+  // 行程删除或到期后，全站计数里「最近用过公共额度的行程」去掉它，邀请码的名额也还回去
+  forget(id) { return this.tellUsage('/trip-forget', { id }); }
 
   alarm() { return this.exclusive(() => this.expire()); }
 
@@ -1087,6 +1095,34 @@ export class Usage {
     return { today: sum([today]), month: sum(month) };
   }
 
+  // 把行程从所有邀请码名下去掉（删除、到期、改用自己的 Key）
+  async releaseInvite(id) {
+    const invites = (await this.storage.get('invites')) || {};
+    let changed = false;
+    for (const inv of Object.values(invites)) {
+      const i = inv.trips.indexOf(id);
+      if (i >= 0) { inv.trips.splice(i, 1); changed = true; }
+    }
+    if (changed) await this.storage.put('invites', invites);
+  }
+
+  // 邀请码名下已经不在、或者不再用这个邀请码的行程。刚在新建的（领了名额还没初始化完）不算，免得误删
+  async staleInviteTrips(inv) {
+    const now = Date.now();
+    const stale = new Set();
+    if (!this.env.ROOM) return stale;
+    await Promise.all(inv.trips.map(async (id) => {
+      if (now - (this.creating?.get(id) || 0) < INVITE_CREATING_MS) return;
+      try {
+        const res = await this.env.ROOM.get(this.env.ROOM.idFromName(id)).fetch(internal('/exists', {}));
+        const info = await res.json();
+        if (!info.exists || info.invite !== inv.code) stale.add(id);
+      } catch (err) { console.error('核对邀请码名下的行程失败', id, err); } // 问不到就当它还在，宁可少还名额
+    }));
+    for (const [id, at] of this.creating || []) if (now - at >= INVITE_CREATING_MS) this.creating.delete(id);
+    return stale;
+  }
+
   // 记一条管理操作，只留最近 ADMIN_OPS_LIMIT 条
   async log(op, target = '') {
     const ops = (await this.storage.get('ops')) || [];
@@ -1133,6 +1169,11 @@ export class Usage {
       const trips = (await this.storage.get('trips')) || [];
       const left = trips.filter((t) => t.id !== body.id);
       if (left.length !== trips.length) await this.storage.put('trips', left);
+      await this.releaseInvite(body.id);
+      return json({ ok: true });
+    }
+    if (path === '/invite-release') { // 行程改用自己的 Key：不再占邀请码的名额
+      await this.releaseInvite(body.id);
       return json({ ok: true });
     }
     if (path === '/hit') return this.hit(body, today);
@@ -1205,13 +1246,33 @@ export class Usage {
     }
     // ---- 邀请码 ----
     if (path === '/invite-use') {
-      const invites = (await this.storage.get('invites')) || {};
-      const inv = invites[String(body.code).toLowerCase()];
-      if (!inv) return json({ error: '邀请码不对' }, 401);
-      if (!inv.active) return json({ error: '这个邀请码已停用' }, 403);
-      if (inv.expiresAt && Date.now() > inv.expiresAt) return json({ error: '这个邀请码已过期' }, 403);
-      if (inv.trips.length >= inv.maxTrips) return json({ error: `这个邀请码最多能建 ${inv.maxTrips} 个行程，已经用完了` }, 403);
+      const code = String(body.code).toLowerCase();
+      const check = (inv) => {
+        if (!inv) return json({ error: '邀请码不对' }, 401);
+        if (!inv.active) return json({ error: '这个邀请码已停用' }, 403);
+        if (inv.expiresAt && Date.now() > inv.expiresAt) return json({ error: '这个邀请码已过期' }, 403);
+        return null;
+      };
+      let invites = (await this.storage.get('invites')) || {};
+      let inv = invites[code];
+      const bad = check(inv);
+      if (bad) return bad;
+      if (inv.trips.length >= inv.maxTrips) {
+        // 满了：先核对名下的行程是不是都还在用这个邀请码。修复之前删掉或到期的行程没有还名额，
+        // 通知全站计数失败的也会漏掉，在这里补上。核对要问各个行程实例，期间可能有别的请求改过邀请码，所以问完重新读一遍
+        const stale = await this.staleInviteTrips(inv);
+        if (stale.size) {
+          invites = (await this.storage.get('invites')) || {};
+          inv = invites[code];
+          const again = check(inv);
+          if (again) return again;
+          inv.trips = inv.trips.filter((id) => !stale.has(id));
+          await this.storage.put('invites', invites);
+        }
+      }
+      if (inv.trips.length >= inv.maxTrips) return json({ error: `这个邀请码最多同时有 ${inv.maxTrips} 个行程，已经用满了；删掉不用的行程就能再建` }, 403);
       inv.trips.push(body.tripId);
+      (this.creating ||= new Map()).set(body.tripId, Date.now());
       await this.storage.put('invites', invites);
       return json({ invite: inv.code, tripLimit: inv.tripDailyLimit || null });
     }
@@ -1333,13 +1394,22 @@ export class Usage {
     if (body.invite && (!inv || !inv.active)) return refuse('INVITE_DISABLED');
     if (body.fresh && total >= body.limit * OWNER_RESERVE_RATIO) return refuse('OWNER_RESERVED');
     let room = Math.max(0, body.limit - total); // 全站今天还剩多少
+    // 一个邀请码当天合计最多「名额 × 每个行程每天上限」：名额删了能还，不能靠删了再建绕开每个行程的上限
+    let inviteRoom = Infinity;
+    if (inv) {
+      const cap = inv.maxTrips * (inv.tripDailyLimit || Number(body.tripLimit) || DEFAULT_TRIP_DAILY_LIMIT);
+      inviteRoom = Math.max(0, cap - (inv.usage?.day === today ? inv.usage.count : 0));
+    }
     const granted = {}, reasons = {};
     for (const cls of QUOTA_CLASSES) {
       const want = Math.max(0, Number(body.want?.[cls]) || 0);
       const left = Math.max(0, body.budgets[cls] - month[cls]); // 这一类本月预算还剩多少
-      granted[cls] = Math.min(want, left, room);
-      if (granted[cls] < want) reasons[cls] = left <= room ? 'MONTHLY_BUDGET' : 'OWNER_DAILY_LIMIT';
+      granted[cls] = Math.min(want, left, room, inviteRoom);
+      if (granted[cls] < want) {
+        reasons[cls] = inviteRoom < Math.min(left, room) ? 'INVITE_DAILY_LIMIT' : left <= room ? 'MONTHLY_BUDGET' : 'OWNER_DAILY_LIMIT';
+      }
       room -= granted[cls];
+      inviteRoom -= granted[cls];
     }
     const sum = granted.lbs + granted.search;
     if (sum) {
