@@ -68,10 +68,11 @@ export function pick(base, k) {
   setPath(`${base}.location`, r.location);
   const city = r.city || (r.shared ? '' : cityFromDetail(r.detail));
   if (city && !getPath(`${base}.city`)) setPath(`${base}.city`, city);
-  if (base === 'venue' && !state.cfg.venue.name && !(r.shared && !r.name)) state.cfg.venue.name = r.name;
+  const unnamed = r.shared && r.name === '分享的位置'; // 分享里没有名称：不拿占位的「分享的位置」当目的地名称
+  if (base === 'venue' && !state.cfg.venue.name && !unnamed) state.cfg.venue.name = r.name;
   // 粘贴的是一整段分享文字时，地址框里换成认出来的名称，免得留着链接
   const textKey = base === 'venue' ? 'address' : 'from';
-  if (r.shared && r.name !== '分享的位置' && /https?:\/\/|\d+\.\d{3,}/.test(getPath(`${base}.${textKey}`) || '')) setPath(`${base}.${textKey}`, r.name);
+  if (r.shared && !unnamed && /https?:\/\/|\d+\.\d{3,}/.test(getPath(`${base}.${textKey}`) || '')) setPath(`${base}.${textKey}`, r.name);
   state.fitted = false;
   markDirty();
   rerenderKeepingFocus();

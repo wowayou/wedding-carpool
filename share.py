@@ -225,7 +225,7 @@ def _outbound(state: dict, index: int) -> tuple[str, dict]:
         steps.append(_step(_t(car.arrive), f"到目的地 <b>{escape(venue.name)}</b>", venue_link))
         pt = times[car.driver]
         waited = f"，其中在接人点等 {carpool.fmt_min(pt.wait)}" if pt.wait >= 1 else ""
-        summary = (f"全程约 {carpool.fmt_min(pt.minutes)}{waited}，比直达多绕 {carpool.fmt_min(car.detour)}"
+        summary = (f"全程约 {carpool.fmt_min(car.minutes if pt.minutes is None else pt.minutes)}{waited}，比直达多绕 {carpool.fmt_min(car.detour)}"
                    if car.stops else f"直达，约 {carpool.fmt_min(car.minutes)}，这次不用接人")
         navs = " ".join(f'<a class="btn" href="{escape(url)}" target="_blank" rel="noopener">{escape(label)}</a>'
                         for label, url in _share_nav(r, pts))
