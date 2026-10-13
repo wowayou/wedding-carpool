@@ -112,6 +112,35 @@ test('试玩：推荐车站的设置、估算、「开始找」不能点、地�
   assert.equal(await page.locator('.legend-sug').isHidden(), true);
 });
 
+test('试玩：勾选几个候选站一起删除，车次跟着清掉；出发日期下面写火车票哪天开售', async () => {
+  const stations = page.locator('#form [data-station-name]');
+  const before = await stations.count();
+  const names = await stations.evaluateAll((els) => els.map((e) => e.value));
+  const del = page.locator('#form [data-st-del]');
+  assert.equal(await del.isDisabled(), true, '没勾的时候不能点');
+  await page.locator('#form [data-st-pick="0"]').check();
+  await page.locator('#form [data-st-pick="1"]').check();
+  assert.equal(await del.innerText(), '删除选中（2）');
+  assert.equal(await page.locator('#form [data-st-all]').evaluate((el) => el.indeterminate), true, '勾了一部分：全选是半勾');
+  await del.click();
+  const dlg = page.locator('dialog.c-modal[open]');
+  await dlg.waitFor();
+  assert.match(await dlg.innerText(), new RegExp(`删除 2 个候选站？[\\s\\S]*${names[0]}、${names[1]}[\\s\\S]*恢复示例`));
+  assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-dialog-cancel')), true, '危险操作焦点落在取消');
+  await dlg.locator('[data-dialog-ok]').click();
+  await page.locator('#toasts .c-toast', { hasText: '删掉了 2 个候选站' }).waitFor();
+  assert.equal(await stations.count(), before - 2);
+  for (const n of names.slice(0, 2)) assert.equal(await page.locator(`#form [data-train][data-station="${n}"]`).count(), 0, `${n} 的车次输入框跟着去掉`);
+  // 全选再取消
+  await page.locator('#form [data-st-all]').check();
+  assert.equal(await del.innerText(), `删除选中（${before - 2}）`);
+  await page.locator('#form [data-st-all]').uncheck();
+  assert.equal(await del.isDisabled(), true);
+  // 出发日期下面的开售提示（试玩的日期是下个周六）
+  const hint = page.locator('#form [data-sale="options.travel_date"]');
+  assert.match(await hint.innerText(), /^火车票 \d+月\d+日（周.）(已经开售|开售)/);
+});
+
 test('试玩：恢复示例', async () => {
   await bind(page, 'venue.name').fill('改过的名字');
   await page.locator('#stale').waitFor({ state: 'visible' });

@@ -3,13 +3,23 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import re
 import urllib.parse
 
 from base import INF, RULES_VERSION
 from geo import Place
 from model import OUT, Leg, Trip, clock
 from routes import Plan, Route, leg_minutes
-from timetable import Timeline, Timelines
+from timetable import PersonTime, Timeline, Timelines
+
+# 火车票开售日：12306 的预售期是 15 天（含乘车当天），也就是乘车日前 14 天开售。
+# 核对过 2026 年春运的报道：2 月 15 日的票 2 月 1 日开售，2 月 23 日的票 2 月 9 日开售。规定变了改这里，
+# 编辑页 web/editor/rail12306.js 里有同样的两个常量，test_carpool.py 核对两边一致
+PRESALE_DAYS = 15
+# 春节（正月初一）。春运按往年规律是春节前 15 天到后 24 天（2024–2026 年都是这样，以铁路部门公布为准）；表外的年份只写开售日
+SPRING_FESTIVAL = {2026: "2026-02-17", 2027: "2027-02-06", 2028: "2028-01-26", 2029: "2029-02-13", 2030: "2030-02-03"}
+WEEKDAY_NAMES = "一二三四五六日"
 
 
 def fmt_min(m: float) -> str:
@@ -57,14 +67,85 @@ def who(names, trip: Trip) -> str:
     return "、".join(f"{n}（{party[n]} 人）" if party.get(n, 1) > 1 else n for n in names)
 
 
-def taxi_fare(minutes: float, people: int) -> str:
-    """打车费按车程粗估：平均时速约 60 公里，每公里 2–3 元；超过 4 人要两辆车或包商务车。"""
+def fare_range(minutes: float, people: int) -> tuple[int, int, int] | None:
+    """打车费按车程粗估：平均时速约 60 公里，每公里 2–3 元；超过 4 人要两辆车或包商务车。返回 (低, 高, 几辆车)。"""
     if minutes == INF:
-        return ""
+        return None
     km = minutes  # 约 1 公里/分钟
     cars = (people + 3) // 4
-    low, high = round(km * 2 * cars, -1), round(km * 3 * cars, -1)
-    return f"，打车粗估约 {low:.0f}–{high:.0f} 元{f'（{cars} 辆车）' if cars > 1 else ''}，以实际为准"
+    return int(round(km * 2 * cars, -1)), int(round(km * 3 * cars, -1)), cars
+
+
+def taxi_fare(minutes: float, people: int) -> str:
+    fare = fare_range(minutes, people)
+    if fare is None:
+        return ""
+    low, high, cars = fare
+    return f"，打车粗估约 {low}–{high} 元{f'（{cars} 辆车）' if cars > 1 else ''}，以实际为准"
+
+
+def ticket_sale(date: str) -> tuple[dt.date, dt.date, bool] | None:
+    """乘车日期（YYYY-M-D，也认 /）→ (乘车日, 开售日, 是否在春运期间)；写不对返回 None。"""
+    m = re.fullmatch(r"\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s*", str(date or ""))
+    try:
+        day = dt.date(int(m[1]), int(m[2]), int(m[3])) if m else None
+    except ValueError:
+        day = None
+    if day is None:
+        return None
+    festival = SPRING_FESTIVAL.get(day.year)  # 春节最早在 1 月下旬，春运不会跨到上一年的 12 月
+    f = dt.date.fromisoformat(festival) if festival else None
+    spring = bool(f and f - dt.timedelta(days=15) <= day <= f + dt.timedelta(days=24))
+    return day, day - dt.timedelta(days=PRESALE_DAYS - 1), spring
+
+
+def month_day(d: dt.date) -> str:
+    return f"{d.month}月{d.day}日（周{WEEKDAY_NAMES[d.weekday()]}）"
+
+
+def ticket_tips(trip: Trip) -> list[str]:
+    """火车票什么时候开售：去程、返程各一句；有人在春运期间坐火车时再提醒开售当天就买。没人坐火车就不写。"""
+    if all(p.drives for p in trip.people):
+        return []
+    legs = []
+    if trip.outbound:
+        legs.append(("去程", trip.travel_date))
+    if trip.back:
+        legs.append(("返程", trip.back.date or (trip.travel_date if trip.outbound else "")))
+    by_day: dict[tuple, list[str]] = {}  # 去程、返程同一天时合成一句
+    for label, date in legs:
+        sale = ticket_sale(date)
+        if sale:
+            by_day.setdefault(sale, []).append(label)
+    parts = [f"{'和'.join(labels)} {day.month}月{day.day}日的票 {month_day(start)}开售" for (day, start, _), labels in by_day.items()]
+    spring = any(busy for _, _, busy in by_day)
+    if not parts:
+        return []
+    text = f"火车票：{'，'.join(parts)}（12306 提前 {PRESALE_DAYS} 天开售，含乘车当天），车次、余票以 12306 为准。"
+    if spring:
+        text += f"{'这几天' if len(by_day) > 1 else '这天'}在春运期间，热门方向开售后很快卖完：开售当天准点买，买不到就提交候补。"
+    return [text]
+
+
+ROLE_NAMES = {"drive": "开车", "ride": "搭车", "taxi": "打车", "stranded": "待安排"}
+
+
+def versus(pt: PersonTime) -> str:
+    """和自己单独走比：多 X / 少 X / 差不多；没有可比的写「—」。"""
+    e = pt.extra
+    if e is None:
+        return "—"
+    return "差不多" if abs(e) < 1 else f"{'多' if e > 0 else '少'} {fmt_min(abs(e))}"
+
+
+def time_table(tl: Timeline, trip: Trip, back: bool = False) -> list[str]:
+    """每个人的用时（约）：去程是出门到目的地，返程是离场到家。只用来看各人的负担，不参与排序。"""
+    head = ["成员", "离场到家" if back else "出门到目的地", "其中等人", "比自己单独走"]
+    out = ["每个人的用时（约）：", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for pt in tl.people:
+        total = "待安排" if pt.minutes is None else fmt_min(pt.minutes)
+        out.append(f"| {who([pt.name], trip)}（{ROLE_NAMES[pt.role]}） | {total} | {fmt_min(pt.wait) if pt.wait >= 1 else '—'} | {versus(pt)} |")
+    return out
 
 
 def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> list[str]:
@@ -232,17 +313,18 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
               f"车主合计多绕 {fmt_min(best.detour)}。",
               f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or '不需要坐到站'}**。",
               "", "## 推荐方案", "", *describe(best, tls.out[0], pts, trip), "",
-              *paragraphs(rank_basis(best))]
+              *paragraphs(rank_basis(best)), *time_table(tls.out[0], trip), ""]
         for i, pl in enumerate(plans[1:], 2):
             L += [f"## 备选方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
-                  *describe(pl, tls.out[i - 1], pts, trip), "", *paragraphs(rank_basis(pl, best))]
+                  *describe(pl, tls.out[i - 1], pts, trip), "", *paragraphs(rank_basis(pl, best)), *time_table(tls.out[i - 1], trip), ""]
     if trip.back:
         L += [f"## 返程（{clock(trip.back.depart)} 散场后出发，发车前 {trip.back.margin:.0f} 分钟到站）", ""]
         if not trip.back_plans:
             L += ["没有找到可行的返程方案。", ""]
         for i, pl in enumerate(trip.back_plans, 1):
             L += [f"### 返程方案 {i}（{pl.carried} 人搭车，车主合计多绕 {fmt_min(pl.detour)}）", "",
-                  *describe_back(tls.back[i - 1], pts, trip), "", *paragraphs(rank_basis(pl, trip.back_plans[0]))]
+                  *describe_back(tls.back[i - 1], pts, trip), "", *paragraphs(rank_basis(pl, trip.back_plans[0])),
+                  *time_table(tls.back[i - 1], trip, back=True), ""]
     if trip.outbound:
         L += ["## 候选站对比", "",
               "每个车主「只在这个站停一次」时比直达多绕多久；✅ 表示在他能接受的绕路范围内。", "",
@@ -270,6 +352,10 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
     else:
         L += ["- 乘客从各站坐的车：用配置里填的回程车次（`return_trains`）；没填的人不限制赶车，到站用时按默认每站 "
               f"{trip.station_cost:.0f} 分钟算。"]
+    spans = (["去程从出门算到目的地"] if trip.outbound else []) + (["返程从离场算到家"] if trip.back else [])
+    L += [f"- 每个人的用时是约数，只用来看各人的负担，不参与排序。{'，'.join(spans)}；坐火车的人含车次用时和去车站、候车的时间（和排序里「乘客到上车点」的口径一样）。"
+          "「比自己单独走」：车主和直达比；不开车的人和自己从最快的站单独打车比，多出来的通常是等人或为了搭车、拼车去了慢一点的站。"]
+    L += [f"- {tip}" for tip in ticket_tips(trip)]
     L += [f"- 方案按计算规则第 {RULES_VERSION} 版排序，规则和默认值见 https://carpool.eigentime.org/guide/method"]
     if trip.outbound:
         L += ["- 高铁站一般要到停车场或网约车上车点接人，约定时说到具体停车场和区域。"]

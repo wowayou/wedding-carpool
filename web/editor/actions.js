@@ -3,9 +3,10 @@
 import { backend } from './backend.js';
 import { caps } from './caps.js';
 import { confirmDialog, toast } from './dialogs.js';
-import { refreshDerived, renderForm, rerenderKeepingFocus } from './form.js';
+import { pickedRows, refreshDerived, renderForm, rerenderKeepingFocus, syncPicked } from './form.js';
 import { showQuota } from './overlay.js';
 import { getPath, setPath } from './paths.js';
+import { parseShared } from './shared-place.js';
 import { state } from './state.js';
 import { markDirty } from './sync.js';
 import { esc, isQuotaError } from './util.js';
@@ -13,10 +14,37 @@ import { esc, isQuotaError } from './util.js';
 export const candidates = {}; // 每个输入框最近一次的搜索结果
 
 // ---------- 搜索与定位 ----------
-export async function search(base, textKey) {
-  const q = (getPath(`${base}.${textKey}`) || '').trim();
+// 认出来的分享位置：给一个候选，点了就定位（不调用高德）
+export function offerShared(base, shared) {
   const box = document.querySelector(`[data-cands="${base}"]`);
-  if (!q) { toast('先输入要搜索的名称'); return; }
+  const detail = [shared.address, `分享的位置，坐标 ${shared.location}（按高德坐标）`].filter(Boolean).join(' · ');
+  candidates[base] = [{ name: shared.name || '分享的位置', detail, location: shared.location, shared: true }];
+  if (box) box.innerHTML = `<button data-pick="${base}" data-k="0">${esc(candidates[base][0].name)}<small>${esc(detail)}</small></button>`;
+}
+
+// 往目的地、出发地的地址框里粘贴：认出分享的位置或链接，框里只留名称和地址，链接（含分享追踪参数）不进配置和历史。
+// 认出坐标的直接给候选；只认出文字的，留下去掉链接和套话后的文字，点「搜索」再搜。返回 true 表示已经处理了这次粘贴
+export function pasteShared(base, textKey, text) {
+  const shared = parseShared(text);
+  if (!shared) return false;
+  const clean = shared.location ? [shared.name, shared.address].filter(Boolean).join(' ') || shared.location : shared.query;
+  setPath(`${base}.${textKey}`, clean);
+  markDirty();
+  const input = document.querySelector(`#form [data-bind="${base}.${textKey}"]`);
+  if (input) input.value = clean;
+  if (shared.location) offerShared(base, shared);
+  else toast('去掉了链接，点「搜索」找这个地点');
+  return true;
+}
+
+// 粘贴来的分享（高德链接、坐标）直接给一个候选，不调用高德；分享文字里的链接和套话去掉后再搜
+export async function search(base, textKey) {
+  const typed = (getPath(`${base}.${textKey}`) || '').trim();
+  const box = document.querySelector(`[data-cands="${base}"]`);
+  if (!typed) { toast('先输入要搜索的名称'); return; }
+  const shared = base.startsWith('stations.') ? null : parseShared(typed);
+  if (shared?.location) { offerShared(base, shared); return; }
+  const q = shared?.query || typed;
   box.innerHTML = '<button disabled>搜索中…</button>';
   try {
     const { results } = await backend.search(q, getPath(`${base}.city`), base.startsWith('stations.'));
@@ -38,9 +66,13 @@ export function cityFromDetail(detail) {
 export function pick(base, k) {
   const r = candidates[base][k];
   setPath(`${base}.location`, r.location);
-  const city = r.city || cityFromDetail(r.detail);
+  const city = r.city || (r.shared ? '' : cityFromDetail(r.detail));
   if (city && !getPath(`${base}.city`)) setPath(`${base}.city`, city);
-  if (base === 'venue' && !state.cfg.venue.name) state.cfg.venue.name = r.name;
+  const unnamed = r.shared && r.name === '分享的位置'; // 分享里没有名称：不拿占位的「分享的位置」当目的地名称
+  if (base === 'venue' && !state.cfg.venue.name && !unnamed) state.cfg.venue.name = r.name;
+  // 粘贴的是一整段分享文字时，地址框里换成认出来的名称，免得留着链接
+  const textKey = base === 'venue' ? 'address' : 'from';
+  if (r.shared && !unnamed && /https?:\/\/|\d+\.\d{3,}/.test(getPath(`${base}.${textKey}`) || '')) setPath(`${base}.${textKey}`, r.name);
   state.fitted = false;
   markDirty();
   rerenderKeepingFocus();
@@ -80,6 +112,25 @@ export async function deleteItem(path) {
   renderForm();
 }
 
+// 勾选的几个车站一起删；它们的车次、用时一起清掉，和单个删除一样
+export async function deleteStations() {
+  const rows = new Set(pickedRows());
+  const doomed = state.cfg.stations.filter((_, i) => rows.has(i));
+  if (!doomed.length) { toast('先勾选要删除的车站'); return; }
+  const names = doomed.map((s) => s.name || '未命名').join('、');
+  if (!await confirmDialog(`${names}。这些站的车次和用时会一起删掉。${caps.text.deleteHint}`, { title: `删除 ${doomed.length} 个候选站？`, okText: '删除', danger: true })) return;
+  state.cfg.stations = state.cfg.stations.filter((_, i) => !rows.has(i));
+  const left = new Set(state.cfg.stations.map((s) => s.name));
+  for (const s of doomed) {
+    if (left.has(s.name)) continue; // 同名的站还留着一个，它的车次不能删
+    state.cfg.people.forEach((p) => ['rail_min', 'trains', 'return_trains'].forEach((k) => p[k] && delete p[k][s.name]));
+  }
+  state.pickedStations.clear();
+  markDirty();
+  renderForm();
+  toast(`删掉了 ${doomed.length} 个候选站`);
+}
+
 export function renameStation(i, input) {
   const oldName = input.dataset.old, newName = input.value.trim();
   if (oldName === newName) return;
@@ -93,6 +144,7 @@ export function renameStation(i, input) {
   }
   // 原地改：名字相关的 data 属性、标签和无障碍文字，不重建表单
   input.dataset.old = newName;
+  syncPicked(); // 勾选按站名记，改名后跟着换
   for (const el of document.querySelectorAll('#form [data-station]')) {
     if (el.dataset.station !== oldName) continue;
     el.dataset.station = newName;

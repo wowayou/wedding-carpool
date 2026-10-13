@@ -210,7 +210,8 @@ def back_leg(cfg: dict) -> "Leg | None":
     times = train_times(str(r.get("depart_time") or ""))
     if not times:
         raise SystemExit("开了返程，但还没填散场后几点出发")
-    return Leg("back", "返程", reverse=True, depart=times[0], margin=float(r.get("security_min", DEFAULTS["security_min"])),
+    date = str(r.get("date") or (cfg.get("options") or {}).get("travel_date") or "").strip()
+    return Leg("back", "返程", reverse=True, depart=times[0], margin=float(r.get("security_min", DEFAULTS["security_min"])), date=date,
                max_wait=float(r.get("max_wait_min", DEFAULTS["max_wait_min"])))
 
 
@@ -297,6 +298,7 @@ class Leg:
     depart: float | None = None  # 返程：散场时间（当天分钟数）；没填离场时间的人从这时出发
     margin: float = 40           # 返程：发车前多少分钟要到站
     max_wait: float = 30         # 返程：乘客最多等车主多久
+    date: str = ""               # 返程：返程日期（YYYY-MM-DD），没填就是出发日期；只用来提示火车票开售日
 
     def ends(self, driver: str) -> tuple[str, str]:
         car = f"car:{driver}"
