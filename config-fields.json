@@ -16,6 +16,7 @@
   {"path": "options.exit_buffer_min", "type": "number", "label": "下车到上车", "section": "options", "default": 15, "min": 0, "unit": "分钟", "rules_table": true, "hint": "列车到站后出站、走到接人点"},
   {"path": "options.outbound", "type": "boolean", "label": "规划去程", "section": "options", "default": true},
   {"path": "options.taxi_mode", "type": "choice", "label": "打车方式", "section": "options", "default": "save", "rules_table": true, "choices": [{"value": "save", "label": "尽量拼车省钱"}, {"value": "fast", "label": "各人走自己最快的站"}], "hint": "没搭上车的人另外打车时怎么安排"},
+  {"path": "options.ride_extra_min", "type": "number", "label": "搭车最多多花", "section": "options", "default": 30, "min": 0, "unit": "分钟", "rules_table": true, "hint": "为了多带一个人，搭顺风车的人最多比他自己单独打车多花几分钟（不算等人）"},
   {"path": "options.taxi_pool_extra_min", "type": "number", "label": "拼车最多多花", "section": "options", "default": 30, "min": 0, "unit": "分钟", "rules_table": true, "hint": "为了拼车，一个人最多比他自己最快的走法多花几分钟"},
   {"path": "options.taxi_wait_min", "type": "number", "label": "拼一辆的时间差", "section": "options", "default": 30, "min": 0, "unit": "分钟", "rules_table": true, "hint": "同一辆出租里的人，到站或离场的时间最多相差几分钟"},
   {"path": "options.discover_radius_km", "type": "number", "label": "自动找站的范围", "section": "options", "default": 120, "min": 0, "unit": "公里", "rules_table": true, "hint": "没写候选站时，自动搜索目的地周围多大范围内的火车站"},

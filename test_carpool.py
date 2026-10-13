@@ -37,6 +37,7 @@ import service
 import taxi
 import ui
 from carpool import Place, km_between
+from model import OUT
 
 VENUE = "118.0,30.0"
 NEAR = "118.0,30.8"   # 目的地正北约 89km：离目的地最近的站
@@ -972,6 +973,146 @@ class PartyTest(unittest.TestCase):
         self.assertIn("不开车的 4 人里，**2 人能搭上顺风车**", report)
 
 
+class RideLimitTest(unittest.TestCase):
+    """搭车最多多花（v3.13，计算规则第 3 版）：搭顺风车的人，不算等人的全程不能比自己单独走多花过 ride_extra_min 分钟。"""
+
+    def out(self, people, **options):
+        plans, _, T, trip = best_plan(config(people, **options))
+        return plans, T, trip
+
+    def back(self, people, **options):
+        cfg = config(people, **options)
+        cfg["return"] = {"enabled": True, "depart_time": "18:00"}
+        trip, _, T, _ = carpool.plan_trip(cfg, FakeAmap())
+        return trip.back_plans, T, trip
+
+    def test_option_is_read_and_defaults_to_30(self):
+        self.assertEqual(carpool.DEFAULTS["ride_extra_min"], 30)
+        self.assertEqual(carpool.load_trip(config([person("小陈", "114.0,34.0")]), FakeAmap()).ride_extra, 30)
+        self.assertEqual(carpool.load_trip(config([person("小陈", "114.0,34.0")], ride_extra_min=12), FakeAmap()).ride_extra, 12)
+
+    def test_outbound_slow_car_to_far_station_means_taxi(self):
+        # 小陈坐老王的车去西站，比自己打车去近站多花约 10 分钟：上限 5 不搭，30 搭
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")]
+        plans, *_ = self.out(people, ride_extra_min=5)
+        self.assertEqual((plans[0].rides, plans[0].taxi), ({}, {"小陈": "st:近站"}))
+        plans, *_ = self.out(people, ride_extra_min=30)
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})
+
+    def test_outbound_pickup_near_home_with_a_long_detour(self):
+        # 车先到小李家，再绕去近站接小陈，小李在车上比自己去西站打车多花约 76 分钟：不接小李，改在近站上车
+        people = [person("老王", WANG, car_seats=3, max_detour_min=120), person("小李", "116.5,30.4"),
+                  person("小陈", "114.0,34.0", stations=["近站"], pickup_at_home=False)]
+        plans, *_ = self.out(people)
+        self.assertEqual(plans[0].rides, {"小李": ("老王", "st:近站"), "小陈": ("老王", "st:近站")})
+        for plan in plans:  # 任何方案里，在家附近接小李的车都不会再去近站
+            if plan.rides.get("小李") == ("老王", "home:小李"):
+                self.assertNotIn("st:近站", plan.routes[0].stops)
+        plans, *_ = self.out(people, ride_extra_min=999)
+        self.assertEqual(plans[0].rides, {"小李": ("老王", "home:小李"), "小陈": ("老王", "st:近站")})
+
+    def test_back_with_train_to_a_much_later_station(self):
+        # 小陈自己打车去近站赶 20:15 的车；老王顺路送到西站，赶的是 20:30 的车，比自己的走法晚 15 分钟发车、回程也更久
+        people = [person("老王", WANG, car_seats=3),
+                  person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站20:30→小陈家23:30", "近站": "G3 近站20:15→小陈家21:45"})]
+        plans, *_ = self.back(people)
+        self.assertEqual((plans[0].rides, plans[0].taxi), ({}, {"小陈": "st:近站"}))
+        plans, *_ = self.back(people, ride_extra_min=999)
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})
+
+    def test_back_without_train_follows_the_ride_minutes(self):
+        # 没填回程车次：车主先送小陈到近站再绕去小李家，小李在车上 239 分钟，比自己的走法多花 50 分钟：改成在近站下车
+        people = [person("老王", WANG, car_seats=3, return_max_detour_min=120), person("小李", "116.5,30.4"),
+                  person("小陈", "114.0,34.0", stations=["近站"], pickup_at_home=False)]
+        plans, *_ = self.back(people)
+        self.assertEqual(plans[0].rides, {"小李": ("老王", "st:近站"), "小陈": ("老王", "st:近站")})
+        plans, *_ = self.back(people, ride_extra_min=999)
+        self.assertEqual(plans[0].rides, {"小李": ("老王", "home:小李"), "小陈": ("老王", "st:近站")})
+
+    def test_train_with_only_a_departure_time_counts_as_filled_back(self):
+        # 回程车次只写了发车时刻，推不出分钟数，也算填了这个站：小陈只会在西站下车，打车也只去西站，自己单独走也按西站算
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站20:30"})]
+        trip, *_ = carpool.plan_trip(config(people, ride_extra_min=0) | {"return": {"enabled": True, "depart_time": "18:00"}}, FakeAmap())
+        names = [s.name for s in trip.stations]
+        self.assertEqual(sorted(carpool.rider_options(trip.people[1], names, trip.station_cost, trip.back)), ["home:小陈", "st:西站"])
+        plans = trip.back_plans
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})  # 和自己单独走一样，没有「多花」
+        self.assertEqual([p.taxi for p in plans[1:]], [{"小陈": "st:西站"}])
+        tl = carpool.timeline(plans[0], trip, carpool.build_matrix(FakeAmap(), carpool.points_of(trip), set(), out=False, back=True), trip.back)
+        self.assertEqual(round(tl.people[1].extra or 0), 0)
+
+    def test_train_with_only_a_departure_time_counts_as_filled_out(self):
+        # 去程同理：车次只有一个时刻（分钟数推不出）的站也算填了，只去这个站；用高德估算的分钟数
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", trains={"西站": "G1 07:00"})]
+        plans, _, _, trip = best_plan(config(people))
+        names = [s.name for s in trip.stations]
+        self.assertEqual(sorted(carpool.rider_options(trip.people[1], names, trip.station_cost)), ["home:小陈", "st:西站"])
+        self.assertEqual(carpool.rider_options(trip.people[1], names, trip.station_cost)["st:西站"], trip.people[1].rail_est["西站"][0])
+        self.assertEqual(plans[-1].taxi, {"小陈": "st:西站"})  # 没人搭车时只会打车去西站，不会去近站
+
+    def test_filled_station_without_estimate_falls_back_to_station_cost(self):
+        people = [person("小陈", "114.0,34.0", trains={"西站": "G1 07:00"})]
+        plans, _, _, trip = best_plan(config(people), FakeAmap(no_transit={"西站"}))
+        self.assertEqual(carpool.rider_options(trip.people[0], ["近站", "西站"], trip.station_cost)["st:西站"], trip.station_cost)
+        self.assertEqual(plans[0].taxi, {"小陈": "st:西站"})
+
+    def test_estimate_only_asks_for_filled_stations_without_minutes(self):
+        trip = carpool.load_trip(config([person("小陈", "114.0,34.0", trains={"西站": "G1 07:00"}),
+                                         person("小李", "113.0,35.0", trains={"近站": "G3 08:00→10:00"})]), FakeAmap())
+        carpool.estimate_rail(FakeAmap(), trip)
+        self.assertEqual(list(trip.people[0].rail_est), ["西站"])  # 小陈只估算填了的西站
+        self.assertEqual(trip.people[1].rail_est, {})  # 小李有分钟数，不用估算
+
+    def test_nobody_to_compare_with_is_not_capped(self):
+        # 小陈没有能自己打车去的站（只能在家附近上车）：没有可比的，上限是 0 也照样搭车
+        people = [person("老王", WANG, car_seats=3), person("小陈", "116.5,30.0", stations=["不存在站"])]
+        plans, *_ = self.out(people, ride_extra_min=0)
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "home:小陈")})
+
+    def test_party_goes_or_stays_together(self):
+        people = [person("老王", WANG, car_seats=3), person("小陈一家", "114.0,34.0", party=2), person("小李", "116.5,30.0")]
+        plans, *_ = self.out(people, ride_extra_min=5)
+        self.assertEqual(plans[0].rides, {"小李": ("老王", "home:小李")})
+        self.assertEqual(plans[0].taxi, {"小陈一家": "st:近站"})
+        plans, *_ = self.out(people, ride_extra_min=30)
+        self.assertEqual((plans[0].rides["小陈一家"], plans[0].carried), (("老王", "st:西站"), 3))
+
+    def test_minutes_match_the_timetable(self):
+        # 求解用的「不算等人的全程」和每个人的用时表一致，并且都不超过 单独走 + 上限
+        extra = 30
+        scenarios = [
+            self.out([person("老王", WANG, car_seats=3, max_detour_min=60), person("小李", "116.5,30.4"), person("小陈", "114.0,34.0")]),
+            self.out([person("老王", WANG, car_seats=3, max_detour_min=120), person("小李", "116.5,30.4"),
+                      person("小陈", "114.0,34.0", stations=["近站"], pickup_at_home=False)]),
+            self.out([person("老王", WANG, car_seats=3, max_detour_min=60), person("甲", "114.0,34.0", trains={"西站": "G1 07:00→10:00"}),
+                      person("乙", "116.5,30.4", trains={"近站": "G2 08:00→09:30"})]),
+            self.back([person("老王", WANG, car_seats=3, return_max_detour_min=120), person("小李", "116.5,30.4"),
+                       person("小陈", "114.0,34.0", stations=["近站"], pickup_at_home=False)]),
+            self.back([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站20:30→小陈家23:30"}),
+                       person("小孙", "116.5,30.4", leave_time="17:40")]),
+        ]
+        seen = 0
+        for plans, T, trip in scenarios:
+            leg = trip.back if plans is trip.back_plans else OUT
+            riders = [p for p in trip.people if not p.drives]
+            names = [s.name for s in trip.stations]
+            opts = {p.name: carpool.rider_options(p, names, trip.station_cost, leg) for p in riders}
+            limit = carpool.RideLimit(trip, [p for p in trip.people if p.drives], riders, opts, T, leg)
+            tls = [carpool.timeline(pl, trip, T, leg) for pl in plans]
+            for plan, tl in zip(plans, tls):
+                routes = {r.driver: r for r in plan.routes}
+                for pt in tl.people:
+                    if pt.role != "ride":
+                        continue
+                    driver, stop = plan.rides[pt.name]
+                    mine = limit.minutes(routes[driver], stop, next(p for p in riders if p.name == pt.name))
+                    self.assertAlmostEqual(pt.minutes - pt.wait, mine, delta=0.1, msg=f"{pt.name} {plan.rides}")
+                    if pt.solo is not None:
+                        self.assertLessEqual(pt.minutes - pt.wait, pt.solo + extra + 0.1, f"{pt.name} {plan.rides}")
+                    seen += 1
+        self.assertGreaterEqual(seen, 8)
+
+
 class RuleSnapshotTest(unittest.TestCase):
     """规则快照：固定场景下前几个方案的顺序和各项数字。改了排序或成本口径，这里会失败。"""
 
@@ -1059,6 +1200,19 @@ class RuleSnapshotTest(unittest.TestCase):
             person("老王", WANG, car_seats=3),
             person("小陈", "114.0,34.0", stations=["不存在站"], pickup_at_home=False)]))
         self.check(plans, [((), {}, {}, ["小陈"], 0, 0.0, 0.0)])
+
+
+class RuleSnapshotVersion2Test(RuleSnapshotTest):
+    """v3.13 升到第 3 版：这些快照场景的期望值一个字都没改，说明搭车上限只在真有人超过时才起作用；
+    把 ride_extra_min 设成 999，同样的期望值照样成立，就是第 2 版的结果。"""
+
+    def setUp(self):
+        patch = mock.patch.dict(carpool.DEFAULTS, ride_extra_min=999)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_patch_is_what_the_loader_reads(self):
+        self.assertEqual(carpool.load_trip(config([person("小陈", "114.0,34.0")]), FakeAmap()).ride_extra, 999)
 
 
 class RankBasisTest(unittest.TestCase):
@@ -1215,7 +1369,7 @@ class ConfigFieldsTest(unittest.TestCase):
     OLD_DEFAULTS = {
         "max_detour_min": 30, "max_stops": 2, "station_cost_min": 60, "station_access_min": 45, "exit_buffer_min": 15,
         "security_min": 40, "max_wait_min": 30, "taxi_mode": "save", "taxi_pool_extra_min": 30, "taxi_wait_min": 30,
-        "discover_radius_km": 120, "discover_limit": 10, "travel_time": "08:00",
+        "ride_extra_min": 30, "discover_radius_km": 120, "discover_limit": 10, "travel_time": "08:00",
     }
 
     def test_defaults_are_unchanged(self):

@@ -54,6 +54,7 @@ class Trip:
     back: "Leg | None" = None  # 返程插件开启时的返程设置
     back_plans: list = field(default_factory=list)
     outbound: bool = True  # 是否规划去程；关掉时只算返程（plans 为空）
+    ride_extra: float = DEFAULTS["ride_extra_min"]  # 为了多带一个人，搭顺风车的人最多比自己单独走多花几分钟（不算等人）
     taxi_mode: str = DEFAULTS["taxi_mode"]
     taxi_extra: float = DEFAULTS["taxi_pool_extra_min"]  # 为了拼车，一个人最多比自己最快的走法多花几分钟
     taxi_wait: float = DEFAULTS["taxi_wait_min"]         # 同一辆出租里的人，到站或离场的时间最多相差几分钟
@@ -196,7 +197,7 @@ def load_trip(cfg: dict, amap) -> Trip:
                 estimate_rail=bool(opt.get("estimate_rail", True)),
                 travel_date=f"{y}-{m}-{d}", travel_time=str(opt.get("travel_time", DEFAULTS["travel_time"])),
                 exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back,
-                outbound=outbound, taxi_mode=taxi_mode,
+                outbound=outbound, ride_extra=float(opt.get("ride_extra_min", DEFAULTS["ride_extra_min"])), taxi_mode=taxi_mode,
                 taxi_extra=float(opt.get("taxi_pool_extra_min", DEFAULTS["taxi_pool_extra_min"])),
                 taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])))
 
@@ -226,16 +227,25 @@ def clock(minute: float) -> str:
 
 
 def estimate_rail(amap, trip: Trip) -> None:
-    """用高德公共交通规划（含跨城火车）估算不开车的人到各候选站要多久。"""
+    """用高德公共交通规划（含跨城火车）估算不开车的人到各候选站要多久。
+    填了某些站的人只估算他填了、但没有分钟数的站（只写了发车时刻的车次推不出分钟数）；没填的人估算所有能去的站。"""
     by_name = {s.name: s for s in trip.stations}
-    riders = [p for p in trip.people if not p.drives and not p.rail_min]
+
+    def to_estimate(p: Person) -> list[str]:
+        filled = filled_stations(p, list(by_name))
+        if filled:
+            return [s for s in filled if s not in p.rail_min]
+        return list(by_name) if p.stations is None else [s for s in p.stations if s in by_name]
+
+    riders = [p for p in trip.people if not p.drives and to_estimate(p)]
     if not trip.estimate_rail or not riders or not by_name:
         return
     print(f"正在估算 {len(riders)} 位乘客到各站的公共交通用时…", file=sys.stderr)
-    total = sum(len(by_name) if p.stations is None else len(p.stations) for p in riders)
+    total = sum(len(to_estimate(p)) for p in riders)
     done = 0
     for p in riders:
-        allowed = list(by_name) if p.stations is None else [s for s in p.stations if s in by_name]
+        allowed = to_estimate(p)
+        filled = bool(filled_stations(p, list(by_name)))
         missing, error = [], ""
         for s in allowed:
             report("估算坐公共交通到各站的用时", done, total)
@@ -250,8 +260,8 @@ def estimate_rail(amap, trip: Trip) -> None:
                 p.rail_est[s] = est
             else:
                 missing.append(s)
-        if not allowed:
-            continue
+        if filled:
+            continue  # 没估算出来的站，rider_options 按 station_cost 估
         if not p.rail_est:
             trip.warnings.append(f"没查到 {p.name} 到任何候选站的公共交通方案{'（' + error + '）' if error else ''}，"
                                  f"改按每站 {trip.station_cost:.0f} 分钟估算；建议去 12306 查好后填 rail_min")
@@ -314,3 +324,10 @@ class Leg:
 
 
 OUT = Leg("out", "去程")
+
+
+def filled_stations(p: Person, station_names: list[str], leg: Leg = OUT) -> list[str]:
+    """这个人在这一段填了哪些站（按候选站过滤）：分钟数和车次两者的站名合集。
+    只填了发车时刻的车次推不出分钟数，但也算填了这个站。合集不为空，他就只去这些站。"""
+    rail, trains = (p.back_rail_min, p.back_trains) if leg.reverse else (p.rail_min, p.trains)
+    return [s for s in station_names if s in rail or s in trains]

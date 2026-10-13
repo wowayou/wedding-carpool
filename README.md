@@ -103,7 +103,7 @@ python3 ui.py            # 编辑 trip.toml，打开 http://127.0.0.1:8765
 python3 carpool.py trip.toml   # 只用命令行：报告打印到终端，并写到 trip-report.md
 ```
 
-返程在 TOML 里加一节 `[return]`（`enabled`、`depart_time`、`security_min`、`max_wait_min`、`date`），成员的回程车次写在 `return_trains`，离场时间写 `leave_time`，同行人数写 `party`；只规划返程时在 `[options]` 里写 `outbound = false`，并填 `[return]` 的 `date`。打车怎么安排是 `[options]` 里的 `taxi_mode`、`taxi_pool_extra_min`、`taxi_wait_min`。都见 `trip.example.toml`。
+返程在 TOML 里加一节 `[return]`（`enabled`、`depart_time`、`security_min`、`max_wait_min`、`date`），成员的回程车次写在 `return_trains`，离场时间写 `leave_time`，同行人数写 `party`；只规划返程时在 `[options]` 里写 `outbound = false`，并填 `[return]` 的 `date`。搭顺风车的人最多比自己单独打车多花几分钟（不算等人）是 `ride_extra_min`；打车怎么安排是 `[options]` 里的 `taxi_mode`、`taxi_pool_extra_min`、`taxi_wait_min`。都见 `trip.example.toml`。
 
 本地版是单人使用：没有多人同步和历史版本，需要手动保存。保存时会把配置写回 TOML，手写注释不会保留；第一次保存前，原文件会备份为 `trip.toml.bak`。字段说明见 `trip.example.toml`。
 

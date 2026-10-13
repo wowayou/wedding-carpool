@@ -55,14 +55,14 @@ import tomlio
 from base import defaults_from, load_fields, report
 from geo import (Amap, AmapError, AmapLike, AmapPrefetch, Place, QuotaError, check_quota, km_between, parse_loc,
                  pick_stations, reject_reason, route_strategy, _text)
-from model import (Leg, Person, Trip, back_leg, build_matrix, check_unique_names, clock, estimate_rail, leave_time,
+from model import (Leg, Person, Trip, back_leg, build_matrix, check_unique_names, clock, estimate_rail, filled_stations, leave_time,
                    load_places, load_trip, points_of, prefetch, resolve, train_times)
 from routes import (Plan, Route, arrival_at, assign, _assign_groups, back_deadline, car_routes, leave_of, leg_minutes,
                     rider_options, stop_times)
 from taxi import Arrangement, TaxiPool, pack_cars, taxi_cars, taxi_slot
-from solver import evaluate, plan_trip, solve
+from solver import RideLimit, evaluate, plan_trip, solve
 from timetable import (CarTrip, PersonTime, Rider, Stop, Stranded, TaxiCar, Timeline, Timelines, _finite, person_times,
-                       pickup_ready, route_schedule, solo_minutes, timeline, timelines)
+                       pickup_ready, ride_core, route_schedule, solo_minutes, timeline, timelines)
 from reporting import (cost_parts, describe, describe_back, fare_range, fmt_min, marker_url, month_day, nav_url, paragraphs,
                        rail_section, rank_basis, render, route_links, route_nav, station_table, stop_label, taxi_fare,
                        ticket_sale, ticket_tips, time_table, versus, who)

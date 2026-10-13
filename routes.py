@@ -7,7 +7,7 @@ import itertools
 from dataclasses import dataclass
 
 from base import INF
-from model import OUT, Leg, Person, train_times
+from model import OUT, Leg, Person, filled_stations, train_times
 
 
 @dataclass(frozen=True)
@@ -41,19 +41,23 @@ class Plan:
 def rider_options(p: Person, station_names: list[str], station_cost: float, leg: Leg = OUT) -> dict[str, float]:
     """乘客能在哪些点上（下）车，以及到该点的额外成本（分钟）。
 
-    去车站上车意味着要先坐一趟高铁：优先用手填的 rail_min，其次用高德估算的 rail_est，
-    都没有就按 station_cost 估。这样顺路的「到家附近接」会排在「坐高铁去站」前面。返程同理，用返程的车次。
+    填了某些站的车次或分钟数的人，只去这些站（见 filled_stations）。去车站上车意味着要先坐一趟高铁：
+    优先用手填的（或按车次算出的）rail_min，其次用高德估算的 rail_est，都没有就按 station_cost 估。
+    没填的人：去程有高德估算就用估算（查不到的站不考虑），没有就每个站按 station_cost 估。
+    这样顺路的「到家附近接」会排在「坐高铁去站」前面。返程同理，用返程的车次和分钟数，没有估算。
     """
+    filled = filled_stations(p, station_names, leg)
     if leg.reverse:
-        known = p.back_rail_min
-        opts = ({f"st:{s}": m for s, m in known.items() if s in station_names} if known
-                else {f"st:{s}": station_cost for s in (station_names if p.stations is None else
-                                                        [x for x in p.stations if x in station_names])})
+        if filled:
+            opts = {f"st:{s}": p.back_rail_min.get(s, station_cost) for s in filled}
+        else:
+            opts = {f"st:{s}": station_cost for s in (station_names if p.stations is None else
+                                                      [x for x in p.stations if x in station_names])}
         if p.pickup_at_home:
             opts[f"home:{p.name}"] = 0.0
         return opts
-    if p.rail_min:
-        opts = {f"st:{s}": m for s, m in p.rail_min.items() if s in station_names}
+    if filled:
+        opts = {f"st:{s}": p.rail_min[s] if s in p.rail_min else p.rail_est[s][0] if s in p.rail_est else station_cost for s in filled}
     else:
         allowed = station_names if p.stations is None else [s for s in p.stations if s in station_names]
         if p.rail_est:

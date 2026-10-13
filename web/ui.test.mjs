@@ -291,6 +291,8 @@ test('选项里有打车方式、拼车多花、时间差；方案卡片显示�
   assert.match(form, /<select class="c-select" data-bind="options\.taxi_mode"/);
   assert.match(form, /<option value="save"[^>]*>尽量拼车省钱<\/option>/);
   assert.match(form, /<option value="fast"[^>]*>各人走自己最快的站<\/option>/);
+  assert.match(form, /'options\.ride_extra_min'/);
+  assert.ok(form.indexOf("'options.ride_extra_min'") < form.indexOf("'options.taxi_pool_extra_min'"), '搭车最多多花在拼车最多多花前面');
   assert.match(form, /'options\.taxi_pool_extra_min'/);
   assert.match(form, /'options\.taxi_wait_min'/);
   assert.match(src.results, /打车\$\{st\.cars \? `（\$\{st\.cars\} 辆）` : ''\}/);
@@ -301,7 +303,8 @@ test('选项里有打车方式、拼车多花、时间差；方案卡片显示�
   const run = (O) => { state.cfg = { venue: { name: 'v' }, options: O, stations: [], people: [{ name: '甲', from: 'x' }] }; return collectProblems(); };
   assert.ok(run({ taxi_mode: 'cheap' }).some((p) => p.path === 'options.taxi_mode'));
   assert.ok(run({ taxi_wait_min: -1 }).some((p) => p.path === 'options.taxi_wait_min'));
-  assert.equal(run({ taxi_mode: 'fast', taxi_pool_extra_min: 20 }).length, 0);
+  assert.ok(run({ ride_extra_min: -1 }).some((p) => p.path === 'options.ride_extra_min'));
+  assert.equal(run({ taxi_mode: 'fast', taxi_pool_extra_min: 20, ride_extra_min: 0 }).length, 0);
   assert.match(src.wire, /options\.taxi_mode' && value === 'save' \? ''/); // 默认值不写进配置
 });
 
