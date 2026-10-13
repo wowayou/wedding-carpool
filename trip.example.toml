@@ -17,6 +17,7 @@ discover_radius_km = 120  # 没写候选站时，自动搜索场地周围多大�
 discover_limit = 10       # 自动搜索最多保留几个站
 # outbound = false          # 不规划去程，只规划返程（这时必须开返程，并填 [return] 的 date）
 # 没搭上车的人另外打车：
+# ride_extra_min = 30       # 为了多带一个人，搭顺风车的人最多比他自己单独打车多花几分钟（不算等人）
 # taxi_mode = "save"        # "save" 默认，尽量拼车省钱；"fast" 各人走自己最快的站
 # taxi_pool_extra_min = 30  # 为了拼车，一个人最多比他自己最快的走法多花几分钟
 # taxi_wait_min = 30        # 同一辆出租里的人，到站（返程是离场）的时间最多相差几分钟
