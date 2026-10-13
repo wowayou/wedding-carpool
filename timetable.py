@@ -203,6 +203,20 @@ def solo_minutes(p: Person, opts: dict[str, float], T, leg: Leg, trip: Trip) -> 
     return best
 
 
+def ride_core(p: Person, stop: str, cost: float, ride: float, leg: Leg, exit_buffer: float, driver_leave: float = 0.0) -> float:
+    """搭顺风车的人「不算等人的全程」：每个人的用时表里「全程 − 其中等人」，求解时的搭车上限（规则第 3 版）也用它。
+    cost 是 rider_options 给的到上车点（返程是回程）的分钟数，ride 是沿这辆车上车点到目的地（返程是目的地到下车点）的车程，
+    driver_leave 是返程车主的离场时间。
+    去程：站里上车要加上出站时间；在家附近上车只有车程。返程：填了这个站的回程车次，从车主离场算到发车，再加回程用时；
+    没填车次，车程加发车前提前量再加回程用时；送到家附近只有车程。"""
+    if not stop.startswith("st:"):
+        return ride
+    if not leg.reverse:
+        return cost + exit_buffer + ride
+    times = train_times(p.back_trains.get(stop[3:], ""))
+    return (times[0] - driver_leave if times else ride + leg.margin) + cost
+
+
 def person_times(plan: Plan, trip: Trip, T, leg: Leg, cars: list[CarTrip], riders: list[Rider], taxis: list[TaxiCar]) -> list[PersonTime]:
     """每个人的全程用时。知道时刻时按时刻算（含等人）；不知道时按出站时间、车程估。"""
     people = {p.name: p for p in trip.people}

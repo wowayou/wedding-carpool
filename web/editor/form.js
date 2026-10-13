@@ -197,6 +197,8 @@ export function renderForm() {
         ${field('出发时间', 'options.travel_time')}</div><div class="place-hint" data-sale="options.travel_date" hidden></div>` : ''}
       <div class="row">${outboundOn() ? field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number' }) : ''}
         ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number' })}</div>
+      <div class="row">${field('搭车最多多花（分钟）', 'options.ride_extra_min', { type: 'number' })}</div>
+      <div class="muted">搭顺风车的人最多比自己单独打车多花这么久（不算等人），超过就不搭，改为打车。</div>
       <label class="f"><span>没搭上车的人怎么打车</span><select class="c-select" data-bind="options.taxi_mode" data-type="text">
         <option value="save"${state.cfg.options.taxi_mode === 'fast' ? '' : ' selected'}>尽量拼车省钱</option>
         <option value="fast"${state.cfg.options.taxi_mode === 'fast' ? ' selected' : ''}>各人走自己最快的站</option></select></label>

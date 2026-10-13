@@ -54,6 +54,7 @@ class Trip:
     back: "Leg | None" = None  # 返程插件开启时的返程设置
     back_plans: list = field(default_factory=list)
     outbound: bool = True  # 是否规划去程；关掉时只算返程（plans 为空）
+    ride_extra: float = DEFAULTS["ride_extra_min"]  # 为了多带一个人，搭顺风车的人最多比自己单独走多花几分钟（不算等人）
     taxi_mode: str = DEFAULTS["taxi_mode"]
     taxi_extra: float = DEFAULTS["taxi_pool_extra_min"]  # 为了拼车，一个人最多比自己最快的走法多花几分钟
     taxi_wait: float = DEFAULTS["taxi_wait_min"]         # 同一辆出租里的人，到站或离场的时间最多相差几分钟
@@ -196,7 +197,7 @@ def load_trip(cfg: dict, amap) -> Trip:
                 estimate_rail=bool(opt.get("estimate_rail", True)),
                 travel_date=f"{y}-{m}-{d}", travel_time=str(opt.get("travel_time", DEFAULTS["travel_time"])),
                 exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back,
-                outbound=outbound, taxi_mode=taxi_mode,
+                outbound=outbound, ride_extra=float(opt.get("ride_extra_min", DEFAULTS["ride_extra_min"])), taxi_mode=taxi_mode,
                 taxi_extra=float(opt.get("taxi_pool_extra_min", DEFAULTS["taxi_pool_extra_min"])),
                 taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])))
 
