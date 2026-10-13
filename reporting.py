@@ -9,7 +9,7 @@ import urllib.parse
 
 from base import INF, RULES_VERSION
 from geo import Place
-from model import OUT, Leg, Trip, clock
+from model import OUT, Leg, Trip, clock, filled_stations
 from routes import Plan, Route, leg_minutes
 from timetable import PersonTime, Timeline, Timelines
 
@@ -276,8 +276,10 @@ def rail_section(trip: Trip) -> list[str]:
     for p in trip.people:
         if p.drives:
             continue
-        if p.rail_min:
-            items = [(m, s, p.trains.get(s) or "手填") for s, m in p.rail_min.items()]
+        filled = filled_stations(p, [s.name for s in trip.stations])
+        if filled:  # 填了的站：有分钟数用分钟数，只写了发车时刻的用高德估算
+            items = [(p.rail_min[s], s, p.trains.get(s) or "手填") if s in p.rail_min else (p.rail_est[s][0], s, p.rail_est[s][1])
+                     for s in filled if s in p.rail_min or s in p.rail_est]
         else:
             items = [(m, s, desc) for s, (m, desc) in p.rail_est.items()]
         if items:

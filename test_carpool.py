@@ -1029,6 +1029,40 @@ class RideLimitTest(unittest.TestCase):
         plans, *_ = self.back(people, ride_extra_min=999)
         self.assertEqual(plans[0].rides, {"小李": ("老王", "home:小李"), "小陈": ("老王", "st:近站")})
 
+    def test_train_with_only_a_departure_time_counts_as_filled_back(self):
+        # 回程车次只写了发车时刻，推不出分钟数，也算填了这个站：小陈只会在西站下车，打车也只去西站，自己单独走也按西站算
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", return_trains={"西站": "G2 西站20:30"})]
+        trip, *_ = carpool.plan_trip(config(people, ride_extra_min=0) | {"return": {"enabled": True, "depart_time": "18:00"}}, FakeAmap())
+        names = [s.name for s in trip.stations]
+        self.assertEqual(sorted(carpool.rider_options(trip.people[1], names, trip.station_cost, trip.back)), ["home:小陈", "st:西站"])
+        plans = trip.back_plans
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})  # 和自己单独走一样，没有「多花」
+        self.assertEqual([p.taxi for p in plans[1:]], [{"小陈": "st:西站"}])
+        tl = carpool.timeline(plans[0], trip, carpool.build_matrix(FakeAmap(), carpool.points_of(trip), set(), out=False, back=True), trip.back)
+        self.assertEqual(round(tl.people[1].extra or 0), 0)
+
+    def test_train_with_only_a_departure_time_counts_as_filled_out(self):
+        # 去程同理：车次只有一个时刻（分钟数推不出）的站也算填了，只去这个站；用高德估算的分钟数
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", trains={"西站": "G1 07:00"})]
+        plans, _, _, trip = best_plan(config(people))
+        names = [s.name for s in trip.stations]
+        self.assertEqual(sorted(carpool.rider_options(trip.people[1], names, trip.station_cost)), ["home:小陈", "st:西站"])
+        self.assertEqual(carpool.rider_options(trip.people[1], names, trip.station_cost)["st:西站"], trip.people[1].rail_est["西站"][0])
+        self.assertEqual(plans[-1].taxi, {"小陈": "st:西站"})  # 没人搭车时只会打车去西站，不会去近站
+
+    def test_filled_station_without_estimate_falls_back_to_station_cost(self):
+        people = [person("小陈", "114.0,34.0", trains={"西站": "G1 07:00"})]
+        plans, _, _, trip = best_plan(config(people), FakeAmap(no_transit={"西站"}))
+        self.assertEqual(carpool.rider_options(trip.people[0], ["近站", "西站"], trip.station_cost)["st:西站"], trip.station_cost)
+        self.assertEqual(plans[0].taxi, {"小陈": "st:西站"})
+
+    def test_estimate_only_asks_for_filled_stations_without_minutes(self):
+        trip = carpool.load_trip(config([person("小陈", "114.0,34.0", trains={"西站": "G1 07:00"}),
+                                         person("小李", "113.0,35.0", trains={"近站": "G3 08:00→10:00"})]), FakeAmap())
+        carpool.estimate_rail(FakeAmap(), trip)
+        self.assertEqual(list(trip.people[0].rail_est), ["西站"])  # 小陈只估算填了的西站
+        self.assertEqual(trip.people[1].rail_est, {})  # 小李有分钟数，不用估算
+
     def test_nobody_to_compare_with_is_not_capped(self):
         # 小陈没有能自己打车去的站（只能在家附近上车）：没有可比的，上限是 0 也照样搭车
         people = [person("老王", WANG, car_seats=3), person("小陈", "116.5,30.0", stations=["不存在站"])]
