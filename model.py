@@ -58,6 +58,7 @@ class Trip:
     taxi_mode: str = DEFAULTS["taxi_mode"]
     taxi_extra: float = DEFAULTS["taxi_pool_extra_min"]  # 为了拼车，一个人最多比自己最快的走法多花几分钟
     taxi_wait: float = DEFAULTS["taxi_wait_min"]         # 同一辆出租里的人，到站或离场的时间最多相差几分钟
+    arrive_by: float | None = None  # 去程最晚几点到目的地（当天分钟数）；不填不检查，只规划返程时不起作用
     try_mode: bool = False  # 试玩模式（网页版 /try）：行车时间是直线距离估算的，报告不能说来自高德
 
 
@@ -108,6 +109,16 @@ def leave_time(p: dict) -> float | None:
         return None
     if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
         raise SystemExit(f"{p.get('name') or '成员'}的离场时间「{text}」要写成 时:分（24 小时制），如 21:30")
+    return float(train_times(text)[0])
+
+
+def arrive_by_time(opt: dict) -> float | None:
+    """去程最晚到达时间 arrive_by：时:分，24 小时制；没填返回 None。"""
+    text = str(opt.get("arrive_by") or "").strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
+        raise SystemExit(f"去程的「最晚几点到」（arrive_by）「{text}」要写成 时:分（24 小时制），如 12:00")
     return float(train_times(text)[0])
 
 
@@ -167,6 +178,7 @@ def load_trip(cfg: dict, amap) -> Trip:
     taxi_mode = str(opt.get("taxi_mode", DEFAULTS["taxi_mode"]))
     if taxi_mode not in ("save", "fast"):
         raise SystemExit(f"打车方式 taxi_mode 只能是 \"save\"（尽量拼车省钱）或 \"fast\"（各人走自己最快的站），现在是「{taxi_mode}」")
+    arrive_by = arrive_by_time(opt) if outbound else None  # 只规划返程时这一项不起作用，也不检查格式
     resolved: list[dict] = []
     venue, people = load_places(cfg, amap, resolved)
     if not people:
@@ -189,6 +201,9 @@ def load_trip(cfg: dict, amap) -> Trip:
         for s in sorted({*(p.stations or []), *p.rail_min, *p.trains, *p.back_trains, *p.back_rail_min}):
             if s not in names:
                 warnings.append(f"{p.name} 写的站「{s}」不在候选站里，已忽略（名字要和候选站完全一致）")
+    unknown = unchecked_riders(people) if arrive_by is not None else []
+    if unknown:
+        warnings.append(f"没填车次的人不知道几点到，没按最晚到达时间检查（{'、'.join(unknown)}）")
     # 只规划返程时没有去程日期可借用，日期取返程日期
     date = str((opt.get("travel_date") if outbound else cfg["return"]["date"]) or dt.date.today() + dt.timedelta(days=1))
     y, m, d = (int(x) for x in date.replace("/", "-").split("-"))
@@ -199,7 +214,12 @@ def load_trip(cfg: dict, amap) -> Trip:
                 exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back,
                 outbound=outbound, ride_extra=float(opt.get("ride_extra_min", DEFAULTS["ride_extra_min"])), taxi_mode=taxi_mode,
                 taxi_extra=float(opt.get("taxi_pool_extra_min", DEFAULTS["taxi_pool_extra_min"])),
-                taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])))
+                taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])), arrive_by=arrive_by)
+
+
+def unchecked_riders(people: list[Person]) -> list[str]:
+    """不开车、又没填去程车次时刻的人：不知道几点到，最晚到达时间对他们不起作用。"""
+    return [p.name for p in people if not p.drives and not any(train_times(t) for t in p.trains.values())]
 
 
 def back_leg(cfg: dict) -> "Leg | None":
@@ -258,7 +278,7 @@ def estimate_rail(amap, trip: Trip) -> None:
             else:
                 missing.append(s)
         if filled:
-            continue  # 没估算出来的站，rider_options 按 station_cost 估
+            continue  # 没估算出来的站，station_minutes 按直线距离估
         if not p.rail_est:
             trip.warnings.append(f"没查到 {p.name} 到任何候选站的公共交通方案{'（' + error + '）' if error else ''}，"
                                  f"改按直线距离估算（每站 {trip.station_cost:.0f} 分钟加上按直线公里算的火车用时）；"

@@ -1303,6 +1303,157 @@ class LineEstimateTest(unittest.TestCase):
         self.assertIn("返程没填回程车次，按去程的用时估", report)
 
 
+class ArriveByTest(unittest.TestCase):
+    """v3.14 切片 3（规则第 4 版 C）：去程可设最晚到达时间；知道车次时刻的人，到目的地的时刻不能晚于它。"""
+
+    def run_out(self, people, arrive_by=None, stations=(("近站", NEAR), ("西站", WEST)), **options):
+        if arrive_by is not None:
+            options["arrive_by"] = arrive_by
+        cfg = config(people, stations=stations, **options)
+        trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
+        return trip, pts, T, plans
+
+    def report(self, people, arrive_by=None, **kw):
+        trip, pts, T, plans = self.run_out(people, arrive_by, **kw)
+        return carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans)), trip, plans
+
+    # 小陈两个站的列车都 08:00 到：西站出站后搭老王的车 09:51 到目的地，打车去近站 09:44 到
+    CAR_OR_TAXI = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→08:00", "近站": "G2 07:00→08:00"})]
+
+    def test_option_is_read_and_defaults_to_nothing(self):
+        self.assertIsNone(carpool.load_trip(config([person("小陈", "114.0,34.0")]), FakeAmap()).arrive_by)
+        self.assertEqual(carpool.load_trip(config([person("小陈", "114.0,34.0")], arrive_by="09:48"), FakeAmap()).arrive_by, 9 * 60 + 48)
+        self.assertNotIn("arrive_by", carpool.DEFAULTS)
+
+    def test_bad_format_is_an_error(self):
+        for bad in ("25:00", "九点", "9:60", "9点半"):
+            with self.assertRaises(SystemExit, msg=bad) as cm:
+                carpool.load_trip(config([person("小陈", "114.0,34.0")], arrive_by=bad), FakeAmap())
+            self.assertIn("最晚几点到", str(cm.exception))
+        self.assertIsNone(carpool.load_trip(config([person("小陈", "114.0,34.0")], arrive_by=""), FakeAmap()).arrive_by)
+
+    def test_not_set_changes_nothing(self):
+        _, _, _, plans = self.run_out(self.CAR_OR_TAXI)
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})
+
+    def test_ride_that_arrives_late_is_not_considered_so_taxi_to_the_other_station(self):
+        _, _, _, plans = self.run_out(self.CAR_OR_TAXI, "09:48")
+        self.assertEqual((plans[0].rides, plans[0].taxi, plans[0].stranded), ({}, {"小陈": "st:近站"}, []))
+        for plan in plans:  # 任何方案里，小陈都不会坐车去西站
+            self.assertNotEqual(plan.rides.get("小陈"), ("老王", "st:西站"))
+        _, _, _, plans = self.run_out(self.CAR_OR_TAXI, "09:52")  # 刚好赶得上：照旧搭车
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})
+
+    def test_other_car_when_one_would_arrive_late(self):
+        # 西站的车次用时短、近站的长：不限时，小陈搭老王的车去西站（分钟数少）；老王的车 09:51 才到，10:00 前到的话改搭小李的车，在近站上车（08:44 到）
+        people = [person("老王", WANG, car_seats=3), person("小李", "118.0,31.5", car_seats=3),
+                  person("小陈", "114.0,34.0", trains={"西站": "G1 07:30→08:00", "近站": "G2 04:00→07:00"})]
+        _, _, _, plans = self.run_out(people, ride_extra_min=999)
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "st:西站")})
+        _, _, _, plans = self.run_out(people, "09:30", ride_extra_min=999)
+        self.assertEqual(plans[0].rides, {"小陈": ("小李", "st:近站")})
+
+    def test_taxi_that_arrives_late_is_not_considered(self):
+        # 西站的车程短、分钟数少，不限时会选西站；但 10:21 才到，近站 08:44 到
+        people = [person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→08:30", "近站": "G2 04:00→07:00"})]
+        _, _, _, plans = self.run_out(people, taxi_mode="fast")
+        self.assertEqual(plans[0].taxi, {"小陈": "st:西站"})
+        _, _, _, plans = self.run_out(people, "09:30", taxi_mode="fast")
+        self.assertEqual(plans[0].taxi, {"小陈": "st:近站"})
+        _, _, _, plans = self.run_out(people, "09:30")
+        self.assertEqual(plans[0].taxi, {"小陈": "st:近站"})
+
+    def test_taxi_slot_latest_is_arrive_by_minus_ride(self):
+        trip, _, T, _ = self.run_out(self.CAR_OR_TAXI, "09:48")
+        t, latest, ride = carpool.taxi_slot(trip.people[1], "st:近站", T, OUT, trip.exit_buffer, trip.arrive_by)
+        self.assertEqual((t, latest), (8 * 60 + 15, 9 * 60 + 48 - ride))
+        self.assertEqual(carpool.taxi_slot(trip.people[1], "st:近站", T, OUT, trip.exit_buffer)[1], carpool.INF)
+
+    def test_nobody_can_make_it_is_stranded_with_the_earliest_arrival(self):
+        # 小陈只填了西站 08:00 到的车：最早 08:15 出站 + 96 分钟车程 = 09:51 到，晚于 09:00
+        people = [person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→08:00"}), person("小李", "118.0,31.0", trains={"近站": "G9 06:00→06:30"})]
+        text, trip, plans = self.report(people, "09:00")
+        self.assertEqual(plans[0].stranded, ["小陈"])
+        self.assertEqual(list(plans[0].taxi), ["小李"])
+        self.assertIn("**小陈**：按填的车次，最早 09:51 到，晚于 09:00，需要单独安排", text)
+        self.assertNotIn("**小陈**：没有可用的候选站", text)
+        tl = carpool.timelines(trip, carpool.build_matrix(FakeAmap(), carpool.points_of(trip), set()), plans).out[0]
+        self.assertEqual([(s.name, round(s.earliest)) for s in tl.stranded], [("小陈", 9 * 60 + 51)])
+
+    def test_stranded_without_arrive_by_keeps_the_old_text(self):
+        people = [person("小陈", "114.0,34.0", stations=["不存在站"], pickup_at_home=False)]
+        text, *_ = self.report(people)
+        self.assertIn("没有可用的候选站，需要单独安排", text)
+
+    def test_second_stop_that_makes_the_car_late_is_not_considered(self):
+        # 车先到西站再绕去近站，西站上车的小陈要到 10:55；10:30 前到的话这样的组合不考虑，只接其中一人
+        people = [person("老王", WANG, car_seats=3, max_detour_min=300),
+                  person("小陈", "114.0,34.0", trains={"西站": "G1 06:00→07:00"}),
+                  person("小李", "113.0,35.0", trains={"近站": "G2 06:00→07:00"})]
+        kw = dict(ride_extra_min=999)
+        _, _, _, plans = self.run_out(people, **kw)
+        self.assertEqual(plans[0].carried, 2)
+        _, _, _, plans = self.run_out(people, "10:30", **kw)
+        for plan in plans:
+            for r in plan.routes:
+                self.assertLess(len(r.stops), 2, plan.rides)
+        self.assertEqual(plans[0].carried, 1)
+
+    def test_driver_without_riders_gets_a_latest_departure_time(self):
+        text, trip, plans = self.report([person("老王", WANG, car_seats=3)], "09:00")
+        self.assertIn("最晚 05:47 出发", text)  # 09:00 − 直达 193 分钟
+        text, *_ = self.report([person("老王", WANG, car_seats=3)])
+        self.assertNotIn("最晚", text)
+
+    def test_conclusion_says_the_arrive_by_time(self):
+        text, *_ = self.report(self.CAR_OR_TAXI, "09:48")
+        self.assertIn("最晚到达时间 09:48", text)
+        text, *_ = self.report(self.CAR_OR_TAXI)
+        self.assertNotIn("最晚到达时间", text)
+
+    def test_riders_without_trains_are_not_checked_and_get_a_notice(self):
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0"), person("小李", "116.5,30.4", trains={"近站": "G2 06:00→07:00"})]
+        text, trip, plans = self.report(people, "07:00")
+        self.assertIn("没填车次的人不知道几点到，没按最晚到达时间检查（小陈）", text)
+        self.assertNotEqual(plans[0].stranded, ["小陈"])
+        self.assertIn("小陈", plans[0].rides.keys() | plans[0].taxi.keys())
+        text, *_ = self.report(people)
+        self.assertNotIn("没按最晚到达时间检查", text)
+
+    def test_home_pickup_is_not_checked(self):
+        people = [person("老王", WANG, car_seats=3), person("小陈", "116.5,30.0", trains={"近站": "G1 06:00→07:00"})]
+        _, _, _, plans = self.run_out(people, "07:00")
+        self.assertEqual(plans[0].rides, {"小陈": ("老王", "home:小陈")})
+
+    def test_share_page_says_why_and_the_latest_departure(self):
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→08:00"})]
+        trip, pts, T, plans = self.run_out(people, "09:00")
+        state = {"trip": trip, "pts": pts, "T": T, "plans": plans, "timelines": carpool.timelines(trip, T, plans), "paths": {}}
+        page = share.render_share(state, 0)
+        self.assertIn("最早 09:51 到，晚于 09:00", page)
+        self.assertIn("最晚 05:47 出发", page)
+
+    def test_return_only_ignores_arrive_by(self):
+        cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→08:00"})], arrive_by="25:99")
+        cfg["options"]["outbound"] = False
+        cfg["return"] = {"enabled": True, "depart_time": "18:00", "date": "2026-10-18"}
+        trip, *_ = carpool.plan_trip(cfg, FakeAmap())
+        self.assertIsNone(trip.arrive_by)
+
+    def test_gucheng_like_outbound_with_arrive_by_strands_those_who_cannot_make_it(self):
+        # 同 ReturnMinutesTest 的故城构造：两人去程最早 10:51 到目的地；10:30 前要到，标为需要单独安排
+        people = [person("老王", WANG, car_seats=3),
+                  person("泰州", FAR_EAST, trains={"东站": "G1 07:00→09:00", "西站": "G2 06:00→12:00"}),
+                  person("青岛", "120.5,30.5", trains={"东站": "G3 08:00→09:00", "西站": "G4 07:00→10:00"})]
+        stations = (("东站", EAST), ("西站", WEST_NEAR))
+        _, _, _, plans = self.run_out(people, stations=stations)
+        self.assertEqual(plans[0].stranded, [])
+        text, trip, plans = self.report(people, "10:30", stations=stations)
+        self.assertEqual(plans[0].stranded, ["泰州", "青岛"])
+        self.assertIn("**泰州**：按填的车次，最早 10:51 到，晚于 10:30", text)
+        self.assertIn("**青岛**：按填的车次，最早 10:51 到，晚于 10:30", text)
+
+
 class RuleSnapshotTest(unittest.TestCase):
     """规则快照：固定场景下前几个方案的顺序和各项数字。改了排序或成本口径，这里会失败。"""
 

@@ -149,14 +149,20 @@ def time_table(tl: Timeline, trip: Trip, back: bool = False) -> list[str]:
     return out
 
 
+def late_reason(earliest: float, trip: Trip) -> str:
+    """去程待安排的原因：按填的车次，最早几点到，晚于最晚到达时间。报告和方案页共用。"""
+    return f"按填的车次，最早 {clock(earliest)} 到，晚于 {clock(trip.arrive_by)}"
+
+
 def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> list[str]:
     """去程方案的文字说明。时刻都读行程表 tl；plan 只用来生成导航链接。"""
     seats = {p.name: p.seats for p in trip.people if p.drives}
     lines = []
     for r, car in zip(plan.routes, tl.cars):
         if not car.stops:
+            latest = f"，最晚 {clock(car.latest_depart)} 出发" if car.latest_depart is not None else ""
             lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：直接开到目的地，"
-                         f"约 {fmt_min(car.minutes)}，不接人。")
+                         f"约 {fmt_min(car.minutes)}，不接人{latest}。")
             continue
         legs = []
         for s in car.stops:
@@ -166,7 +172,8 @@ def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> lis
             timing = (f"建议 **{clock(car.depart)} 出发** → {' → '.join(legs)} → "
                       f"约 {clock(car.arrive)} 到目的地；")
         else:
-            timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(car.first_leg)} 到第一个接人点；"
+            latest = f"最晚 {clock(car.latest_depart)} 出发 → " if car.latest_depart is not None else "出发 → "
+            timing = f"{latest}{' → '.join(legs)} → 目的地；出发后约 {fmt_min(car.first_leg)} 到第一个接人点；"
         lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：{timing}"
                      f"全程约 {fmt_min(car.minutes)}，比直达多绕 **{fmt_min(car.detour)}**。{route_links(r, pts)}")
     for car in tl.taxis:
@@ -177,7 +184,10 @@ def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> lis
         lines.append(f"- **打车/包车组**：{who(car.names, trip)} 坐高铁到 **{pts[s].name}**，"
                      f"一起打车到目的地，{timing}{taxi_fare(ride, car.n)}。[导航]({nav_url(pts[s], pts['venue'])})")
     for st in tl.stranded:
-        lines.append(f"- **{st.name}**：没有可用的候选站，需要单独安排。")
+        if st.earliest is not None and trip.arrive_by is not None:
+            lines.append(f"- **{st.name}**：{late_reason(st.earliest, trip)}，需要单独安排。")
+        else:
+            lines.append(f"- **{st.name}**：没有可用的候选站，需要单独安排。")
     return lines
 
 
@@ -321,8 +331,8 @@ def rail_section(trip: Trip) -> list[str]:
              f"{trip.travel_date} {trip.travel_time} 出发，用高德公共交通最快方案估算。"
              "高德跨城只给直达火车，不含火车换乘和刚开通的线路，估算可能偏差很大，请用 12306 核对。")
     if used_line:
-        intro += (f"标「{LINE_NOTE}」的，没有车次、分钟数，也没有高德估算：用 每站 {trip.station_cost:.0f} 分钟"
-                  f"加上 直线公里 × {LINE_DETOUR_FACTOR:g} ÷ {LINE_SPEED_KMH:g} 公里/小时 估，"
+        intro += (f"标「{LINE_NOTE}」的，没有车次、分钟数，也没有高德估算：用每站 {trip.station_cost:.0f} 分钟"
+                  f"加上直线公里 × {LINE_DETOUR_FACTOR:g} ÷ {LINE_SPEED_KMH:g} 公里/小时 估，"
                   "不知道哪条线有直达车，只保证方向不会错得离谱。")
     return ["## 不开车的人到各站要多久" if trip.outbound else "## 不开车的人回各站要多久", "", intro, "", *lines, ""]
 
@@ -345,6 +355,7 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
               f"- 不开车的 {total} 人里，**{best.carried} 人能搭上顺风车**，"
               f"车主合计多绕 {fmt_min(best.detour)}。",
               f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or '不需要坐到站'}**。",
+              *([f"- 最晚到达时间 {clock(trip.arrive_by)}：填了车次的人，不会安排在这之后才到的走法。"] if trip.arrive_by is not None else []),
               "", "## 推荐方案", "", *describe(best, tls.out[0], pts, trip), "",
               *paragraphs(rank_basis(best)), *time_table(tls.out[0], trip), ""]
         for i, pl in enumerate(plans[1:], 2):

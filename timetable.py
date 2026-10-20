@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from base import INF
 from model import OUT, Leg, Person, Trip, train_times
-from routes import Plan, Route, arrival_at, leave_of, leg_minutes, rider_options, stop_times
+from routes import Plan, Route, arrival_at, leave_of, leg_minutes, reaches_in_time, rider_options, stop_times
 from taxi import taxi_cars
 
 
@@ -66,6 +66,7 @@ class CarTrip:
     minutes: float           # 全程分钟
     detour: float            # 比直达多绕的分钟
     first_leg: float | None  # 出发后到第一个停靠点的车程；没有停靠点就是 None
+    latest_depart: float | None = None  # 去程设了最晚到达时间、出发时刻推不出来（不接人、或上车时刻都不知道）时：最晚几点出发
 
 
 @dataclass
@@ -101,6 +102,7 @@ class TaxiCar:
 class Stranded:
     name: str
     leave: float | None      # 返程：这个人的离场时刻
+    earliest: float | None = None  # 去程设了最晚到达时间、按填的车次怎么走都晚于它时：最早几点到目的地；其他原因是 None
 
 
 @dataclass
@@ -153,8 +155,9 @@ def timeline(plan: Plan, trip: Trip, T, leg: Leg) -> Timeline:
             depart = sched["depart"] if sched else None
             times = sched["times"] if sched else {}
             arrive = times.get("venue")
+        latest = trip.arrive_by - r.minutes if depart is None and not back and trip.arrive_by is not None else None
         cars.append(CarTrip(r.driver, depart, [Stop(s, times.get(s), names(s)) for s in r.stops], arrive, r.minutes, r.detour,
-                            T.get((seq[0], seq[1]), INF) if r.stops else None))
+                            T.get((seq[0], seq[1]), INF) if r.stops else None, latest))
 
     def rider(name: str, driver: str | None, stop: str, board, arrive, guessed: bool = False) -> Rider:
         p = people[name]
@@ -176,7 +179,7 @@ def timeline(plan: Plan, trip: Trip, T, leg: Leg) -> Timeline:
         end = None if t is None else t + ride
         members = [rider(n, None, car["stop"], t, end, n in car["unknown"]) for n in car["names"]]
         taxis.append(TaxiCar(car["stop"], car["names"], car["n"], t, ride, car["unknown"], members))
-    stranded = [Stranded(n, leave_of(people[n], leg) if back else None) for n in plan.stranded]
+    stranded = [Stranded(n, leave_of(people[n], leg) if back else None, None if back else late_arrival(people[n], trip, T)) for n in plan.stranded]
     return Timeline(cars, riders, taxis, stranded, person_times(plan, trip, T, leg, cars, riders, taxis))
 
 
@@ -184,15 +187,33 @@ def _finite(m: float | None) -> float | None:
     return None if m is None or m == INF else m
 
 
+def earliest_arrival(p: Person, opts: dict[str, float], T, exit_buffer: float) -> float | None:
+    """去程：按填的车次，最早几点能到目的地（各站「列车到站 + 出站 + 站到目的地直达车程」的最小值）；没有车次时刻的站不算，都没有就是 None。"""
+    best = [arr + exit_buffer + ride for stop in opts if (arr := arrival_at(p, stop)) is not None
+            and (ride := OUT.station_to_venue(T, stop)) != INF]
+    return min(best, default=None)
+
+
+def late_arrival(p: Person, trip: Trip, T) -> float | None:
+    """待安排的人，如果是因为最晚到达时间赶不上：最早几点到目的地；没设最晚到达时间，或不是因为这个，是 None。"""
+    if trip.arrive_by is None:
+        return None
+    names = [s.name for s in trip.stations]
+    earliest = earliest_arrival(p, rider_options(p, names, trip.station_cost, OUT, {s.name: s for s in trip.stations}), T, trip.exit_buffer)
+    return earliest if earliest is not None and earliest > trip.arrive_by else None
+
+
 def solo_minutes(p: Person, opts: dict[str, float], T, leg: Leg, trip: Trip) -> float | None:
     """不开车的人自己单独走最快要多久：从能去的站里挑最快的，单独打车。
-    去程：到站用时 + 出站 + 站到目的地；返程：离场后打车去站，填了车次的从离场等到发车（赶不上的站不算），没填的按发车前提前量算，再加回程用时。"""
+    去程：到站用时 + 出站 + 站到目的地（设了最晚到达时间，赶不上的站不算）；返程：离场后打车去站，填了车次的从离场等到发车（赶不上的站不算），没填的按发车前提前量算，再加回程用时。"""
     best = None
     for stop, cost in opts.items():
         ride = leg.station_to_venue(T, stop)
         if not stop.startswith("st:") or ride == INF:
             continue
         if not leg.reverse:
+            if not reaches_in_time(p, stop, ride, trip.exit_buffer, trip.arrive_by):
+                continue
             m = cost + trip.exit_buffer + ride
         else:
             leave, times = leave_of(p, leg), train_times(p.back_trains.get(stop[3:], ""))

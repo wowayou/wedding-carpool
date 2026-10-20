@@ -75,6 +75,21 @@ def car_routes(driver: Person, pickups: list[str], T, max_stops: int, leg: Leg =
     return [Route(driver.name, (), direct, 0.0), *sorted(best.values(), key=lambda r: r.detour)]
 
 
+def latest_ready(arrive_by: float | None, ride: float) -> float:
+    """去程：要在 arrive_by 前到目的地，沿着车程 ride 分钟的路，最晚几点能上车（出租是出发）。没设最晚到达时间就没有限制。"""
+    return INF if arrive_by is None else arrive_by - ride
+
+
+def reaches_in_time(p: Person, stop: str, ride: float, exit_buffer: float, arrive_by: float | None) -> bool:
+    """去程最晚到达时间（规则第 4 版）：这个人在这个站上车（出租是出发），到目的地不晚于 arrive_by。
+    上车时刻 = 列车到站 + 出站时间，ride 是沿这辆车（出租就是直达）从这个站到目的地的车程。
+    求解（RideLimit.allows）、打车（taxi.taxi_slot）、自己单独走（timetable.solo_minutes）都调用它，规则只写在这一处。
+    一辆车的到达时刻 = 车上每个人「上车时刻 + 从上车点到目的地的车程」里最晚的那个（出发时刻按最晚的那位倒推），
+    所以逐人检查就等于整车按时到。没填车次、不知道几点到的人，和在家附近上车的人（车主可以早点出发），不检查。"""
+    arr = arrival_at(p, stop)
+    return arr is None or arr + exit_buffer <= latest_ready(arrive_by, ride) + 1e-9
+
+
 def back_deadline(p: Person, stop: str, leg: Leg) -> float | None:
     """返程：乘客在这个站最晚几点要到（发车时刻减去提前量）；不知道车次就没有限制。"""
     times = train_times(p.back_trains.get(stop[3:], "")) if stop.startswith("st:") else []

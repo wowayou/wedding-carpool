@@ -68,6 +68,7 @@ export function collectProblems() {
   state.cfg.stations.forEach((s, i) => { if (!(s.name || '').trim()) add(`stations.${i}.name`, `第 ${i + 1} 个候选站没填站名`, { required: true }); });
   if (outOn && O.travel_date !== undefined && !isDate(String(O.travel_date))) add('options.travel_date', '出发日期要写成 年-月-日，如 2026-10-17');
   if (outOn && O.travel_time !== undefined && !isClock(String(O.travel_time))) add('options.travel_time', '出发时间要写成 时:分（24 小时制），如 08:00');
+  if (outOn && O.arrive_by !== undefined && String(O.arrive_by).trim() !== '' && !isClock(String(O.arrive_by).trim())) add('options.arrive_by', '最晚几点到要写成 时:分（24 小时制），如 12:00');
   for (const key of ['max_detour_min', 'max_stops', 'station_access_min', 'ride_extra_min', 'taxi_pool_extra_min', 'taxi_wait_min']) ranged(`options.${key}`, O[key]);
   if (outOn) ranged('options.exit_buffer_min', O.exit_buffer_min);
   if (O.taxi_mode !== undefined && !['save', 'fast'].includes(O.taxi_mode)) add('options.taxi_mode', '打车方式只能选「尽量拼车省钱」或「各人走自己最快的站」');

@@ -8,7 +8,8 @@ import itertools
 from base import report
 from geo import Place
 from model import (OUT, TRY_NOTICE, Leg, Person, Trip, build_matrix, estimate_rail, load_trip, points_of)
-from routes import Plan, Route, assign, back_deadline, car_routes, leave_of, leg_minutes, rider_options, stop_times
+from routes import (Plan, Route, assign, back_deadline, car_routes, leave_of, leg_minutes, reaches_in_time, rider_options,
+                    stop_times)
 from taxi import TaxiPool
 from timetable import ride_core, solo_minutes
 
@@ -19,6 +20,7 @@ class RideLimit:
     """搭车最多多花（规则第 3 版）：一位乘客在某辆车的某个点上车（返程是下车），
     「不算等人的全程」要不超过 自己单独走 + ride_extra_min。口径和每个人的用时表一致（timetable.ride_core）。
     自己单独走每次求解按人算一次；没有能自己打车去的站的人没有可比的，不受限制。
+    去程设了最晚到达时间（规则第 4 版）时，同一处还要检查这个人坐这辆车到目的地不晚于它（routes.reaches_in_time）。
     判断结果按（路线，点，人）缓存，枚举几万个组合时不重复算。"""
 
     def __init__(self, trip: Trip, drivers: list[Person], riders: list[Person], opts: dict[str, dict[str, float]], T, leg: Leg):
@@ -31,20 +33,22 @@ class RideLimit:
                 self.cap[p.name] = solo + trip.ride_extra
         self.verdict: dict[tuple, bool] = {}
 
-    def minutes(self, route: Route, stop: str, p: Person) -> float:
-        """这位乘客坐这辆车、在这个点上车（下车），不算等人的全程。"""
+    def ride(self, route: Route, stop: str) -> float:
+        """沿这辆车的路线，返程是目的地到下车点，去程是上车点到目的地的车程。"""
         seq = self.leg.sequence(route.driver, route.stops)
         i = seq.index(stop)
-        ride = leg_minutes(self.T, seq[:i + 1] if self.leg.reverse else seq[i:])  # 返程：目的地到下车点；去程：上车点到目的地
-        return ride_core(p, stop, self.opts[p.name][stop], ride, self.leg, self.trip.exit_buffer, self.leaves[route.driver])
+        return leg_minutes(self.T, seq[:i + 1] if self.leg.reverse else seq[i:])
+
+    def minutes(self, route: Route, stop: str, p: Person) -> float:
+        """这位乘客坐这辆车、在这个点上车（下车），不算等人的全程。"""
+        return ride_core(p, stop, self.opts[p.name][stop], self.ride(route, stop), self.leg, self.trip.exit_buffer, self.leaves[route.driver])
 
     def allows(self, route: Route, stop: str, p: Person) -> bool:
-        cap = self.cap.get(p.name)
-        if cap is None:
-            return True
         key = (route, stop, p.name)
         if key not in self.verdict:
-            self.verdict[key] = self.minutes(route, stop, p) <= cap + 1e-9
+            ok = self.leg.reverse or self.trip.arrive_by is None or reaches_in_time(p, stop, self.ride(route, stop), self.trip.exit_buffer, self.trip.arrive_by)
+            cap = self.cap.get(p.name)
+            self.verdict[key] = ok and (cap is None or self.minutes(route, stop, p) <= cap + 1e-9)
         return self.verdict[key]
 
 
