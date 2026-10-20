@@ -354,7 +354,7 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
         L += ["## 结论", "",
               f"- 不开车的 {total} 人里，**{best.carried} 人能搭上顺风车**，"
               f"车主合计多绕 {fmt_min(best.detour)}。",
-              f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or '不需要坐到站'}**。",
+              f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or ('没有合适的站，见下面需要单独安排的人' if best.stranded else '不需要坐到站')}**。",
               *([f"- 最晚到达时间 {clock(trip.arrive_by)}：填了车次的人，不会安排在这之后才到的走法。"] if trip.arrive_by is not None else []),
               "", "## 推荐方案", "", *describe(best, tls.out[0], pts, trip), "",
               *paragraphs(rank_basis(best)), *time_table(tls.out[0], trip), ""]

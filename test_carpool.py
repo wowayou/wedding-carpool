@@ -1380,6 +1380,14 @@ class ArriveByTest(unittest.TestCase):
         tl = carpool.timelines(trip, carpool.build_matrix(FakeAmap(), carpool.points_of(trip), set()), plans).out[0]
         self.assertEqual([(s.name, round(s.earliest)) for s in tl.stranded], [("小陈", 9 * 60 + 51)])
 
+    def test_everyone_stranded_conclusion_does_not_say_no_station_needed(self):
+        # 不开车的人都赶不上：结论不能写「不需要坐到站」（那是都在家附近上车时的说法）
+        people = [person("小陈", "114.0,34.0", trains={"西站": "G1 07:00→08:00"})]
+        text, trip, plans = self.report(people, "09:00")
+        self.assertEqual(plans[0].stranded, ["小陈"])
+        self.assertNotIn("不需要坐到站", text)
+        self.assertIn("建议坐到的站：**没有合适的站，见下面需要单独安排的人**", text)
+
     def test_stranded_without_arrive_by_keeps_the_old_text(self):
         people = [person("小陈", "114.0,34.0", stations=["不存在站"], pickup_at_home=False)]
         text, *_ = self.report(people)
