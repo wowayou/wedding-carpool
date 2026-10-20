@@ -12,7 +12,7 @@
   {"path": "options.arrive_by", "type": "time", "label": "最晚几点到", "section": "options", "placeholder": "12:00", "default_note": "不检查", "hint": "比如开席前半小时。填了，就不会安排在这之后才到的走法；不填不检查"},
   {"path": "options.travel_time", "type": "time", "label": "出发时间", "section": "options", "default": "08:00", "rules_table": true, "hint": "公交估算的出发时刻"},
   {"path": "options.estimate_rail", "type": "boolean", "label": "估算公共交通", "section": "options", "default": true, "hint": "不想估算公共交通时关掉（少调用接口）"},
-  {"path": "options.station_cost_min", "type": "number", "label": "到站用时的估值", "section": "options", "default": 60, "min": 0, "unit": "分钟", "rules_table": true, "hint": "查不到乘客到站用时时，每个站按这个数算"},
+  {"path": "options.station_cost_min", "type": "number", "label": "到站用时的估值", "section": "options", "default": 60, "min": 0, "unit": "分钟", "rules_table": true, "hint": "车次、分钟数、高德估算都没有时，按直线距离估算：用它加上家到站的直线公里 × 1.3 ÷ 200 公里/小时"},
   {"path": "options.station_access_min", "type": "number", "label": "去车站+候车", "section": "options", "default": 45, "min": 0, "unit": "分钟", "rules_table": true, "hint": "填了车次时，去车站和候车的时间"},
   {"path": "options.exit_buffer_min", "type": "number", "label": "下车到上车", "section": "options", "default": 15, "min": 0, "unit": "分钟", "rules_table": true, "hint": "列车到站后出站、走到接人点"},
   {"path": "options.outbound", "type": "boolean", "label": "规划去程", "section": "options", "default": true},
