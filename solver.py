@@ -76,7 +76,8 @@ def solve(trip: Trip, T, top: int = 3, leg: Leg = OUT) -> list[Plan]:
     drivers = [p for p in trip.people if p.drives]
     riders = [p for p in trip.people if not p.drives]
     names = [s.name for s in trip.stations]
-    opts = {p.name: rider_options(p, names, trip.station_cost, leg) for p in riders}
+    places = {st.name: st for st in trip.stations}
+    opts = {p.name: rider_options(p, names, trip.station_cost, leg, places) for p in riders}
     pickups = sorted({s for o in opts.values() for s in o})
     keep = max(1, int(COMBO_LIMIT ** (1 / max(len(drivers), 1))) - 1)
     per_car = [car_routes(d, pickups, T, trip.max_stops, leg)[:keep + 1] for d in drivers]
@@ -96,8 +97,8 @@ def plan_trip(cfg: dict, amap) -> tuple[Trip, dict[str, Place], dict, list[Plan]
     skip = {f"home:{p.name}" for p in trip.people if not p.drives and not p.pickup_at_home}
     T = build_matrix(amap, pts, skip, out=trip.outbound, back=trip.back is not None)
     plans: list[Plan] = []
-    if trip.outbound:  # 只规划返程时用不到去程的车次和用时
-        estimate_rail(amap, trip)
+    estimate_rail(amap, trip)  # 只规划返程时，只估算回程车次没填的人
+    if trip.outbound:
         plans = solve(trip, T)
     if trip.back:  # 返程插件
         trip.back_plans = solve(trip, T, leg=trip.back)

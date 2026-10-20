@@ -228,14 +228,11 @@ def clock(minute: float) -> str:
 
 def estimate_rail(amap, trip: Trip) -> None:
     """用高德公共交通规划（含跨城火车）估算不开车的人到各候选站要多久。
-    填了某些站的人只估算他填了、但没有分钟数的站（只写了发车时刻的车次推不出分钟数）；没填的人估算所有能去的站。"""
+    估算谁、估算哪些站由 estimate_targets 决定；只规划返程时，回程车次填了的人不估算。"""
     by_name = {s.name: s for s in trip.stations}
 
     def to_estimate(p: Person) -> list[str]:
-        filled = filled_stations(p, list(by_name))
-        if filled:
-            return [s for s in filled if s not in p.rail_min]
-        return list(by_name) if p.stations is None else [s for s in p.stations if s in by_name]
+        return estimate_targets(p, list(by_name), trip.outbound)
 
     riders = [p for p in trip.people if not p.drives and to_estimate(p)]
     if not trip.estimate_rail or not riders or not by_name:
@@ -331,3 +328,55 @@ def filled_stations(p: Person, station_names: list[str], leg: Leg = OUT) -> list
     只填了发车时刻的车次推不出分钟数，但也算填了这个站。合集不为空，他就只去这些站。"""
     rail, trains = (p.back_rail_min, p.back_trains) if leg.reverse else (p.rail_min, p.trains)
     return [s for s in station_names if s in rail or s in trains]
+
+
+def line_minutes(station_cost: float, home: Place | None, station: Place | None) -> float:
+    """什么都没有时一个站的用时。切片 2 起按直线距离估，现在先按 station_cost。"""
+    return station_cost
+
+
+# station_minutes 返回的用时来源
+SRC_OWN = "own"    # 这一段自己填的分钟数（或按车次算出的）
+SRC_OUT = "out"    # 返程没填回程分钟数，用去程的分钟数
+SRC_EST = "est"    # 高德估算
+SRC_LINE = "line"  # 都没有，按 station_cost 估
+
+
+def station_minutes(p: Person, station_names: list[str], station_cost: float, places: dict[str, Place] | None = None,
+                    leg: Leg = OUT) -> dict[str, tuple[float, str]]:
+    """乘客在这一段能去哪些站、各要多久（分钟）、用时从哪来：{站名: (分钟, 来源)}。取数顺序只在这里写。
+
+    去程：填了某些站的车次或分钟数的人只去这些站（见 filled_stations）；没填的人用高德估算（估算不到的站不考虑），
+    一个估算都没有就每个站都去。分钟数依次取：去程分钟数 → 高德估算 → 默认值。
+    返程：回程填了站，只去这些站，分钟数依次取 回程分钟数 → 去程分钟数 → 高德估算 → 默认值；
+    回程一个都没填但去程填了，只去去程填了的站，依次取 去程分钟数 → 高德估算 → 默认值；
+    都没填，和去程没填的人一样。places 是站名到坐标，用来按直线距离估；没给坐标就只有 station_cost。"""
+    chain = ((p.back_rail_min, SRC_OWN), (p.rail_min, SRC_OUT)) if leg.reverse else ((p.rail_min, SRC_OWN),)
+    stations = filled_stations(p, station_names, leg)
+    if not stations and leg.reverse:
+        stations = filled_stations(p, station_names)  # 回程都没填：沿用去程填的站
+    if not stations:
+        allowed = station_names if p.stations is None else [s for s in p.stations if s in station_names]
+        stations = [s for s in allowed if s in p.rail_est] if p.rail_est else allowed
+    out = {}
+    for s in stations:
+        for table, src in chain:
+            if s in table:
+                out[s] = (table[s], src)
+                break
+        else:
+            out[s] = ((p.rail_est[s][0], SRC_EST) if s in p.rail_est
+                      else (line_minutes(station_cost, p.home, (places or {}).get(s)), SRC_LINE))
+    return out
+
+
+def estimate_targets(p: Person, station_names: list[str], outbound: bool = True) -> list[str]:
+    """要用高德估算哪些站。填了某些站的人只估算他填了、但没有分钟数的站（只写了发车时刻的车次推不出分钟数）；
+    没填的人估算所有能去的站。去程没填的站，返程也沿用这些估算。
+    只规划返程（outbound = False）时：回程填了车次或分钟数的人不估算；其余同上。"""
+    if not outbound and filled_stations(p, station_names, Leg("back", "返程", reverse=True)):
+        return []
+    filled = filled_stations(p, station_names)
+    if filled:
+        return [s for s in filled if s not in p.rail_min]
+    return list(station_names) if p.stations is None else [s for s in p.stations if s in station_names]

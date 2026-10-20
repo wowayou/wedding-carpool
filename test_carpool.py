@@ -1113,6 +1113,134 @@ class RideLimitTest(unittest.TestCase):
         self.assertGreaterEqual(seen, 8)
 
 
+class CountingAmap(FakeAmap):
+    """记下公共交通估算调用：(谁, 哪个站)。"""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.transit_calls: list[tuple[str, str]] = []
+
+    def transit(self, a, b, date, clock):
+        self.transit_calls.append((a.name.removesuffix("出发地"), b.name))
+        return super().transit(a, b, date, clock)
+
+
+EAST = "119.0,30.0"   # 目的地正东约 96km
+WEST_NEAR = "117.5,30.0"  # 目的地正西约 48km
+FAR_EAST = "121.0,30.0"  # 乘客家：目的地正东约 290km
+
+
+class ReturnMinutesTest(unittest.TestCase):
+    """v3.14 切片 1（规则第 4 版 A）：返程没填回程车次的人，按去程的站和用时来；只规划返程时也估算。"""
+
+    STATIONS = (("东站", EAST), ("西站", WEST_NEAR))
+
+    def cfg(self, people, back_only=False, **options):
+        cfg = config(people, stations=self.STATIONS, **options)
+        cfg["return"] = {"enabled": True, "depart_time": "18:00"}
+        if back_only:
+            cfg["options"]["outbound"] = False
+            cfg["return"]["date"] = "2026-10-18"
+        return cfg
+
+    def back(self, people, amap=None, **kw):
+        trip, pts, T, _ = carpool.plan_trip(self.cfg(people, **kw), amap or FakeAmap())
+        return trip, T
+
+    def opts(self, trip, i):
+        return carpool.rider_options(trip.people[i], [s.name for s in trip.stations], trip.station_cost, trip.back)
+
+    def test_back_follows_outbound_trains_and_picks_the_fast_way_home(self):
+        # 小陈家在东边，去程填了东站（165 分钟）和西站（405 分钟）：返程只考虑这两个站，用去程的分钟数；西站太慢，改送东站
+        people = [person("老王", "117.5,30.0", car_seats=3, max_detour_min=300, return_max_detour_min=300),
+                  person("小陈", FAR_EAST, trains={"东站": "G1 07:00→09:00", "西站": "G2 06:00→12:00"})]
+        trip, _ = self.back(people)
+        self.assertEqual(self.opts(trip, 1), {"st:东站": 165.0, "st:西站": 405.0, "home:小陈": 0.0})
+        self.assertEqual(trip.back_plans[0].rides, {"小陈": ("老王", "st:东站")})
+
+    def test_back_only_goes_to_stations_filled_for_outbound(self):
+        trip, _ = self.back([person("老王", WANG, car_seats=3), person("小陈", FAR_EAST, rail_min={"东站": 100})])
+        self.assertEqual(self.opts(trip, 1), {"st:东站": 100.0, "home:小陈": 0.0})
+
+    def test_back_without_any_fill_uses_estimates_and_skips_unestimated_stations(self):
+        trip, _ = self.back([person("老王", WANG, car_seats=3), person("小陈", FAR_EAST)], FakeAmap(no_transit={"西站"}))
+        est = trip.people[1].rail_est["东站"][0]
+        self.assertEqual(self.opts(trip, 1), {"st:东站": est, "home:小陈": 0.0})
+
+    def test_back_with_own_minutes_is_unchanged(self):
+        # 回程填了分钟数：只去这个站，用回程分钟数，不看去程
+        people = [person("老王", WANG, car_seats=3),
+                  person("小陈", FAR_EAST, return_rail_min={"西站": 50}, rail_min={"西站": 222, "东站": 100})]
+        trip, _ = self.back(people)
+        self.assertEqual(self.opts(trip, 1), {"st:西站": 50.0, "home:小陈": 0.0})
+
+    def test_back_train_with_only_a_departure_time_uses_outbound_minutes(self):
+        people = [person("老王", WANG, car_seats=3),
+                  person("小陈", FAR_EAST, return_trains={"西站": "G2 西站20:30"}, rail_min={"西站": 222}),
+                  person("小李", FAR_EAST, return_trains={"西站": "G2 西站20:30"})]
+        trip, _ = self.back(people)
+        self.assertEqual(self.opts(trip, 1)["st:西站"], 222.0)  # 去程的分钟数，不再是 60
+        self.assertEqual(self.opts(trip, 2)["st:西站"], trip.people[2].rail_est["西站"][0])  # 去程没有，用高德估算
+
+    def test_back_only_estimates_only_who_needs_it(self):
+        people = [person("老王", WANG, car_seats=3),
+                  person("甲", FAR_EAST, return_trains={"西站": "G2 西站20:30→甲家23:30"}),  # 回程填了：不估算
+                  person("乙", FAR_EAST),  # 回程、去程都没填：估算两个站
+                  person("丙", FAR_EAST, trains={"东站": "G1 07:00"})]  # 去程填了但缺分钟数：估算这一个站
+        amap = CountingAmap()
+        trip, *_ = carpool.plan_trip(self.cfg(people, back_only=True), amap)
+        self.assertEqual(sorted(amap.transit_calls), [("丙", "东站"), ("乙", "东站"), ("乙", "西站")])
+        self.assertEqual(trip.people[1].rail_est, {})
+        self.assertEqual(self.opts(trip, 2)["st:东站"], trip.people[2].rail_est["东站"][0])
+        self.assertEqual(self.opts(trip, 3), {"st:东站": trip.people[3].rail_est["东站"][0], "home:丙": 0.0})
+        # 规划了去程：估算范围不变（甲没填去程，估算所有站）
+        amap = CountingAmap()
+        carpool.plan_trip(self.cfg(people), amap)
+        self.assertEqual(sorted(amap.transit_calls), [("丙", "东站"), ("乙", "东站"), ("乙", "西站"), ("甲", "东站"), ("甲", "西站")])
+        # 关掉估算：谁都不估算
+        amap = CountingAmap()
+        carpool.plan_trip(self.cfg(people, back_only=True, estimate_rail=False), amap)
+        self.assertEqual(amap.transit_calls, [])
+
+    def test_gucheng_like_return_goes_east_not_to_the_near_west_station(self):
+        # 虚构场景：目的地居中，泰州、青岛的家在东边；西站离目的地近，东站离家近；老王回家顺路经过西站。
+        # 两人去程填了东站和西站（西站用时长）：返程不能因为顺路就送西站
+        people = [person("老王", WANG, car_seats=3),
+                  person("泰州", FAR_EAST, trains={"东站": "G1 07:00→09:00", "西站": "G2 06:00→12:00"}),
+                  person("青岛", "120.5,30.5", trains={"东站": "G3 08:00→09:00", "西站": "G4 07:00→10:00"})]
+        trip, T = self.back(people)
+        best = trip.back_plans[0]
+        self.assertEqual(best.rides, {})
+        self.assertEqual(best.taxi, {"泰州": "st:东站", "青岛": "st:东站"})
+        # 一致性：用时表里打车的人，回程部分等于求解用的数
+        tl = carpool.timeline(best, trip, T, trip.back)
+        for pt in tl.people:
+            if pt.role == "taxi":
+                cost = self.opts(trip, [p.name for p in trip.people].index(pt.name))["st:东站"]
+                self.assertAlmostEqual(pt.minutes - pt.wait, trip.back.margin + T[("venue", "st:东站")] + cost, delta=0.1, msg=pt.name)
+
+    def test_back_ride_minutes_match_the_timetable(self):
+        people = [person("老王", "117.5,30.0", car_seats=3, max_detour_min=300, return_max_detour_min=300),
+                  person("小陈", FAR_EAST, trains={"东站": "G1 07:00→09:00", "西站": "G2 06:00→12:00"})]
+        trip, T = self.back(people)
+        plan = trip.back_plans[0]
+        riders = [p for p in trip.people if not p.drives]
+        opts = {p.name: carpool.rider_options(p, [s.name for s in trip.stations], trip.station_cost, trip.back) for p in riders}
+        limit = carpool.RideLimit(trip, [trip.people[0]], riders, opts, T, trip.back)
+        pt = next(x for x in carpool.timeline(plan, trip, T, trip.back).people if x.role == "ride")
+        mine = limit.minutes(plan.routes[0], plan.rides["小陈"][1], riders[0])
+        self.assertAlmostEqual(pt.minutes - pt.wait, mine, delta=0.1)
+
+    def test_report_names_the_source_of_return_minutes(self):
+        people = [person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0", rail_min={"西站": 150})]
+        for back_only in (False, True):
+            cfg = self.cfg(people, back_only=back_only)
+            trip, pts, T, plans = carpool.plan_trip(cfg, FakeAmap())
+            report = carpool.render(trip, pts, T, plans, carpool.timelines(trip, T, plans))
+            self.assertIn("返程没填回程车次，按去程" + ("的用时估，用时一样" if not back_only else "填的用时估"), report)
+            self.assertIn("## 不开车的人" + ("回" if back_only else "到") + "各站要多久", report)
+
+
 class RuleSnapshotTest(unittest.TestCase):
     """规则快照：固定场景下前几个方案的顺序和各项数字。改了排序或成本口径，这里会失败。"""
 

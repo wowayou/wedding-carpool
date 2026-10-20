@@ -221,7 +221,8 @@ def person_times(plan: Plan, trip: Trip, T, leg: Leg, cars: list[CarTrip], rider
     """每个人的全程用时。知道时刻时按时刻算（含等人）；不知道时按出站时间、车程估。"""
     people = {p.name: p for p in trip.people}
     names = [s.name for s in trip.stations]
-    opts = {p.name: rider_options(p, names, trip.station_cost, leg) for p in trip.people if not p.drives}
+    places = {st.name: st for st in trip.stations}
+    opts = {p.name: rider_options(p, names, trip.station_cost, leg, places) for p in trip.people if not p.drives}
     routes = {r.driver: r for r in plan.routes}
     out: dict[str, PersonTime] = {}
     for car in cars:
