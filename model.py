@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, field
 
 from base import DEFAULTS, INF, report
-from geo import AmapError, Place, QuotaError, parse_loc, pick_stations
+from geo import AmapError, Place, QuotaError, km_between, parse_loc, pick_stations
 
 
 @dataclass
@@ -261,7 +261,8 @@ def estimate_rail(amap, trip: Trip) -> None:
             continue  # 没估算出来的站，rider_options 按 station_cost 估
         if not p.rail_est:
             trip.warnings.append(f"没查到 {p.name} 到任何候选站的公共交通方案{'（' + error + '）' if error else ''}，"
-                                 f"改按每站 {trip.station_cost:.0f} 分钟估算；建议去 12306 查好后填 rail_min")
+                                 f"改按直线距离估算（每站 {trip.station_cost:.0f} 分钟加上按直线公里算的火车用时）；"
+                                 "建议去 12306 查好后填 rail_min")
         elif missing:
             trip.warnings.append(f"没查到 {p.name} 到 {'、'.join(missing)} 的公共交通方案"
                                  f"{'（' + error + '）' if error else ''}，已不考虑这些站；实际能到的话给他填 rail_min")
@@ -330,16 +331,25 @@ def filled_stations(p: Person, station_names: list[str], leg: Leg = OUT) -> list
     return [s for s in station_names if s in rail or s in trains]
 
 
+# 兜底：车次、分钟数、高德估算都没有时，一个站的用时 = station_cost_min + 家到站的直线公里 × 系数 ÷ 速度 × 60。
+# 系数和速度取自 v3.14 计划第三节 B 的核对表（故城真实车次，8 个区间）：直达线路误差多在半小时以内，
+# 要换乘或绕线的会少估一个小时左右，所以只作兜底，不知道哪条线有直达车。
+LINE_DETOUR_FACTOR = 1.3  # 铁路比直线长的折算
+LINE_SPEED_KMH = 200.0    # 平均时速（含停靠）
+
+
 def line_minutes(station_cost: float, home: Place | None, station: Place | None) -> float:
-    """什么都没有时一个站的用时。切片 2 起按直线距离估，现在先按 station_cost。"""
-    return station_cost
+    """按直线距离估一个站的用时（分钟）；不知道坐标时只有 station_cost。"""
+    if home is None or station is None:
+        return station_cost
+    return station_cost + km_between(home, station) * LINE_DETOUR_FACTOR / LINE_SPEED_KMH * 60
 
 
 # station_minutes 返回的用时来源
 SRC_OWN = "own"    # 这一段自己填的分钟数（或按车次算出的）
 SRC_OUT = "out"    # 返程没填回程分钟数，用去程的分钟数
 SRC_EST = "est"    # 高德估算
-SRC_LINE = "line"  # 都没有，按 station_cost 估
+SRC_LINE = "line"  # 直线距离估算
 
 
 def station_minutes(p: Person, station_names: list[str], station_cost: float, places: dict[str, Place] | None = None,
@@ -347,9 +357,9 @@ def station_minutes(p: Person, station_names: list[str], station_cost: float, pl
     """乘客在这一段能去哪些站、各要多久（分钟）、用时从哪来：{站名: (分钟, 来源)}。取数顺序只在这里写。
 
     去程：填了某些站的车次或分钟数的人只去这些站（见 filled_stations）；没填的人用高德估算（估算不到的站不考虑），
-    一个估算都没有就每个站都去。分钟数依次取：去程分钟数 → 高德估算 → 默认值。
-    返程：回程填了站，只去这些站，分钟数依次取 回程分钟数 → 去程分钟数 → 高德估算 → 默认值；
-    回程一个都没填但去程填了，只去去程填了的站，依次取 去程分钟数 → 高德估算 → 默认值；
+    一个估算都没有就每个站都去。分钟数依次取：去程分钟数 → 高德估算 → 直线距离估算。
+    返程：回程填了站，只去这些站，分钟数依次取 回程分钟数 → 去程分钟数 → 高德估算 → 直线距离估算；
+    回程一个都没填但去程填了，只去去程填了的站，依次取 去程分钟数 → 高德估算 → 直线距离估算；
     都没填，和去程没填的人一样。places 是站名到坐标，用来按直线距离估；没给坐标就只有 station_cost。"""
     chain = ((p.back_rail_min, SRC_OWN), (p.rail_min, SRC_OUT)) if leg.reverse else ((p.rail_min, SRC_OWN),)
     stations = filled_stations(p, station_names, leg)
