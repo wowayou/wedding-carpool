@@ -12,7 +12,7 @@ import { refreshDerived, renderForm, rerenderKeepingFocus, syncPicked } from './
 import { openHistory, previewVersion, restoreVersion } from './history.js';
 import { importPicked, loadFromFile, loadFromTrip, openImportPeople } from './import-people.js';
 import { narrow, setPane } from './layout.js';
-import { declutter, drawPlan, drawPreview, initMap, view } from './map.js';
+import { declutter, drawPlan, drawPreview, initMap, refreshMap, view } from './map.js';
 import { importConfig, openMenu, refreshMenu } from './menu.js';
 import { hideOverlay } from './overlay.js';
 import { setPath } from './paths.js';
@@ -153,7 +153,7 @@ export function bindEvents() {
     const b = e.target.closest('[data-pane]');
     if (b) setPane(b.dataset.pane);
   });
-  narrow().addEventListener('change', () => setTimeout(() => { if (view.map) { view.map.invalidateSize(); declutter(); } }, 80));
+  narrow().addEventListener('change', () => setTimeout(() => { if (view.map) { refreshMap(); declutter(); } }, 80));
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { drawPreview(); if (state.result) drawPlan(false); drawSugLayer(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#drawer').hidden && !document.querySelector('dialog[open]')) closeDrawer(); });
   $('#staleBtn').addEventListener('click', runPlan);

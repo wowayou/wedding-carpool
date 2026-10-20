@@ -156,6 +156,20 @@ test('试玩：手机宽度的三个页签、深色模式、没有横向滚动',
   await waitFormReady(page);
   const noHScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth);
   const tab = (name) => page.locator(`#tab${name}`);
+  // 地图视野：点和路线合起来的外框，宽或高至少占地图容器的四成，并且都在容器里（瓦片是空白图，看矢量图层）
+  const mapView = () => page.evaluate(() => {
+    const c = document.querySelector('#map').getBoundingClientRect();
+    const rs = [...document.querySelectorAll('#map .leaflet-overlay-pane path')].map((p) => p.getBoundingClientRect()).filter((r) => r.width || r.height);
+    if (!rs.length) return { n: 0, cw: c.width, ch: c.height };
+    const l = Math.min(...rs.map((r) => r.left)), t = Math.min(...rs.map((r) => r.top)), r = Math.max(...rs.map((x) => x.right)), b = Math.max(...rs.map((x) => x.bottom));
+    return { n: rs.length, w: r - l, h: b - t, cw: c.width, ch: c.height, inside: l >= c.left - 1 && t >= c.top - 1 && r <= c.right + 1 && b <= c.bottom + 1 };
+  });
+  const mapFitted = async (what) => {
+    const ok = (v) => v.n > 0 && v.inside && (v.w >= v.cw * 0.4 || v.h >= v.ch * 0.4);
+    let v;
+    for (let i = 0; i < 30; i++) { v = await mapView(); if (ok(v)) return; await page.waitForTimeout(100); }
+    assert.fail(`${what}：地图视野没缩放到地点和路线上，实际 ${JSON.stringify(v)}`);
+  };
   const visible = async () => ({
     fill: await page.locator('#paneFill').isVisible(), map: await page.locator('#paneMap').isVisible(), plan: await page.locator('#panePlan').isVisible(),
   });
@@ -166,6 +180,7 @@ test('试玩：手机宽度的三个页签、深色模式、没有横向滚动',
   assert.deepEqual(await visible(), { fill: false, map: true, plan: false });
   assert.equal(await tab('Map').getAttribute('aria-selected'), 'true');
   assert.equal(await noHScroll(), true);
+  await mapFitted('载入后点「地图」');
   await tab('Plan').click();
   assert.deepEqual(await visible(), { fill: false, map: false, plan: true });
   assert.equal(await noHScroll(), true);
@@ -181,6 +196,9 @@ test('试玩：手机宽度的三个页签、深色模式、没有横向滚动',
   await page.locator('#tabs .tab').first().waitFor({ timeout: SLOW });
   assert.equal(await page.locator('#app').getAttribute('data-tab'), 'plan');
   assert.equal(await noHScroll(), true);
+  await tab('Map').click();
+  await mapFitted('算完方案后点「地图」');
+  await tab('Plan').click();
   // 推荐车站在手机上盖住整个屏幕，有「去地图上看」出口
   await tab('Fill').click();
   await openSuggest(page);
