@@ -2,7 +2,7 @@
 
 import { sugOpen } from './drawer.js';
 import { on } from './events.js';
-import { view } from './map.js';
+import { fitMap, view } from './map.js';
 import { sgSettingsKey, sug } from './state.js';
 import { $, esc, parseLoc, themeVar } from './util.js';
 
@@ -54,11 +54,10 @@ export function drawSugLayer() {
 }
 export function fitSugLayer() {
   const b = sugBounds(sug.trace, sugStations());
-  if (!b || !view.map || view.map.getSize().x < 50) return false;
+  if (!b || !view.map) return false;
   const mapBox = $('#map').getBoundingClientRect(), drawer = $('#drawer').getBoundingClientRect();
   const covered = sugOpen() ? Math.max(0, mapBox.right - drawer.left) : 0; // 抽屉盖住的那一截不算
-  view.map.fitBounds(b, { paddingTopLeft: [16, 16], paddingBottomRight: [covered + 16, 16], maxZoom: 12 });
-  return true;
+  return fitMap(b, { paddingTopLeft: [16, 16], paddingBottomRight: [covered + 16, 16], maxZoom: 12 });
 }
 // 图层该不该显示：抽屉开在「推荐车站」上（或者在手机上点了「去地图上看」），而且开关是开的
 export function syncSugLayer(redraw = false) {

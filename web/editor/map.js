@@ -47,6 +47,25 @@ export function labelled(marker, priority) {
   return marker;
 }
 
+// 缩放到指定范围。地图在隐藏的页签里（容器 0×0）时 Leaflet 会算出最小一级，所以只记下来，等地图可见了再补做（后来的覆盖先前的）。
+// 返回这次是不是真的缩放了。看容器的实际尺寸，getSize() 有缓存
+let pendingFit = null;
+export function fitMap(bounds, opts) {
+  if (!view.map) return false;
+  const box = view.map.getContainer();
+  if (!box.clientWidth || !box.clientHeight) { pendingFit = [bounds, opts]; return false; }
+  pendingFit = null;
+  view.map.invalidateSize(); // Leaflet 缓存的尺寸可能还是隐藏时的 0，不更新会缩到最小一级
+  view.map.fitBounds(bounds, opts);
+  return true;
+}
+// 地图变得可见、尺寸变了以后调用：先重算尺寸，再补做待缩放
+export function refreshMap() {
+  if (!view.map) return;
+  view.map.invalidateSize();
+  if (pendingFit) fitMap(...pendingFit);
+}
+
 let previewTimer = null;
 export function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(drawPreview, 250); }
 
@@ -66,7 +85,7 @@ export function drawPreview() {
   (state.cfg.stations || []).forEach((s) => add(s.location, 'st', s.name || '车站', 6));
   (state.cfg.people || []).forEach((p) => add(p.location, p.car_seats !== undefined ? 'car' : 'home', `${p.name || '成员'}${p.car_seats !== undefined ? '（开车）' : ''}`));
   if (!state.fitted && pts.length) {
-    view.map.fitBounds(L.latLngBounds(pts).pad(0.15), { maxZoom: 11 });
+    fitMap(L.latLngBounds(pts).pad(0.15), { maxZoom: 11 });
     state.fitted = true;
   }
   showLayers();
@@ -114,7 +133,7 @@ export function drawPlan(fit) {
   if (fit) {
     const focus = [ll('venue'), ...[...used].map(ll),
       ...(plan?.routes || []).flatMap((r) => [...(r.path || [ll(`car:${r.driver}`)]), ...(r.direct_path || [])])];
-    view.map.fitBounds(L.latLngBounds(focus).pad(0.1));
+    fitMap(L.latLngBounds(focus).pad(0.1));
   }
   showLayers();
   setTimeout(declutter, 0);
