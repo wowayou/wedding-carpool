@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { after, afterEach, before, test } from 'node:test';
-import { bind, cleanup, closeBrowser, newGuardedPage, openSuggest, startLocal, waitFormReady, waitMapReady } from './lib.mjs';
+import { bind, cleanup, closeBrowser, FAKE_JS_KEY, mapLayers, newGuardedPage, openSuggest, startLocal, waitFormReady, waitMapLayers, waitMapReady } from './lib.mjs';
 
 let srv, page, guard;
 
@@ -26,6 +26,27 @@ test('本地：加载配置', async () => {
   assert.equal(await page.locator('#historyBtn').isHidden(), true, '本地没有历史');
   assert.equal(await page.locator('#tryBanner').count(), 0);
   assert.equal(await page.locator('#save').innerText(), '保存');
+  // 地图：本地版自己提供 /map；没配 JS Key（AMAP_JS_KEY 或 .amap_js_key）就是不带底图的画法，点照样画出来
+  const layers = await waitMapLayers(page, (l) => l.points > 0, '本地版预览的点');
+  assert.equal(layers.renderer, 'plain');
+  assert.equal(await page.locator('#mapFail').isHidden(), true);
+});
+
+test('本地：配了 JS Key（环境变量）时地图页面用高德 JS API（假的），带的是这个 Key', async () => {
+  const keyed = await startLocal({ jsKey: FAKE_JS_KEY });
+  const P = await newGuardedPage(keyed.base, { fakeJsApi: true });
+  try {
+    await P.page.goto(keyed.base);
+    await waitFormReady(P.page);
+    await waitMapReady(P.page);
+    const layers = await waitMapLayers(P.page, (l) => l.points > 0, '预览的点');
+    assert.equal(layers.renderer, 'amap');
+    const loads = P.guard.jsApi.filter((u) => new URL(u).pathname === '/maps');
+    assert.equal(loads.length, 1);
+    assert.equal(new URL(loads[0]).searchParams.get('key'), FAKE_JS_KEY);
+    P.guard.assertClean();
+    assert.equal((await mapLayers(P.page)).points, layers.points);
+  } finally { await P.context.close(); }
 });
 
 test('本地：改字段并保存，配置文件真的变了，第一次保存生成 .bak', async () => {

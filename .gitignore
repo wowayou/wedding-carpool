@@ -3,6 +3,7 @@ trip.toml
 *-report.md
 __pycache__/
 .amap_key
+.amap_js_key
 *.bak
 *-plan.html
 node_modules

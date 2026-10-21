@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shutil
 import sys
 import tomllib
@@ -38,7 +40,27 @@ STATIC_FILES = {
 }
 # 编辑页的脚本模块（web/editor/*.js）：浏览器要求模块的 MIME 是 JavaScript。只开放这个目录下现有的 .js 文件（逐个列出，请求路径必须正好等于键），不按请求路径去拼文件路径
 STATIC_FILES.update({f"/editor/{p.name}": (p, "text/javascript; charset=utf-8") for p in sorted((HERE / "web" / "editor").glob("*.js"))})
+# 地图页面（v3.16）：编辑页用 iframe 嵌 /map，画图的脚本在 web/map/。本地版在同源下直接以 ES 模块加载这些文件（网页版把它们并成一个普通脚本，见 web/map/bundle.mjs）
+STATIC_FILES.update({"/map/frame.css": (HERE / "web" / "map" / "frame.css", "text/css; charset=utf-8")})
+STATIC_FILES.update({f"/map/{p.name}": (p, "text/javascript; charset=utf-8") for p in sorted((HERE / "web" / "map").glob("*.js"))})
+MAP_PAGE = HERE / "web" / "map.html"
+JS_KEY_FILE = HERE / ".amap_js_key"
+JS_KEY_RE = re.compile(r"^[0-9A-Za-z]{16,64}$")  # 和 Worker 一样只认字母数字，免得怪字符破坏页面
 SAVE_HEADER = "# 由 ui.py 保存。手写注释不会保留，第一次保存前的原文件在同名 .bak 里\n"
+
+
+def js_key() -> str:
+    """高德 JS API 的 Key（给地图页面用，和 Web 服务 Key 不是同一个）：环境变量 AMAP_JS_KEY 或同目录 .amap_js_key。没有就是空，地图页面改用不带底图的画法。"""
+    key = (os.environ.get("AMAP_JS_KEY") or (JS_KEY_FILE.read_text(encoding="utf-8") if JS_KEY_FILE.exists() else "")).strip()
+    return key if JS_KEY_RE.match(key) else ""
+
+
+def render_map_page(key: str) -> bytes:
+    """地图页面：填上 Key；本地版脚本以 ES 模块加载（见上）。"""
+    html = MAP_PAGE.read_text(encoding="utf-8")
+    html = re.sub(r'<meta name="amap-js-key" content="[^"]*">', f'<meta name="amap-js-key" content="{key}">', html, count=1)
+    html = html.replace('<script src="/map/frame.js"></script>', '<script type="module" src="/map/frame.js"></script>', 1)
+    return html.encode("utf-8")
 
 
 class App:
@@ -109,6 +131,8 @@ def make_handler(app: App):
             url = urllib.parse.urlsplit(self.path)
             if url.path in ("/", "/index.html"):
                 self._send(200, (HERE / "ui.html").read_bytes(), "text/html; charset=utf-8")
+            elif url.path == "/map" and MAP_PAGE.exists():
+                self._send(200, render_map_page(js_key()), "text/html; charset=utf-8")
             elif url.path in STATIC_FILES and STATIC_FILES[url.path][0].exists():
                 path, ctype = STATIC_FILES[url.path]
                 self._send(200, path.read_bytes(), ctype)

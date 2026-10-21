@@ -2437,6 +2437,40 @@ class UiServerTest(unittest.TestCase):
                 self.assertEqual(resp.status, 200)
                 self.assertIn(marker, resp.read())
 
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path) as resp:
+            return resp.status, resp.headers.get("Content-Type"), resp.read().decode()
+
+    def test_map_page_and_scripts_are_served(self):
+        # 地图页面（v3.16）：没配 JS Key 时 meta 是空的；脚本以 ES 模块加载，每个 web/map/*.js 都能取到
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(ui, "JS_KEY_FILE", Path(self.dir.name) / "none"):
+            os.environ.pop("AMAP_JS_KEY", None)
+            status, ctype, html = self.get("/map")
+        self.assertEqual((status, ctype), (200, "text/html; charset=utf-8"))
+        self.assertIn('<meta name="amap-js-key" content="">', html)
+        self.assertIn('<script type="module" src="/map/frame.js"></script>', html)
+        for path, kind in (("/map/frame.js", "text/javascript"), ("/map/scene.js", "text/javascript"), ("/map/frame.css", "text/css")):
+            status, ctype, body = self.get(path)
+            self.assertEqual(status, 200)
+            self.assertTrue(ctype.startswith(kind), path)
+            self.assertGreater(len(body), 100)
+        self.assertEqual(self.call("/map/..%2Fui.py")[0], 404)
+
+    def test_js_key_from_env_or_file(self):
+        good = "0123456789abcdef0123456789abcdef"
+        keyfile = Path(self.dir.name) / ".amap_js_key"
+        with mock.patch.object(ui, "JS_KEY_FILE", keyfile), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AMAP_JS_KEY", None)
+            self.assertEqual(ui.js_key(), "")
+            keyfile.write_text(good + "\n", encoding="utf-8")
+            self.assertEqual(ui.js_key(), good)
+            self.assertIn(f'content="{good}"', self.get("/map")[2])
+            os.environ["AMAP_JS_KEY"] = "a" * 20  # 环境变量优先
+            self.assertEqual(ui.js_key(), "a" * 20)
+            os.environ["AMAP_JS_KEY"] = 'abc"><script>x</script>'  # 怪字符不填
+            self.assertEqual(ui.js_key(), "")
+            self.assertNotIn("<script>x", self.get("/map")[2])
+
     def test_page_and_config(self):
         with urllib.request.urlopen(self.base + "/") as resp:
             self.assertIn("拼车出行规划", resp.read().decode())

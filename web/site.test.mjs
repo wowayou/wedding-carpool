@@ -141,6 +141,16 @@ test('构建产物里有试玩页 try.html 和 try-trip.json，CSP 与编辑页�
   assert.equal(readFileSync('dist/editor/main.js', 'utf8'), readFileSync('web/editor/main.js', 'utf8'));
   assert.match(edit, /<script type="module" src="\/editor\/main\.js"><\/script>/);
   assert.equal(csp(edit).match(/'sha256-/g).length, 1);
+  // v3.16：地图在同源 iframe 里的 /map，编辑页只多一条 frame-src 'self'；高德的瓦片、Leaflet 和 cdnjs 都不放行，也不再随站点分发 Leaflet
+  const directives = Object.fromEntries(csp(edit).split('; ').map((d) => [d.split(' ')[0], d.split(' ').slice(1)]));
+  assert.deepEqual(directives['frame-src'], ["'self'"]);
+  assert.deepEqual(directives['img-src'], ["'self'", 'data:'], '没有高德瓦片');
+  assert.doesNotMatch(csp(edit), /autonavi|cdnjs|leaflet/i);
+  assert.ok(!existsSync('dist/vendor/leaflet'));
+  assert.doesNotMatch(edit, /leaflet/i);
+  assert.ok(existsSync('dist/vendor/marked/marked.min.js') && existsSync('dist/vendor/pyodide/pyodide.mjs'));
+  const demo = readFileSync('dist/demo.html', 'utf8');
+  assert.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(demo)[1], /cdnjs\.cloudflare\.com/, '示例页还用 Leaflet（cdnjs），到切片 3 才改');
 });
 
 // config-fields.json：网页版 Python 在 py/ 下读，编辑页从站点根目录取；Pyodide 要把它和 .py 一起加载

@@ -35,7 +35,7 @@
 
 ## 在线版
 
-- **试玩**：没有邀请码、也没有高德 Key 的人可以打开 `/try`。里面是虚构的行程（宏村示例酒店，老王、老张开车，小李、小陈坐高铁，开返程），数据在 `web/try-trip.json`；能改谁开车、空座、最多绕路、同行人数、车次和分钟数，能删成员和候选站，能开关去程和返程（可以只规划返程）、改乘客的离场时间、切换打车方式，「恢复示例」回到初始。不能搜索和改地点、加成员和车站、保存、发布方案页。行车时间在浏览器里按直线距离估算（直线公里数 × 1.3 ÷ 75 km/h，再加 10 分钟），路线画成直线，报告里写明是示意；全程不调用高德 Web 服务，也没有 `/api/t/` 请求（地图底图仍是高德瓦片）。构建时把编辑页复制成 `dist/try.html`，页面按路径 `/try` 切到试玩模式。
+- **试玩**：没有邀请码、也没有高德 Key 的人可以打开 `/try`。里面是虚构的行程（宏村示例酒店，老王、老张开车，小李、小陈坐高铁，开返程），数据在 `web/try-trip.json`；能改谁开车、空座、最多绕路、同行人数、车次和分钟数，能删成员和候选站，能开关去程和返程（可以只规划返程）、改乘客的离场时间、切换打车方式，「恢复示例」回到初始。不能搜索和改地点、加成员和车站、保存、发布方案页。行车时间在浏览器里按直线距离估算（直线公里数 × 1.3 ÷ 75 km/h，再加 10 分钟），路线画成直线，报告里写明是示意；全程不调用高德 Web 服务，也没有 `/api/t/` 请求（地图在 `/map` 页面里，有 JS Key 时底图由高德 JS API 加载，没有就不带底图）。构建时把编辑页复制成 `dist/try.html`，页面按路径 `/try` 切到试玩模式。
 - **新建行程**：首页填行程名称，然后二选一：
   - 有**邀请码**（站长发的，也可以直接打开邀请链接 `/?invite=<邀请码>`），用站点的公共高德额度；
   - 填**自己的高德 Web 服务 Key**。Key 只存在这台设备的浏览器里（`localStorage`），本站服务器不接收、不保存、不经手：新建行程的请求里没有 Key，计算和搜索由浏览器（含 Pyodide 计算线程）直接请求高德，高德能看到你的 IP；调用次数算在你自己的额度里。换设备要再填一次，一起编辑的人没填 Key 也能编辑，要算方案的设备各填一次。需要「Web服务」类型的 Key，不能设 IP 白名单。
@@ -101,6 +101,7 @@ npx wrangler secret delete FORCE_PUBLIC_PAUSED  # 恢复（另一个同理）
 
 ```bash
 python3 ui.py            # 编辑 trip.toml，打开 http://127.0.0.1:8765
+                         # 地图底图要高德 JS API 的 Key（和上面的 Web 服务 Key 不是同一个）：环境变量 AMAP_JS_KEY 或同目录 .amap_js_key（已加入 .gitignore）；不配就不画底图，只画点和线
 python3 carpool.py trip.toml   # 只用命令行：报告打印到终端，并写到 trip-report.md
 ```
 
@@ -111,7 +112,7 @@ python3 carpool.py trip.toml   # 只用命令行：报告打印到终端，并�
 ## 自己部署（Cloudflare Workers）
 
 ```
-浏览器：界面 + Pyodide（浏览器里运行的 Python，跑 carpool.py 等，计算都在这里；Pyodide、地图组件随站点自己托管在 /vendor/）
+浏览器：界面 + Pyodide（浏览器里运行的 Python，跑 carpool.py 等，计算都在这里；Pyodide 随站点自己托管在 /vendor/；地图画在同源 iframe 里的 /map 页面）
    │  编辑链接换来的 Cookie（只对该行程的路径有效）；WebSocket 实时同步
    ▼
 Worker（web/worker.js，用 placement.region 固定在香港附近运行，离高德近）
@@ -160,7 +161,7 @@ npx wrangler secret put ACCESS_CODE        # 站长口令：只用来登录管�
 npm run deploy                             # 构建 dist/ 并部署
 ```
 
-构建时（`web/vendor.mjs`）会下载编辑页用的 Pyodide、Leaflet、marked（约 13 MB），逐个校验 sha256，缓存在 `.cache/vendor/`，拷到 `dist/vendor/`；第一次构建要能访问 jsDelivr 和 cdnjs，下载失败或校验不对会让构建报错，不会回退到 CDN。网络要走代理的话，设好 `HTTPS_PROXY`（下载用 curl）。许可证文件随依赖一起放在 `dist/vendor/` 下。
+构建时（`web/vendor.mjs`）会下载编辑页用的 Pyodide、marked（约 13 MB），逐个校验 sha256，缓存在 `.cache/vendor/`，拷到 `dist/vendor/`；第一次构建要能访问 jsDelivr 和 cdnjs，下载失败或校验不对会让构建报错，不会回退到 CDN。网络要走代理的话，设好 `HTTPS_PROXY`（下载用 curl）。许可证文件随依赖一起放在 `dist/vendor/` 下。
 
 可选设置：
 
@@ -195,7 +196,7 @@ npm run deploy                             # 构建 dist/ 并部署
 
 ## 安全措施
 
-- 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；编辑页的 Pyodide、Leaflet、marked 都是自己托管的同源文件，不放行任何 CDN；示例页和方案页仍用 cdnjs，带 SRI 完整性校验。
+- 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；编辑页的 Pyodide、marked 都是自己托管的同源文件，不放行任何 CDN，也不放行高德的脚本和瓦片（地图在同源 iframe 里的 `/map`，编辑页只多一条 `frame-src 'self'`）；示例页和方案页仍用 cdnjs，带 SRI 完整性校验。
 - 所有响应都带安全头（`nosniff`、`X-Frame-Options`、`Referrer-Policy`、HSTS、`Permissions-Policy`）：静态文件在 `web/_headers`，Worker 生成的响应在 `web/worker.js`，两处要保持一致。
 - 方案页的 HTML 由编辑者的浏览器上传，所以放进 CSP 沙箱（独立的匿名来源）：读不到本站的存储和 Cookie，也不能发请求。
 - 改动状态的请求（`/api/*` 的 POST 和 DELETE、方案页口令表单）校验 Origin，跨站来源会被拒；WebSocket 也校验 Origin；500 错误不返回内部错误原文。

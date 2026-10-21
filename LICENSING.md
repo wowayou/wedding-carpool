@@ -25,12 +25,12 @@ under their own licences:
 | Component | Used for | Licence | Shipped in the build as |
 |---|---|---|---|
 | [Pyodide](https://pyodide.org/) v314.0.7 | running the Python planner in the browser | MPL-2.0 | `vendor/pyodide/` (+ `LICENSE`) |
-| [Leaflet](https://leafletjs.com/) 1.9.4 | maps | BSD-2-Clause | `vendor/leaflet/` (+ `LICENSE`) |
 | [marked](https://marked.js.org/) 12.0.2 | rendering the report | MIT | `vendor/marked/` (+ `LICENSE.md`) |
 
 Pyodide is distributed unmodified; its source is available from the Pyodide project. The
-example page (`/demo`) and published plan pages still load Leaflet from cdnjs with SRI
-instead of from `/vendor/`.
+example page (`/demo`) and published plan pages still load Leaflet (BSD-2-Clause) from
+cdnjs with SRI. The editor page no longer uses Leaflet: its map is the separate `/map`
+page (v3.16), which draws with the Amap JS API (loaded from Amap's servers, not shipped).
 
 Data and services:
 
@@ -88,6 +88,6 @@ Issues at <https://github.com/wowayou/wedding-carpool>, or the contact listed at
 
 - 项目以 **AGPL-3.0-or-later** 公开发布。任何人都可以使用、学习、修改、自建和再分发。修改后以在线服务形式提供给别人用的，必须向服务的用户提供修改后的源码。
 - 仓库代码全部由著作权人 wowayou 编写（AI 助手在其指导下产出的代码不算第三方贡献）。著作权人**保留以其他条款（含商业条款）另行授权的权利**，与公开的 AGPL 发布并行；AGPL 使用者不会因此失去任何权利。
-- 编辑页用的 Pyodide（MPL-2.0）、Leaflet（BSD-2-Clause）、marked（MIT）不放在仓库里，而是构建时下载固定版本、校验哈希后**随构建产物分发**（`/vendor/`），许可证文本放在对应目录里，各自按原许可证使用。示例页和方案页仍从 cdnjs 加载 Leaflet。高德的数据和地图按高德的条款使用，部署者需要自己确认所用 Key 的条款允许其用途。12306 站名表是公开的参考数据。
+- 编辑页用的 Pyodide（MPL-2.0）、marked（MIT）不放在仓库里，而是构建时下载固定版本、校验哈希后**随构建产物分发**（`/vendor/`），许可证文本放在对应目录里，各自按原许可证使用。示例页和方案页仍从 cdnjs 加载 Leaflet（BSD-2-Clause）；编辑页的地图改用 `/map` 页面里的高德 JS API（从高德加载，不随站点分发）。高德的数据和地图按高德的条款使用，部署者需要自己确认所用 Key 的条款允许其用途。12306 站名表是公开的参考数据。
 - **提交贡献即表示同意**：① 你是作者或有权提交；② 贡献以 AGPL-3.0-or-later 向公众授权；③ 授予著作权人永久、全球、非独占、不可撤销、免版税的「以其他条款再授权你的贡献」的权利。不接受第 ③ 条可以在 PR 里说明。不要求转让著作权。
 - 名称「拼车出行规划」「Eigentime」、域名 carpool.eigentime.org 和相关标识不在授权范围内。自建或修改后的版本请用自己的名字，不能自称官方服务。
