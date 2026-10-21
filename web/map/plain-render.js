@@ -3,7 +3,7 @@
 // 可以拖动和滚轮缩放；角上写「没有底图」。
 import { declutter } from './declutter.js';
 import { fitView, metersToPx, toScreen, unproject, project } from './mercator.js';
-import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets } from './scene.js';
+import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets, labelAlways } from './scene.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svgEl = (name, attrs = {}) => {
@@ -64,9 +64,9 @@ export function createPlainRenderer(host) {
     scene.points.forEach((p) => {
       const [x, y] = toScreen(p.lng, p.lat, v);
       const r = p.radius ?? DEFAULT_RADIUS[p.kind];
-      const hi = p.highlight !== false;
+      const fill = p.highlight !== false, hi = labelAlways(p);
       const dot = svgEl('circle', { 'data-layer': 'point', 'data-kind': p.kind, 'data-name': p.name, cx: x, cy: y, r, stroke: host.color('--surface'), 'stroke-width': 2,
-        fill: host.color(POINT_VARS[p.kind]), 'fill-opacity': hi ? 1 : 0.5 });
+        fill: host.color(POINT_VARS[p.kind]), 'fill-opacity': fill ? 1 : 0.5 });
       const text = [p.name, ...(p.notes || [])].join('\n');
       const label = document.createElement('div');
       label.className = 'lbl';
@@ -83,7 +83,7 @@ export function createPlainRenderer(host) {
     });
     layoutLabels(items);
   }
-  // 要显示的标签：只有 highlight 的参与竞争，按优先级留下互不遮挡的；其余只在悬停时显示
+  // 要显示的标签：只有 label 为 always 的参与竞争，按优先级留下互不遮挡的；其余只在悬停时显示
   function layoutLabels(items) {
     const cand = items.filter((it) => it.hi);
     const shown = declutter(cand);

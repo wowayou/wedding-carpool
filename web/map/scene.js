@@ -14,7 +14,8 @@
 //     name,                                        // 标签文字
 //     notes?: string[],                            // 附注，每条一行，接在名字后面
 //     priority?: number,                           // 标签互相遮挡时数字小的优先留下，默认 5
-//     highlight?: boolean,                         // true：实心圆点、标签一直显示；false：半透明、标签只在悬停时显示。默认 true
+//     highlight?: boolean,                         // 填充：true 实心，false 半透明。默认 true
+//     label?: 'always' | 'hover',                  // 标签：always 一直显示（互相遮挡时按优先级取舍），hover 只在悬停时显示。默认按 highlight 推出（true 为 always，false 为 hover）
 //     radius?: number,                             // 圆点半径（像素），默认按 kind
 //   }],
 //   lines: [{
@@ -57,6 +58,9 @@ export const RENDERERS = ['amap', 'plain'];
 export const POINT_VARS = { venue: '--dest', st: '--station', car: '--drive', home: '--ride' };
 export const DEFAULT_RADIUS = { venue: 10, st: 6, car: 7, home: 7 };
 export const DEFAULT_PRIORITY = 5;
+export const LABEL_MODES = ['always', 'hover'];
+// 标签是不是一直显示：label 写了就按它，没写按 highlight 推出
+export const labelAlways = (p) => (p.label ? p.label === 'always' : p.highlight !== false);
 
 const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
 const isLngLat = (p) => Array.isArray(p) && p.length === 2 && isNum(p[0]) && isNum(p[1]) && p[0] >= -180 && p[0] <= 180 && p[1] >= -90 && p[1] <= 90;
@@ -82,6 +86,7 @@ export function validateScene(scene) {
     if (p.notes !== undefined && !(Array.isArray(p.notes) && p.notes.every((n) => typeof n === 'string'))) bad(`${at} 的 notes 必须是字符串数组`);
     if (p.priority !== undefined && !isNum(p.priority)) bad(`${at} 的 priority 必须是数字`);
     if (p.highlight !== undefined && typeof p.highlight !== 'boolean') bad(`${at} 的 highlight 必须是布尔值`);
+    if (p.label !== undefined && !LABEL_MODES.includes(p.label)) bad(`${at} 的 label 只能是 ${LABEL_MODES.join('/')}`);
     if (!isPos(p.radius)) bad(`${at} 的 radius 必须是正数`);
   });
   (Array.isArray(scene.lines) ? scene.lines : []).forEach((l, i) => {

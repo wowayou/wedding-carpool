@@ -85,7 +85,7 @@ const TRACE = {
   circles: [{ lat: 30, lng: 118, radius_km: 50 }, { lat: 31, lng: 119, radius_km: 20, searched: false }],
   routes: [{ path: [[30, 118], [30.5, 118.5]], alt: 1 }, { path: [[31, 119], [31.5, 119.5]], alt: 2 }],
 };
-const STATIONS = [{ name: '甲站', location: '118.1,30.1', listed: true }, { name: '乙站', location: '118.2,30.2' }, { name: '丙站' }];
+const STATIONS = [{ name: '甲站', location: '118.1,30.1', listed: true }, { name: '乙站', location: '118.2,30.2' }, { name: '丙站' }, { name: '丁站', location: '118.3,30.3', listed: true, over_all: true }];
 
 test('找站过程：圈（米）、点线路线、候选站只在悬停时显示名字；没搜的圈虚线加淡', () => {
   const p = sugParts(TRACE, STATIONS);
@@ -94,7 +94,8 @@ test('找站过程：圈（米）、点线路线、候选站只在悬停时显�
   assert.deepEqual([p.circles[1].opacity, p.circles[1].fillOpacity, p.circles[1].dash], [0.35, 0.02, [4, 4]]);
   assert.deepEqual(p.lines.map((l) => [l.color, l.dash, l.opacity]), [['--drive', [2, 7], 0.9], ['--drive', [2, 7], 0.45]]);
   assert.deepEqual(p.lines[0].path, [[118, 30], [118.5, 30.5]]);
-  assert.deepEqual(p.points.map((x) => [x.name, x.radius, x.highlight]), [['甲站', 6, false], ['乙站', 4, false]], '没坐标的不画');
+  assert.deepEqual(p.points.map((x) => [x.name, x.radius, x.highlight, x.label]),
+    [['甲站', 6, true, 'hover'], ['乙站', 4, false, 'hover'], ['丁站', 6, false, 'hover']], '列出且没超所有车主上限的实心，其余半透明；标签都只在悬停时显示；没坐标的不画');
   assert.equal(sugParts(null, STATIONS), null);
 });
 
@@ -115,7 +116,7 @@ test('合成 scene：找站的圈和线排在方案前面（画在下面）；�
   assert.equal(both.circles.length, 2);
   assert.equal(both.lines.length, 3 + 2);
   assert.equal(both.lines[0].dash[0], 2, '找站的路线在前，方案的在后');
-  assert.equal(both.points.length, 5 + 2);
+  assert.equal(both.points.length, 5 + 3);
   assert.equal(both.points[0].name, '甲站');
   assert.deepEqual(both.legend, [...LEGEND, ...SUG_LEGEND]);
   assert.deepEqual(both.fit, { auto: false });

@@ -85,7 +85,7 @@ export function planParts(result, view) {
   return { points, lines, circles: [], fit: { points: focus, padding: 48 } };
 }
 
-// 找站过程：搜过的圈、车主路线（点线）、候选站（只在悬停时显示名字）
+// 找站过程：搜过的圈、车主路线（点线）、候选站（列出的、没超过所有车主绕路上限的实心，其余半透明；名字都只在悬停时显示）
 export function sugParts(trace, stations) {
   if (!trace) return null;
   const circles = (trace.circles || []).map((c) => ({
@@ -96,7 +96,7 @@ export function sugParts(trace, stations) {
   const points = [];
   for (const s of stations || []) {
     const at = locOf(s.location);
-    if (at) points.push({ lng: at[0], lat: at[1], kind: 'st', name: s.name, priority: 4, highlight: false, radius: s.listed ? 6 : 4 });
+    if (at) points.push({ lng: at[0], lat: at[1], kind: 'st', name: s.name, priority: 4, highlight: !!s.listed && !s.over_all, label: 'hover', radius: s.listed ? 6 : 4 });
   }
   return { points, lines, circles };
 }

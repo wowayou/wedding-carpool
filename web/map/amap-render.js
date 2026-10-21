@@ -2,7 +2,7 @@
 // 高德 JS API 2.0 的画法：AMap.Map 画底图，CircleMarker 画点，Text 画标签，Polyline 画线，Circle 画圈。
 // 只显示地图，不配安全密钥（securityJsCode）。深色用高德自带的深色样式。
 import { declutter } from './declutter.js';
-import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets } from './scene.js';
+import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets, labelAlways } from './scene.js';
 
 const styleOf = (theme) => (theme === 'dark' ? 'amap://styles/dark' : 'amap://styles/normal');
 
@@ -55,9 +55,9 @@ export function createAmapRenderer(host, theme) {
         overlays.push(line);
       }
       for (const p of scene.points) {
-        const r = p.radius ?? DEFAULT_RADIUS[p.kind], hi = p.highlight !== false;
+        const r = p.radius ?? DEFAULT_RADIUS[p.kind], fill = p.highlight !== false, hi = labelAlways(p);
         const marker = new AMap.CircleMarker({ center: [p.lng, p.lat], radius: r, strokeColor: host.color('--surface'), strokeWeight: 2,
-          fillColor: host.color(POINT_VARS[p.kind]), fillOpacity: hi ? 1 : 0.5, zIndex: 30, bubble: false, cursor: 'pointer' });
+          fillColor: host.color(POINT_VARS[p.kind]), fillOpacity: fill ? 1 : 0.5, zIndex: 30, bubble: false, cursor: 'pointer' });
         const content = [p.name, ...(p.notes || [])].join('\n');
         const text = new AMap.Text({ text: content, position: [p.lng, p.lat], anchor: 'bottom-center', offset: new AMap.Pixel(0, -(r + 4)), zIndex: 40,
           style: { 'font-size': '12px', padding: '1px 6px', 'white-space': 'pre', color: host.color('--ink'), background: host.color('--surface'), border: `1px solid ${host.color('--line-strong')}`, 'border-radius': '4px' } });

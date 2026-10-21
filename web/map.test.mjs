@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import { bundleMap } from './map/bundle.mjs';
 import { declutter } from './map/declutter.js';
 import { fitView, metersToPx, project, toScreen, unproject } from './map/mercator.js';
-import { fitTargets, validateScene } from './map/scene.js';
+import { fitTargets, labelAlways, validateScene } from './map/scene.js';
 
 const scene = (extra = {}) => ({
   v: 1, theme: 'light',
@@ -43,6 +43,7 @@ test('scene：不合法的写法逐项报出来', () => {
   bad((s) => { s.points[0].name = 5; return s; }, /points\[0\].*name/);
   bad((s) => { s.points[1].notes = 'x'; return s; }, /notes/);
   bad((s) => { s.points[1].highlight = 'yes'; return s; }, /highlight/);
+  bad((s) => { s.points[1].label = 'sometimes'; return s; }, /points\[1\].*label/);
   bad((s) => { s.lines[0].path = [[1, 2]]; return s; }, /lines\[0\].*path/);
   bad((s) => { s.lines[0].path = [[1, 2], [3]]; return s; }, /lines\[0\].*path/);
   bad((s) => { s.lines[0].color = 'red'; return s; }, /lines\[0\].*color/);
@@ -54,6 +55,15 @@ test('scene：不合法的写法逐项报出来', () => {
   bad((s) => { s.fit.padding = { top: 1 }; return s; }, /fit\.padding/);
   bad((s) => { s.legend[0].type = 'square'; return s; }, /legend\[0\].*type/);
   bad((s) => { s.legend[1].text = 1; return s; }, /legend\[1\].*text/);
+});
+
+test('scene：填充（highlight）和标签显示方式（label）分开；label 没写按 highlight 推出', () => {
+  assert.deepEqual(validateScene(scene({ points: [{ lng: 118, lat: 30, kind: 'st', name: '甲站', highlight: true, label: 'hover' }] })), []);
+  assert.equal(labelAlways({}), true);
+  assert.equal(labelAlways({ highlight: true }), true);
+  assert.equal(labelAlways({ highlight: false }), false);
+  assert.equal(labelAlways({ highlight: true, label: 'hover' }), false, '实心但标签只在悬停时显示');
+  assert.equal(labelAlways({ highlight: false, label: 'always' }), true, '半透明但标签一直显示');
 });
 
 test('scene：要框住的位置默认是全部点、线、圈心；fit.points 优先', () => {
