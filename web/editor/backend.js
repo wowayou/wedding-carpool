@@ -6,6 +6,7 @@
 
 import { setCaps } from './caps.js';
 import { updateProgress } from './progress.js';
+import { noteOwnUsage, ownKey, ownUsage } from './own-key.js';
 import { load12306 } from './rail12306.js';
 import { state, trip } from './state.js';
 import { bj, bjDate } from './time.js';
@@ -75,23 +76,28 @@ export async function onlineApi(path, body) {
 export const editKey = () => new URLSearchParams(location.hash.slice(1)).get('k') || store.get('carpool_trips', []).find((t) => t.id === state.tripId)?.key;
 
 // ---------- 计算环境：Web Worker 里的 Pyodide（web/pyworker.js）。在线版和试玩共用 ----------
-export function createPy(initArgs) {
-  let pyWorker = null, pyCalls = 0;
+// initArgs()：怎么请求高德（初始化参数，变了会重新初始化；这台设备缺 Key 时可以直接抛错）；
+// extra()：每次调用都带上的参数；onUsed：线程报来的用量（自己的 Key 模式）
+export function createPy(initArgs, { extra = () => ({}), onUsed = () => {} } = {}) {
+  let pyWorker = null, pyCalls = 0, sentInit = null;
   const pending = new Map();
   // 计算环境（Pyodide）没加载出来：丢掉这个线程，下次调用会重新创建，这样「重试」才有用
-  const reset = () => { try { pyWorker?.terminate(); } catch { /* 已经结束 */ } pyWorker = null; };
+  const reset = () => { try { pyWorker?.terminate(); } catch { /* 已经结束 */ } pyWorker = null; sentInit = null; };
   const failEnv = (msg) => {
     for (const { reject } of pending.values()) reject(Object.assign(new Error(msg), { envFail: true }));
     pending.clear();
     reset();
   };
   return function py(method, args) {
+    let init;
+    try { init = initArgs(); } catch (e) { return Promise.reject(e); } // 比如自己的 Key 模式但这台设备没填 Key：不必去连计算环境
     if (!pyWorker) {
       updateProgress({ label: '下载计算环境（第一次约 12MB）', done: null, total: null });
       pyWorker = new Worker('/pyworker.js', { type: 'module' });
       pyWorker.onerror = (e) => failEnv(`计算环境加载失败：${e.message || '网络问题，或文件没下载完整'}`); // 把等待中的调用都结束掉，别一直转圈
       pyWorker.onmessage = (e) => {
         if (e.data.progress) { updateProgress(e.data.progress); return; }
+        if (e.data.ownUsed) { onUsed(e.data.ownUsed); return; }
         const { id, result: out } = e.data;
         const wait = pending.get(id);
         if (!wait) return;
@@ -99,12 +105,16 @@ export function createPy(initArgs) {
         if (out && /^计算环境出错/.test(out.error || '')) { wait.reject(Object.assign(new Error(out.error), { envFail: true })); reset(); return; }
         out && out.error ? wait.reject(new Error(out.error)) : wait.resolve(out);
       };
-      pyWorker.postMessage({ id: 0, method: 'init', args: initArgs() });
+    }
+    const sig = JSON.stringify(init);
+    if (sig !== sentInit) { // 第一次，或改了请求方式（换了 Key、改用自己的 Key）：重新初始化
+      pyWorker.postMessage({ id: 0, method: 'init', args: init });
+      sentInit = sig;
     }
     return new Promise((resolve, reject) => {
       const id = ++pyCalls;
       pending.set(id, { resolve, reject });
-      pyWorker.postMessage({ id, method, args });
+      pyWorker.postMessage({ id, method, args: { ...args, ...extra() } });
     });
   };
 }
@@ -158,7 +168,17 @@ export function localBackend() {
 
 export function onlineBackend() {
   const base = () => `/api/t/${state.tripId}`;
-  const py = createPy(() => ({ base: base() }));
+  // 自己的 Key 模式：Key 在这台设备的 localStorage 里，由计算线程直接请求高德；服务端不知道 Key
+  const ownMode = () => trip.mode === 'own';
+  const py = createPy(() => {
+    if (!ownMode()) return { base: base() };
+    const key = ownKey();
+    if (!key) throw Object.assign(new Error('这个行程用自己的高德 Key，这台设备上还没填'), { needKey: true });
+    return { base: base(), own_key: key };
+  }, {
+    extra: () => (ownMode() ? { own_used: ownUsage(state.tripId) } : {}), // 每次调用带上今天已发的次数，线程用它判断每日上限
+    onUsed: (used) => noteOwnUsage(state.tripId, used),
+  });
   const api = (path, body) => onlineApi(`${base()}${path}`, body);
   return {
     ...unsupported(),
@@ -184,7 +204,7 @@ export function onlineBackend() {
     rotateKey: (clientId) => api('/rotate-key', { clientId }),
     rename: (name) => api('/rename', { name }),
     deleteTrip: () => api('/delete', {}),
-    setOwnKey: (amapKey) => api('/key', { amapKey }),
+    setOwnKey: () => api('/own-mode', {}), // 只通知服务端改用自己的 Key；Key 留在浏览器里，不发过去
   };
 }
 

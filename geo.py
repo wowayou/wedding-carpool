@@ -316,7 +316,8 @@ def pick_stations(pois: list[dict], venue: Place, radius_km: float, limit: int) 
 class AmapLike(Protocol):
     """计算核心（model、solver、routes……）和 service.py 对地图服务的全部要求。
 
-    谁实现了它：Amap（本地直连高德）、browser.BrowserAmap（网页版，经 Worker 代理）、
+    谁实现了它：Amap（本地直连高德）、browser.BrowserAmap（网页版公共额度，经 Worker 代理）、
+    browser.DirectAmap（网页版自己的 Key，浏览器直连高德）、
     browser.TryAmap（试玩，不联网、按直线估算，查地点和公交的方法直接报错）、test_carpool.FakeAmap（离线测试）。
     换数据源（浏览器直接调用、JS API、天地图、腾讯地图等）时，写一个满足它的类传给 carpool.run / service.compute 即可。
 

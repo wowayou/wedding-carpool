@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """网页版的胶水代码：在浏览器的 Pyodide 里运行，由 web/pyworker.js 调用。
 
-高德请求改发到同域的 Worker 代理（/api/t/<行程>/amap/...），Key 由 Worker 加上，不进浏览器；
+公共额度的行程：高德请求发到同域的 Worker 代理（/api/t/<行程>/amap/...），Key 由 Worker 加上，不进浏览器；
 编辑链接换来的 Cookie 会随同域请求自动带上。
+自己的 Key 的行程：Key 只在用户的浏览器里，DirectAmap 由浏览器直接请求高德，不经过本站服务器。
 """
 
 from __future__ import annotations
@@ -16,6 +17,13 @@ import urllib.parse
 import carpool
 import service
 import share
+
+
+OWN_DAILY_LIMIT = 3000  # 自己的 Key：每台设备、每个行程、每个北京日最多发这么多次高德请求，只防程序出错时无限调用
+
+
+def beijing_day() -> str:
+    return dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
 
 
 def _busy_sleep(seconds: float) -> None:
@@ -87,6 +95,48 @@ class BrowserAmap(carpool.Amap):
         return json.loads(xhr.responseText)
 
 
+class DirectAmap(carpool.Amap):
+    """自己的 Key 的行程：沿用 Amap 的间隔、重试和配额判断，只把「怎么发请求」换成浏览器里的同步 XHR 直连高德。
+
+    每日上限：计数放在页面的 localStorage（Web Worker 里读不到），由页面每次调用时传入今天已用的次数（sync_used），
+    每发一次请求就把新的总数报给页面（_post_own_used）。到上限停下，不再请求。
+    没有批量预取（继承 Amap 的空实现）：计算时逐个请求，按 pause 的间隔走。
+    """
+
+    def __init__(self, key: str, pause: float = 0.35, used: int = 0, limit: int = OWN_DAILY_LIMIT):
+        super().__init__(key, pause=pause)
+        self.day = beijing_day()
+        self.used = used
+        self.limit = limit
+
+    def sync_used(self, day: str, count: int) -> None:
+        """页面传来今天已用的次数（别的标签页也会用同一个行程）；不是今天的不算，也不往回退。"""
+        if day == self.day:
+            self.used = max(self.used, int(count))
+
+    def _fetch(self, url: str) -> dict:
+        if (today := beijing_day()) != self.day:  # 过了北京时间零点，从 0 重新计
+            self.day, self.used = today, 0
+        if self.used >= self.limit:
+            raise carpool.QuotaError(f"这个行程今天在这台设备上已经用你的 Key 请求了 {self.limit} 次高德，为防程序出错先停下，没有继续调用；明天再试")
+        self.used += 1
+        _post_own_used(self.day, self.used)
+        return json.loads(self._xhr_get(url))
+
+    def _xhr_get(self, url: str) -> str:
+        from js import XMLHttpRequest  # 同步 GET；pyodide.http.open_url 在 Worker 里不一定可用
+
+        xhr = XMLHttpRequest.new()
+        xhr.open("GET", url, False)
+        try:
+            xhr.send()
+        except Exception as e:  # noqa: BLE001 —— 报错里可能带网址（含 Key），不能原样往外传
+            raise ConnectionError("网络连不上高德") from e
+        if not xhr.status:  # 被拦（CORS、断网）时同步 XHR 的 status 是 0
+            raise ConnectionError("网络连不上高德")
+        return xhr.responseText
+
+
 class TryAmap:
     """试玩模式（/try）用的计算后端：不碰网络，也不继承 BrowserAmap 的请求代码。
     行车时间按直线距离估算，路线画成直线；查地点、查车站、查公交一律报错（试玩只能改已有的内容）。"""
@@ -135,9 +185,24 @@ def _post_progress(label: str, done, total) -> None:
     postMessage(to_js({"progress": {"label": label, "done": done, "total": total}}, dict_converter=Object.fromEntries))
 
 
+def _post_own_used(day: str, count: int) -> None:
+    """把今天已发的高德请求总数告诉页面，由页面写进 localStorage。"""
+    try:
+        from js import Object, postMessage
+        from pyodide.ffi import to_js
+    except ImportError:  # 不在浏览器里（测试）
+        return
+    postMessage(to_js({"ownUsed": {"day": day, "count": count}}, dict_converter=Object.fromEntries))
+
+
 carpool.progress = _post_progress
 amap: carpool.Amap = BrowserAmap()
 _last: dict | None = None
+
+
+def _sync_own_used(client, used) -> None:
+    if isinstance(client, DirectAmap) and isinstance(used, dict):
+        client.sync_used(str(used.get("day")), int(used.get("count") or 0))
 
 
 def handle(method: str, args_json: str) -> str:
@@ -145,8 +210,9 @@ def handle(method: str, args_json: str) -> str:
     global _last, amap
     args = json.loads(args_json)
     try:
-        if method == "init":  # 打开行程时设定接口前缀
-            amap = TryAmap() if args.get("try") else BrowserAmap(args["base"])
+        _sync_own_used(amap, args.get("own_used"))  # 自己的 Key：页面传来今天已用的次数
+        if method == "init":  # 打开行程时设定怎么请求高德：试玩、自己的 Key（浏览器直连）、公共额度（经 Worker 代理）
+            amap = TryAmap() if args.get("try") else DirectAmap(args["own_key"]) if args.get("own_key") else BrowserAmap(args["base"])
             _last = None
             result = {"ok": True}
         elif method == "suggest":
