@@ -2,9 +2,10 @@
 // 本地模式（ui.py）的端到端检查：读写配置文件、校验、推荐车站的设置面板。
 // 不点「计算方案」和「开始找」；ui.py 用的是假 Key，出站请求也走了不存在的代理。
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { after, afterEach, before, test } from 'node:test';
-import { bind, cleanup, closeBrowser, FAKE_JS_KEY, mapLayers, newGuardedPage, openSuggest, startLocal, waitFormReady, waitMapLayers, waitMapReady } from './lib.mjs';
+import { bind, cleanup, closeBrowser, FAKE_JS_KEY, mapLayers, newGuardedPage, openSuggest, ROOT, startLocal, waitFormReady, waitMapLayers, waitMapReady } from './lib.mjs';
 
 let srv, page, guard;
 
@@ -47,6 +48,29 @@ test('本地：配了 JS Key（环境变量）时地图页面用高德 JS API（
     P.guard.assertClean();
     assert.equal((await mapLayers(P.page)).points, layers.points);
   } finally { await P.context.close(); }
+});
+
+// 方案页预览（/share）：本地版把「生成方案页」写成的 <配置名>-plan.html 原样返回；里面的地图 iframe 嵌 /map/share（本地版自己提供，同一份页面）。
+// 这里不真的算方案（假 Key 到不了高德），直接把 share.py 生成的金标准方案页放到 ui.py 读的位置
+test('本地：方案页预览里有地图（嵌 /map/share，不带 Key 是不带底图的画法，配了 Key 用假的 JS API）', async () => {
+  const golden = join(ROOT, 'tests/golden/two_cars/share-o1-b1.html');
+  for (const jsKey of [undefined, FAKE_JS_KEY]) {
+    const s = jsKey ? await startLocal({ jsKey }) : srv;
+    copyFileSync(golden, join(s.dir, 'trip-plan.html'));
+    const P = await newGuardedPage(s.base, { fakeJsApi: !!jsKey });
+    try {
+      await P.page.goto(`${s.base}/share`);
+      await P.page.waitForFunction(() => document.querySelector('iframe#mapFrame'));
+      const pts = JSON.parse(/<script id="data" type="application\/json">([\s\S]*?)<\/script>/.exec(readFileSync(golden, 'utf8'))[1]).points.length;
+      const sel = jsKey ? '[data-fake="circlemarker"]' : '[data-layer=point]';
+      const frame = () => P.page.frames().find((f) => new URL(f.url()).pathname === '/map/share');
+      await P.page.waitForFunction(([n, q]) => { const f = [...document.querySelectorAll('iframe')][0]?.contentDocument; return f && f.querySelectorAll(q).length >= n; }, [pts, sel], { timeout: 15_000 });
+      assert.equal(await frame().locator(sel).count(), pts);
+      assert.equal(await P.page.locator('#map').isVisible(), true);
+      assert.equal(await frame().locator('.plain-note').count(), jsKey ? 0 : 1, jsKey ? '配了 Key：高德画法，没有「没有底图」' : '没配 Key：不带底图的画法');
+      P.guard.assertClean();
+    } finally { await P.context.close(); }
+  }
 });
 
 test('本地：改字段并保存，配置文件真的变了，第一次保存生成 .bak', async () => {

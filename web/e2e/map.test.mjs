@@ -296,6 +296,38 @@ test('/map 有 Key 但 JS API 加载失败：先回报 fail，再改用不带底
   assert.equal(await mapFrame(page).locator('[data-layer=point]').count(), 3);
 });
 
+// 点的填充（highlight）和标签显示方式（label）分开：找站的候选站可以「实心、标签只在悬停时显示」，也可以「半透明、标签只在悬停时显示」
+const LABEL_SCENE = () => SCENE({
+  points: [
+    { lng: 117.98, lat: 30.0, kind: 'venue', name: '宏村示例酒店', priority: 0 },
+    { lng: 118.2, lat: 29.9, kind: 'st', name: '实心悬停站', highlight: true, label: 'hover', priority: 4, radius: 6 },
+    { lng: 118.5, lat: 30.1, kind: 'st', name: '半透明悬停站', highlight: false, label: 'hover', priority: 4, radius: 4 },
+    { lng: 118.8, lat: 30.2, kind: 'st', name: '半透明常显站', highlight: false, label: 'always', priority: 4, radius: 4 },
+  ],
+  lines: [], circles: [],
+});
+test('点的 highlight 管填充、label 管标签：高德画法', async () => {
+  const { page } = await open(withKey, '/map');
+  await send(page, LABEL_SCENE());
+  const st = await fakeState(mapFrame(page));
+  const opacity = await mapFrame(page).evaluate(() => [...document.querySelectorAll('[data-fake=circlemarker]')].map((e) => +e.dataset.fillOpacity));
+  assert.deepEqual(opacity, [1, 1, 0.5, 0.5], '实心 1，半透明 0.5');
+  const hidden = Object.fromEntries(st.texts.map((t) => [t.text, t.hidden]));
+  assert.deepEqual(hidden, { 宏村示例酒店: false, 实心悬停站: true, 半透明悬停站: true, 半透明常显站: false }, '悬停的标签默认不显示，常显的显示');
+});
+test('点的 highlight 管填充、label 管标签：不带底图的画法', async () => {
+  const { page } = await open(noKey, '/map');
+  await send(page, LABEL_SCENE());
+  const f = mapFrame(page);
+  const dots = await f.evaluate(() => [...document.querySelectorAll('[data-layer=point]')].map((e) => [e.dataset.name, +e.getAttribute('fill-opacity')]));
+  assert.deepEqual(dots, [['宏村示例酒店', 1], ['实心悬停站', 1], ['半透明悬停站', 0.5], ['半透明常显站', 0.5]]);
+  const labels = await f.evaluate(() => [...document.querySelectorAll('.plain-labels .lbl')].map((e) => [e.textContent, getComputedStyle(e).visibility]));
+  assert.deepEqual(labels, [['宏村示例酒店', 'visible'], ['实心悬停站', 'hidden'], ['半透明悬停站', 'hidden'], ['半透明常显站', 'visible']]);
+  // 悬停才显示
+  await f.locator('[data-layer=point][data-name=实心悬停站]').dispatchEvent('mouseenter');
+  assert.equal(await f.locator('.plain-labels .lbl', { hasText: '实心悬停站' }).evaluate((e) => getComputedStyle(e).visibility), 'visible');
+});
+
 // ---------- /map/share：方案页嵌它 ----------
 // 方案页在 CSP 沙箱里（来源是 null）。实测（Chromium）：沙箱页面发出的 iframe 请求不带 Referer，不管 referrerpolicy 写什么，
 // 所以 Worker 的规则是（方案 A）：有 Referer 就必须是本站 /p/…；没有 Referer 时看 Fetch Metadata（iframe + cross-site）放行。这里测：

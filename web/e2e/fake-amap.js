@@ -32,6 +32,7 @@
       const o = this.opts;
       el.dataset.stroke = o.strokeColor || '';
       el.dataset.fill = o.fillColor || '';
+      el.dataset.fillOpacity = String(o.fillOpacity ?? '');
       el.dataset.dash = o.strokeDasharray ? o.strokeDasharray.join(' ') : '';
       el.dataset.opacity = String(o.strokeOpacity ?? '');
       if (o.radius !== undefined) el.dataset.radius = String(o.radius);
