@@ -56,7 +56,7 @@ let settled = false; // 已经决定用哪种画法
 let queued = null; // 决定之前收到的 scene
 let renderer = null;
 let current = null; // 最近一份 scene
-let pendingFit = null; // 容器 0 尺寸时没能做的自适应（后来的覆盖先前的），有尺寸了补做
+let pendingFit = null; // 容器 0 尺寸时没能做的自适应（只记 fit 的要求；后来要求自适应的覆盖先前的，没要求自适应的 scene 不取消它），有尺寸了补做
 
 function makeRenderer(theme) {
   if (amapOk) {
@@ -86,7 +86,7 @@ function drawLegend(scene) {
   }
 }
 
-function doFit(scene) { pendingFit = renderer.fit(scene) ? null : scene; }
+function doFit(scene) { pendingFit = renderer.fit(scene) ? null : scene.fit; }
 
 function show(scene) {
   current = scene;
@@ -95,8 +95,7 @@ function show(scene) {
   renderer.setTheme(scene.theme);
   drawLegend(scene);
   const counts = renderer.draw(scene);
-  if (scene.fit?.auto) doFit(scene);
-  else pendingFit = null;
+  if (scene.fit?.auto) doFit(scene); // 没要求自适应的 scene 不动视野，也不取消还没做完的自适应（编辑页算完方案后紧接着还会重发 scene）
   send({ type: MSG.DRAWN, renderer: renderer.kind, ...counts });
 }
 
@@ -111,7 +110,7 @@ function onScene(scene) {
 function onResize() {
   if (!renderer) return;
   renderer.resize();
-  if (pendingFit) doFit(pendingFit);
+  if (pendingFit) doFit({ ...current, fit: pendingFit }); // 用最近的内容，加上当时要求的 fit（没写 points 就框住现在的全部）
 }
 
 window.addEventListener('message', (e) => {

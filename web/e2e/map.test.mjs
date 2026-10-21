@@ -4,7 +4,7 @@
 // 两台 wrangler：一台设了（假的）AMAP_JS_KEY，一台没设。
 import assert from 'node:assert/strict';
 import { after, afterEach, before, test } from 'node:test';
-import { cleanup, closeBrowser, FAKE_JS_KEY, newGuardedPage, startWrangler } from './lib.mjs';
+import { cleanup, closeBrowser, FAKE_JS_KEY, mapFrame as editorMapFrame, mapLayers, newGuardedPage, startWrangler, waitFormReady, waitMapLayers, waitMapReady, SLOW } from './lib.mjs';
 
 let withKey, noKey;
 const guards = [];
@@ -183,6 +183,24 @@ test('/map 尺寸：容器 0×0 时先记下，收到 resize 有尺寸了再补�
   await page.evaluate(() => window.__post({ type: 'resize' }));
   await page.waitForTimeout(200);
   assert.equal((await fakeState(frame)).fit.length, 1, '补做过就不再重复（不打断用户拖动的视野）');
+});
+
+test('/map 尺寸：隐藏时没做完的自适应，不会被后来没要求自适应的 scene 取消（编辑页算完方案后紧接着还会重发 scene）', async () => {
+  const { page } = await open(withKey, '/map');
+  await send(page, SCENE({ fit: { auto: false } }));
+  await page.evaluate(() => { document.getElementById('f').style.display = 'none'; });
+  await page.waitForFunction(() => !document.getElementById('f').offsetWidth);
+  const frame = mapFrame(page);
+  await send(page, SCENE()); // 要自适应，做不了
+  await send(page, SCENE({ fit: { auto: false } })); // 后来的 scene 没要求自适应：待办仍然留着
+  await page.evaluate(() => { document.getElementById('f').style.display = ''; });
+  await page.waitForFunction(() => document.getElementById('f').offsetWidth > 0);
+  await page.evaluate(() => window.__post({ type: 'resize' }));
+  await page.waitForFunction(() => document.getElementById('f').contentWindow.__fakeAmap?.calls.some((c) => c.fn === 'setFitView'));
+  const st = await fakeState(frame);
+  assert.equal(st.fit.length, 1);
+  assert.deepEqual(st.fit[0].avoid, [16, 16, 16, 200], '用的是要自适应的那份 fit（留白）');
+  assert.ok(insideAll(st));
 });
 
 test('/map 消息来源：只认同源的父窗口，别的窗口发来的 scene 不理；不合法的 scene 回报 fail', async () => {
@@ -378,4 +396,45 @@ test('/map/share：直接打开、没有 Referer 的本站同源 iframe 仍是 4
   assert.equal(P.seen[0].referer, null);
   assert.equal(P.seen[0].status, 403);
   assert.deepEqual(P.guard.jsApi, [], '没有借到 Key');
+});
+
+// ---------- 编辑页（试玩）里的地图 ----------
+test('编辑页没有 Key：地图是不带底图的画法，点照样画出来、能看；图例在地图页面里', { timeout: SLOW }, async () => {
+  const P = await newGuardedPage(noKey);
+  guards.push(P.guard);
+  await P.page.goto(`${noKey}/try`);
+  await waitFormReady(P.page);
+  await waitMapReady(P.page);
+  const l = await waitMapLayers(P.page, (x) => x.points > 3, '预览的点');
+  assert.equal(l.renderer, 'plain');
+  assert.deepEqual(P.guard.jsApi, [], '没有 Key，不加载高德');
+  assert.equal(await editorMapFrame(P.page).locator('.plain-note').innerText(), '没有底图');
+  assert.equal(l.legend.length, 6);
+  // 点都在容器里
+  const inside = await editorMapFrame(P.page).locator('body').evaluate(() => {
+    const box = document.getElementById('map').getBoundingClientRect();
+    return [...document.querySelectorAll('[data-layer=point]')].every((e) => { const r = e.getBoundingClientRect(); return r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1; });
+  });
+  assert.equal(inside, true);
+  assert.equal(await P.page.locator('#mapFail').isHidden(), true);
+  await P.context.close();
+});
+
+test('编辑页的地图页面加载不出来：显示说明和「重试」，点重试重新加载 iframe 后恢复', { timeout: SLOW }, async () => {
+  const P = await newGuardedPage(noKey);
+  guards.push(P.guard);
+  P.guard.allowErrors.push(/Failed to load resource/);
+  let blocked = true;
+  await P.context.route('**/map', (route) => (blocked ? route.abort('failed') : route.fallback()));
+  await P.page.goto(`${noKey}/try`);
+  await waitFormReady(P.page);
+  await P.page.locator('#mapFail').waitFor({ state: 'visible', timeout: 20_000 });
+  assert.match(await P.page.locator('#mapFail').innerText(), /地图没加载出来/);
+  blocked = false;
+  await P.page.locator('#mapRetry').click();
+  await waitMapReady(P.page);
+  await waitMapLayers(P.page, (x) => x.points > 3, '重试后预览的点');
+  assert.equal(await P.page.locator('#mapFail').isHidden(), true);
+  assert.equal((await mapLayers(P.page)).renderer, 'plain');
+  await P.context.close();
 });

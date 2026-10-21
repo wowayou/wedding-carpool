@@ -12,14 +12,14 @@ import { refreshDerived, renderForm, rerenderKeepingFocus, syncPicked } from './
 import { openHistory, previewVersion, restoreVersion } from './history.js';
 import { importPicked, loadFromFile, loadFromTrip, openImportPeople } from './import-people.js';
 import { narrow, setPane } from './layout.js';
-import { declutter, drawPlan, drawPreview, initMap, refreshMap, view } from './map.js';
+import { drawPlan, drawPreview, initMap, refreshMap, showLayers, view } from './map.js';
 import { importConfig, openMenu, refreshMenu } from './menu.js';
 import { hideOverlay } from './overlay.js';
 import { saveOwnKey, verifyKey } from './own-key.js';
 import { setPath } from './paths.js';
 import { renderTabs, runPlan } from './results.js';
 import { isStale, outboundOn, state, sug, trip } from './state.js';
-import { drawSugLayer, syncSugLayer } from './sug-layer.js';
+import { syncSugLayer } from './sug-layer.js';
 import { addSuggested, renderSgPanel, renderSugOut, runSuggest, scheduleSugEstimate, sgChanged, sgRefresh, sgSyncFromCfg, suggestStations } from './suggest.js';
 import { markDirty, save, sendFocus } from './sync.js';
 import { loadConfig, renderTitle, resetTry } from './trip.js';
@@ -56,12 +56,11 @@ export function bindEvents() {
   });
 
   $('#mapRetry').addEventListener('click', () => {
-    const old = document.querySelector('script[data-lib=leaflet]');
-    const script = document.createElement('script');
-    script.src = old.src; script.integrity = old.integrity; script.crossOrigin = 'anonymous';
-    script.onload = () => { if (initMap()) { state.fitted = false; sug.fitted = false; if (state.cfg) drawPreview(); if (state.result) drawPlan(true); syncSugLayer(true); } };
-    script.onerror = () => toast('地图还是没加载出来，稍后再试', 3000, 'danger');
-    document.head.append(script);
+    initMap(); // 重新加载地图页面
+    state.fitted = false; sug.fitted = false;
+    if (state.cfg) drawPreview();
+    if (state.result) drawPlan(true);
+    syncSugLayer(true);
   });
 
   $('#form').addEventListener('input', (e) => {
@@ -158,8 +157,8 @@ export function bindEvents() {
     const b = e.target.closest('[data-pane]');
     if (b) setPane(b.dataset.pane);
   });
-  narrow().addEventListener('change', () => setTimeout(() => { if (view.map) { refreshMap(); declutter(); } }, 80));
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { drawPreview(); if (state.result) drawPlan(false); drawSugLayer(); });
+  narrow().addEventListener('change', () => setTimeout(() => { if (view.frame) refreshMap(); }, 80));
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', showLayers); // 深色浅色切换：scene 带 theme，重发一次
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#drawer').hidden && !document.querySelector('dialog[open]')) closeDrawer(); });
   $('#staleBtn').addEventListener('click', runPlan);
 
@@ -186,7 +185,7 @@ export function bindEvents() {
         closeDrawer(true);
         setPane('map');
         sug.fitted = false;
-        setTimeout(() => { if (view.map) view.map.invalidateSize(); syncSugLayer(true); }, 80);
+        setTimeout(() => { refreshMap(); syncSugLayer(true); }, 80);
         toast('找站过程在地图上。想回到推荐车站，点「填写」里的「推荐车站」', 4000);
       } else if (t.dataset.sgAdd !== undefined) {
         const picked = [...document.querySelectorAll('[data-sug]:checked')].map((el) => sug.result.stations[Number(el.dataset.sug)]);

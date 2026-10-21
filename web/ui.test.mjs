@@ -15,7 +15,7 @@ import { closeDrawer } from './editor/drawer.js';
 import { clearHandlers, emit } from './editor/events.js';
 import { defaultOf, fieldOf, noteOf, placeholderOf, setFields } from './editor/fields.js';
 import { locLine, placeField, stationRow } from './editor/form.js';
-import { view } from './editor/map.js';
+import { resetMap, view } from './editor/map.js';
 import { importConfig } from './editor/menu.js';
 import { planStats } from './editor/results.js';
 import { resetState, state, sug, trip } from './editor/state.js';
@@ -71,7 +71,8 @@ test('编辑页保留验收脚本依赖的 id 和 data 属性', () => {
 
 test('编辑页引入设计系统，源文件保留 CDN 地址（构建时才改写成 /vendor/）', () => {
   assert.match(ui, /href="\/design\.css"/);
-  for (const cdn of ['cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js', 'cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js']) assert.ok(ui.includes(cdn));
+  assert.ok(ui.includes('cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js'));
+  assert.doesNotMatch(ui, /leaflet/i, '编辑页的地图在 /map 的 iframe 里，不再用 Leaflet（v3.16）');
   assert.match(ui, /viewport-fit=cover/);
   assert.match(ui, /safe-area-inset-bottom/);
 });
@@ -127,9 +128,10 @@ test('地图提示框里的名字都经过转义（审计 S-13）', () => {
   }
 });
 
-test('三处地图（编辑页、方案页模板、示例页）的角标一样，带审图号', () => {
+// 编辑页的地图 v3.16 起在 /map 的 iframe 里（高德 JS API 自己带标识和审图号），不再有 attribution；方案页模板和示例页要等切片 3 才改
+test('两处还在用 Leaflet 的地图（方案页模板、示例页）的角标一样，带审图号', () => {
   const attr = (text) => [...text.matchAll(/attribution:\s*'([^']*)'/g)].map((m) => m[1]);
-  const found = [['web/editor/map.js', src.map], ['share.py', readFileSync('share.py', 'utf8')], ['web/demo.html', readFileSync('web/demo.html', 'utf8')]].map(([name, text]) => [name, attr(text)]);
+  const found = [['share.py', readFileSync('share.py', 'utf8')], ['web/demo.html', readFileSync('web/demo.html', 'utf8')]].map(([name, text]) => [name, attr(text)]);
   for (const [name, list] of found) assert.equal(list.length, 1, `${name} 里的 attribution 应该正好一处`);
   assert.deepEqual(new Set(found.map(([, list]) => list[0])), new Set(['© 高德地图 GS(2025)5996号']));
 });
@@ -158,7 +160,7 @@ function fresh(mode = 'online', { cfg = { options: {}, venue: {}, stations: [], 
   setFields(fields);
   initBackend(mode);
   state.cfg = cfg;
-  view.map = null;
+  resetMap();
   return installDom();
 }
 // 假 fetch：记下请求，返回 handler 给的数据
@@ -540,49 +542,79 @@ test('结果里每位车主各绕多少：超过上限标灰并写明，最顺�
   assert.match(src.suggest, /要用的话，点「\+ 手动添加」搜站名/);
 });
 
-// 找站过程图层：用假的地图和 Leaflet 图层组，数一数清了几次、拿掉几次
+// 找站过程图层：假的地图 iframe 记下发出去的 scene，看圈、图例有没有、什么时候没了
+const TRACE = { circles: [{ lat: 30, lng: 118, radius_km: 50 }], routes: [{ path: [[30, 118], [30.5, 118.5]], alt: 1 }] };
 function layerBox({ panel = 'suggest', layerOn = true } = {}) {
   const box = sugBox();
-  const log = { removed: [], cleared: 0, panes: [] };
-  globalThis.L = { layerGroup: () => ({ clearLayers: () => { log.cleared += 1; } }) };
-  const map = { createPane: (name) => { log.panes.push(name); return { style: {} }; }, removeLayer: (l) => log.removed.push(l), hasLayer: () => true };
-  view.map = map;
-  initSugLayer(); // 订阅「地图建好」和「抽屉开关」
-  emit('map', map);
+  const sent = [];
+  globalThis.location = { origin: 'http://localhost' };
+  globalThis.window = { matchMedia: () => ({ matches: false }) };
+  document.documentElement = { dataset: {} };
+  view.frame = { contentWindow: { postMessage: (m, origin) => sent.push({ ...m, origin }) } };
+  view.ready = true;
+  initSugLayer(); // 订阅抽屉开关
   box.els['#drawer'] = { dataset: { panel }, hidden: panel === '' };
   sug.layerOn = layerOn;
-  return { box, log };
+  sug.trace = TRACE;
+  sug.fitted = true; // 缩放另外测
+  return { box, sent, circles: () => sent.at(-1)?.scene.circles.length };
 }
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0)); // scene 在微任务里合并发出
+const cleanupLayerBox = () => { delete globalThis.location; delete globalThis.window; resetMap(); };
 
-test('「找站过程」图层：重新计算方案时清掉，关抽屉时隐藏', () => {
+test('「找站过程」图层：重新计算方案时清掉，关抽屉时隐藏', async () => {
   assert.match(/export async function runPlan\(\) \{[\s\S]*?\n\}\n/.exec(src.results)[0], /clearSugLayer\(\);/);
   try {
-    const { log } = layerBox();
-    assert.deepEqual(log.panes, ['sugPane']); // 建地图时一起建好图层的 pane
+    const first = layerBox();
+    syncSugLayer(true);
+    await tick();
+    assert.equal(first.circles(), 1); // 抽屉开在「推荐车站」上，开关是开的：圈和路线都在 scene 里
+    assert.equal(first.sent.at(-1).scene.lines.length, 1);
+    assert.equal(first.sent.at(-1).origin, 'http://localhost', '只发给同源');
+    assert.ok(first.sent.at(-1).scene.legend.some((r) => r.text === '点线 = 车主路线（找站用）'), '图例多出找站过程的行');
     sug.peek = true;
     clearSugLayer();
-    assert.equal(log.cleared, 1);
-    assert.equal(log.removed.length, 1);
+    await tick();
+    assert.equal(first.circles(), 0);
+    assert.equal(first.sent.at(-1).scene.legend.some((r) => /找站用/.test(r.text)), false);
     assert.equal(sug.peek, false);
-    // 抽屉不在「推荐车站」上，或者开关关了：图层从地图上拿掉
-    const hide = (panel, layerOn) => {
-      const b = layerBox({ panel, layerOn });
+    // 抽屉不在「推荐车站」上，或者开关关了：图层拿掉
+    const hide = async (panel, layerOn) => {
+      const b = layerBox();
+      syncSugLayer(true);
+      await tick();
+      assert.equal(b.circles(), 1);
+      b.box.els['#drawer'] = { dataset: { panel }, hidden: panel === '' };
+      sug.layerOn = layerOn;
       syncSugLayer();
-      return b.log.removed.length;
+      await tick();
+      return b.circles();
     };
-    assert.equal(hide('', true), 1); // 抽屉关了
-    assert.equal(hide('history', true), 1); // 开着别的面板
-    assert.equal(hide('suggest', false), 1); // 开关关了
+    assert.equal(await hide('', true), 0); // 抽屉关了
+    assert.equal(await hide('history', true), 0); // 开着别的面板
+    assert.equal(await hide('suggest', false), 0); // 开关关了
     // 关抽屉（closeDrawer 发出抽屉事件）：图层隐藏；手机上点「去地图上看」（keepSug）则留着
     const closing = layerBox();
+    syncSugLayer(true);
+    await tick();
     closeDrawer();
-    assert.equal(closing.log.removed.length, 1);
+    await tick();
+    assert.equal(closing.circles(), 0);
     assert.equal(sug.peek, false);
     const peek = layerBox();
+    syncSugLayer(true);
+    await tick();
     closeDrawer(true);
-    assert.equal(peek.log.removed.length, 0);
+    await tick();
+    assert.equal(peek.circles(), 1);
     assert.equal(sug.peek, true);
-  } finally { delete globalThis.L; view.map = null; }
+    // 没有 trace（还没估算）：没有圈，图例也没有找站的行
+    const none = layerBox();
+    sug.trace = null;
+    syncSugLayer(true);
+    await tick();
+    assert.equal(none.circles() ?? 0, 0);
+  } finally { cleanupLayerBox(); }
   assert.match(src.suggest, /data-sg-layer\$\{sug\.layerOn \? ' checked' : ''\}/); // 开关，打开抽屉时默认开
   assert.match(page, /在地图上显示找站过程/);
 });
@@ -657,11 +689,11 @@ test('设计规范的「交互规范」里点名的函数、类名、属性在�
   // 关键的几个：规范里要写到，代码里要有定义
   for (const fn of ['openDrawer', 'closeDrawer', 'openDialog', 'confirmDialog', 'promptDialog', 'alertDialog', 'toast', 'sgFieldHtml', 'sgSummary', 'sgProblems', 'setSuggest',
     'scheduleSugEstimate', 'runSugEstimate', 'startProgress', 'updateProgress', 'stopProgress', 'syncSugLayer', 'drawSugLayer', 'clearSugLayer', 'sgTags', 'sgGroupBy',
-    'isStale', 'updateStale', 'reportError', 'showQuota', 'decorateSoon', 'problemsDialog', 'jumpTo', 'setPane', 'themeVar', 'sugOpen', 'sgSyncFromCfg', 'updatePlanDot', 'renderEmptyPlan']) {
+    'isStale', 'updateStale', 'reportError', 'showQuota', 'decorateSoon', 'problemsDialog', 'jumpTo', 'setPane', 'sugOpen', 'sgSyncFromCfg', 'updatePlanDot', 'renderEmptyPlan']) {
     assert.ok(spec.includes(fn), `规范里应该写到 ${fn}`);
     assert.match(editorAll, new RegExp(`(?:function ${fn}\\b|const ${fn} = )`), `代码里没有 ${fn} 的定义`);
   }
-  assert.match(editorAll, /map\.createPane\('sugPane'\)\.style\.zIndex = 350/);
+  assert.match(editorAll, /setSugLayer\(sugParts\(/); // 找站过程交给地图页面画（scene），不再自建 Leaflet 的 pane
 });
 
 test('推荐车站设置：分组标题和第一项的名字重复时，只显示一个，名字留给读屏', () => {
@@ -819,10 +851,10 @@ test('模块加载失败时不白屏：页面里留一段小的兜底脚本，�
   assert.match(guard, /c-alert c-alert--danger/); // 用设计系统的提示条
   assert.match(guard, /window\.__editorReady = /);
   assert.match(src.main, /window\.__editorReady\?\.\(\)/); // 主模块启动后通知
-  // 模块脚本在两个全局库（Leaflet、marked）之后，且是同源的 ES 模块
+  // 模块脚本在全局库（marked）之后，且是同源的 ES 模块
   const mod = ui.indexOf('<script type="module" src="/editor/main.js"></script>');
-  assert.ok(mod > ui.indexOf('marked.min.js') && mod > ui.indexOf('leaflet.min.js'), '模块脚本要在 Leaflet 和 marked 之后');
-  assert.equal([...ui.matchAll(/<script\b/g)].length, 4);
+  assert.ok(mod > ui.indexOf('marked.min.js'), '模块脚本要在 marked 之后');
+  assert.equal([...ui.matchAll(/<script\b/g)].length, 3);
 });
 
 // 模拟浏览器里的兜底脚本：到点没报到就出提示，报到了就取消

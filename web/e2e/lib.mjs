@@ -90,9 +90,9 @@ async function waitHttp(url, log, what, timeout = 60_000) {
 
 // 子进程的环境：去掉可能带真 Key 的变量，本机回环地址不走代理
 function cleanEnv(extra = {}) {
-  const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NO_COLOR: '1', ...extra };
+  const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NO_COLOR: '1' };
   for (const k of ['AMAP_KEY', 'AMAP_JS_KEY', 'ACCESS_CODE', 'IP_SALT']) delete env[k];
-  return env;
+  return { ...env, ...extra }; // 要给的变量（比如本地版的假 JS Key）在去掉之后再加
 }
 
 // ---------- 在线和试玩：wrangler dev ----------
@@ -129,8 +129,8 @@ export async function startWrangler({ jsKey = null } = {}) {
 }
 
 // ---------- 本地：ui.py ----------
-export async function startLocal() {
-  ensureBuilt(); // 本地版的页面从 CDN 取 Leaflet 和 marked，测试里用 dist/vendor/ 里校验过的同一份文件代替（见 newGuardedPage）
+export async function startLocal({ jsKey } = {}) {
+  ensureBuilt(); // 本地版的页面从 CDN 取 marked，测试里用 dist/vendor/ 里校验过的同一份文件代替（见 newGuardedPage）
   const dir = makeTmp();
   const config = join(dir, 'trip.toml');
   // 配置：试玩示例行程的 config，用 carpool.dump_toml 写成 toml
@@ -147,7 +147,7 @@ export async function startLocal() {
   const { log } = start('ui.py', 'python3', [join(ROOT, 'ui.py'), config, '--port', String(port), '--key', FAKE_KEY], {
     cwd: dir, detached: true,
     // 假 Key 真要出站也到不了高德：出站请求走一个没人听的代理，立刻连接失败
-    env: cleanEnv({ HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', http_proxy: 'http://127.0.0.1:9', https_proxy: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', PYTHONDONTWRITEBYTECODE: '1' }),
+    env: cleanEnv({ HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', http_proxy: 'http://127.0.0.1:9', https_proxy: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', PYTHONDONTWRITEBYTECODE: '1', ...(jsKey ? { AMAP_JS_KEY: jsKey } : {}) }),
   });
   const base = `http://127.0.0.1:${port}`;
   await waitHttp(`${base}/api/env`, log, 'ui.py');
@@ -166,9 +166,7 @@ export async function closeBrowser() { await browser?.close().catch(() => {}); b
 const BLANK_TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 const CDN_FILES = {
-  'leaflet/1.9.4/leaflet.min.js': 'leaflet/leaflet.js', 'leaflet/1.9.4/leaflet.min.css': 'leaflet/leaflet.css',
   'marked/12.0.2/marked.min.js': 'marked/marked.min.js',
-  ...Object.fromEntries(['layers.png', 'layers-2x.png', 'marker-icon.png', 'marker-icon-2x.png', 'marker-shadow.png'].map((f) => [`leaflet/1.9.4/images/${f}`, `leaflet/images/${f}`])),
 };
 
 // 假的高德返回：按路径给够一次「计算方案」用的数据（测距、驾车路线），别的接口给空结果。一律不连真高德
@@ -265,9 +263,46 @@ export async function waitFormReady(page) {
   await bind(page, 'venue.name').waitFor({ timeout: 30_000 });
 }
 
-// 等 Leaflet 地图建好
+// 编辑页里的地图：iframe 嵌的 /map。mapFrame 是 Playwright 的 FrameLocator，里面的元素用 locator 取
+export const mapFrame = (page) => page.frameLocator('#map iframe');
+// 等地图页面加载好（iframe 里的容器出现了）
 export async function waitMapReady(page) {
-  await page.locator('#map .leaflet-pane').first().waitFor({ state: 'attached', timeout: 30_000 });
+  await mapFrame(page).locator('#map').waitFor({ state: 'attached', timeout: 30_000 });
+}
+// 地图页面里已经画出来的东西（假 JS API 或不带底图的画法两种都能数）：点、线、圈、标签的个数，和图例的文字
+export async function mapLayers(page) {
+  return mapFrame(page).locator('body').evaluate((body) => {
+    const q = (a, b) => document.querySelectorAll(`[data-fake="${a}"], ${b}`).length;
+    return {
+      points: q('circlemarker', '[data-layer=point]'), lines: q('polyline', 'polyline[data-layer=line]'), circles: q('circle', 'circle[data-layer=circle]'),
+      legend: [...document.querySelectorAll('#legend div')].map((d) => d.textContent), renderer: document.querySelector('[data-fake=map]') ? 'amap' : 'plain',
+    };
+  });
+}
+
+// 等地图页面里画出的东西满足条件（pred 拿到 mapLayers 的结果）
+export async function waitMapLayers(page, pred, what, timeout = 15_000) {
+  let last;
+  for (const end = Date.now() + timeout; Date.now() < end; await page.waitForTimeout(100)) {
+    last = await mapLayers(page).catch(() => null);
+    if (last && pred(last)) return last;
+  }
+  throw new Error(`地图页面里等不到「${what}」，最后看到 ${JSON.stringify(last)}`);
+}
+// 地图页面里（假 JS API 画的）点和线合起来的外框，和容器的大小、是不是都在容器里。n 是点和线的个数。
+// 方案画好后只缩放到目的地、用到的车站和路线上（成员的出发地不在内，可能很远），所以 onlyUsed 时点只算目的地和用到的车站（半径 9 以上，见 map-scene.js 的 planParts）
+export async function mapView(page, { onlyUsed = false } = {}) {
+  return mapFrame(page).locator('body').evaluate((_, onlyUsed) => {
+    const c = document.getElementById('map'), W = c.clientWidth, H = c.clientHeight;
+    const xs = [], ys = [];
+    for (const el of document.querySelectorAll('[data-fake=polyline],[data-fake=circlemarker]')) {
+      if (onlyUsed && el.dataset.fake === 'circlemarker' && Number(el.dataset.radius) < 9) continue;
+      xs.push(...el.dataset.xs.split(',').map(Number)); ys.push(...el.dataset.ys.split(',').map(Number));
+    }
+    if (!xs.length) return { n: 0, cw: W, ch: H };
+    const l = Math.min(...xs), t = Math.min(...ys), r = Math.max(...xs), b = Math.max(...ys);
+    return { n: xs.length, w: r - l, h: b - t, cw: W, ch: H, inside: l >= -1 && t >= -1 && r <= W + 1 && b <= H + 1 };
+  }, onlyUsed);
 }
 
 // 设置抽屉：打开「推荐车站」
