@@ -165,7 +165,7 @@ test('CSP：只有首页、编辑页和试玩页的 connect-src 放行 restapi.a
   const AMAP = 'https://restapi.amap.com';
   const connectOf = (html) => /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1].split('; ').find((d) => d.startsWith('connect-src '));
   const allowed = new Set(['index.html', 'edit.html', 'try.html']);
-  const files = htmlFiles('dist');
+  const files = htmlFiles('dist').filter((f) => f !== 'map.html'); // map.html 由 Worker 返回、策略在响应头里，单独在下一个用例里检查
   for (const f of allowed) assert.ok(files.includes(f), `dist 里没有 ${f}`);
   for (const f of files) {
     const connect = connectOf(readFileSync(join('dist', f), 'utf8'));
@@ -177,4 +177,20 @@ test('CSP：只有首页、编辑页和试玩页的 connect-src 放行 restapi.a
   assert.match(readFileSync('web/worker.js', 'utf8'), /"connect-src 'none'"/);
   // 计算线程是同源的模块 Worker，没有单独的 CSP 响应头：它的请求受创建它的编辑页和试玩页的策略约束，两页都放行了
   assert.ok(!existsSync('dist/_headers') || !/restapi\.amap\.com/.test(readFileSync('dist/_headers', 'utf8')));
+});
+
+// v3.16：地图页面 map.html 要 unsafe-eval（高德 JS API），策略只放在 Worker 的响应头里；其余页面的 meta CSP 一个都不能放宽
+test('地图页面：map.html 没有 meta CSP（响应头负责）、脚本是单个普通脚本；其余页面的 CSP 都没有 unsafe-eval 和高德域名', { skip: !existsSync('.cache/vendor') && '没有依赖缓存，先 npm run build 一次' }, () => {
+  const child = spawnSync(process.execPath, ['web/build.mjs'], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const map = readFileSync('dist/map.html', 'utf8');
+  assert.doesNotMatch(map, /Content-Security-Policy/i);
+  assert.match(map, /<meta name="amap-js-key" content="">/);
+  assert.ok(existsSync('dist/map/frame.js') && existsSync('dist/map/frame.css'));
+  assert.doesNotMatch(readFileSync('dist/map/frame.js', 'utf8'), /^\s*(import|export)\b/m);
+  for (const f of htmlFiles('dist').filter((n) => n !== 'map.html')) {
+    const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(readFileSync(join('dist', f), 'utf8'))?.[1];
+    assert.ok(csp, `${f} 没有 CSP`);
+    assert.doesNotMatch(csp, /'unsafe-eval'|webapi\.amap\.com|\*\.amap\.com/, `${f} 的 CSP 不该放宽`);
+  }
 });

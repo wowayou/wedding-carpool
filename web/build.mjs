@@ -2,6 +2,7 @@
 // 把网页版要用的静态文件收集到 dist/：界面、计算线程、Python 代码（和本地版是同一份）。
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { bundleMap } from './map/bundle.mjs';
 import { buildSite } from './site.mjs';
 import { vendor } from './vendor.mjs';
 
@@ -10,6 +11,12 @@ mkdirSync('dist/py', { recursive: true });
 cpSync('ui.html', 'dist/edit.html'); // 行程编辑页，Worker 把 /t/<行程> 指到这里
 cpSync('web/editor', 'dist/editor', { recursive: true }); // 编辑页的脚本模块（ES 模块，同源加载；ui.html 里是 <script type="module" src="/editor/main.js">）
 cpSync('web/pyworker.js', 'dist/pyworker.js');
+// 地图页面（v3.16）：/map 和 /map/share 由 Worker 返回（填 Key、加安全策略，见 worker.js），所以 map.html 不在下面的 PAGES 里生成 CSP（它要 unsafe-eval，策略只放在响应头里）。
+// 脚本并成一个普通脚本 dist/map/frame.js（方案页沙箱里的页面来源是 null，模块脚本加载不了），样式 dist/map/frame.css
+cpSync('web/map.html', 'dist/map.html');
+mkdirSync('dist/map', { recursive: true });
+cpSync('web/map/frame.css', 'dist/map/frame.css');
+writeFileSync('dist/map/frame.js', bundleMap());
 cpSync('web/stations12306.json', 'dist/stations12306.json');
 // 图标和首屏示例：站点根目录；/demo 是静态的示例方案页（虚构行程，由 demo 流程生成，不经过 Worker）
 for (const name of ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'demo-shot.webp']) cpSync(`web/${name}`, `dist/${name}`);

@@ -15,6 +15,7 @@ import { chromium } from 'playwright';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const FAKE_KEY = '0123456789abcdef0123456789abcdef'; // 假的高德 Key
+export const FAKE_JS_KEY = 'fedcba9876543210fedcba9876543210'; // 假的高德 JS API Key（地图页面用）
 export const ACCESS_CODE = 'e2e-test-code'; // 测试用站长口令
 export const SLOW = 90_000; // Pyodide 第一次加载要十几秒，给够
 
@@ -90,7 +91,7 @@ async function waitHttp(url, log, what, timeout = 60_000) {
 // 子进程的环境：去掉可能带真 Key 的变量，本机回环地址不走代理
 function cleanEnv(extra = {}) {
   const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NO_COLOR: '1', ...extra };
-  for (const k of ['AMAP_KEY', 'ACCESS_CODE', 'IP_SALT']) delete env[k];
+  for (const k of ['AMAP_KEY', 'AMAP_JS_KEY', 'ACCESS_CODE', 'IP_SALT']) delete env[k];
   return env;
 }
 
@@ -103,11 +104,12 @@ export function ensureBuilt() {
   built = true;
 }
 
-export async function startWrangler() {
+// jsKey：地图页面（/map）用的高德 JS API Key（假的）；传 null 表示不设，地图页面走不带底图的画法
+export async function startWrangler({ jsKey = null } = {}) {
   ensureBuilt();
   const dir = makeTmp();
   const envFile = join(dir, 'e2e.env');
-  writeFileSync(envFile, `AMAP_KEY=${FAKE_KEY}\nACCESS_CODE=${ACCESS_CODE}\n`);
+  writeFileSync(envFile, `AMAP_KEY=${FAKE_KEY}\nACCESS_CODE=${ACCESS_CODE}\n${jsKey ? `AMAP_JS_KEY=${jsKey}\n` : ''}`);
   const port = await freePort(), inspector = await freePort();
   const { log } = start('wrangler', process.execPath, [
     join(ROOT, 'node_modules/wrangler/bin/wrangler.js'), 'dev',
@@ -155,7 +157,7 @@ export async function startLocal() {
 // ---------- 浏览器 ----------
 let browser = null;
 export async function launchBrowser() {
-  browser ??= await chromium.launch({ args: ['--force-color-profile=srgb', '--disable-lcd-text', '--disable-gpu', '--disable-gpu-rasterization', '--num-raster-threads=1', '--disable-partial-raster', '--disable-skia-runtime-opts'] });
+  browser ??= await chromium.launch({ args: ['--force-color-profile=srgb', '--disable-lcd-text', '--disable-gpu', '--disable-gpu-rasterization', '--num-raster-threads=1', '--disable-partial-raster', '--disable-skia-runtime-opts', '--disable-features=LocalNetworkAccessChecks'] });
   return browser;
 }
 export async function closeBrowser() { await browser?.close().catch(() => {}); browser = null; }
@@ -198,10 +200,13 @@ function fakeAmapBody(u) {
 //   guard.fakeAmapError：设为 true 时，高德代理请求不放行，直接回一个假的错误，并记在 guard.fakedAmap 里（不算违规）
 //   fakeDirectAmap：传 true 时，允许并伪造发往 https://restapi.amap.com 的请求（自己的高德 Key 模式，浏览器直连），
 //     每个请求记在 guard.directAmap 里（{ path, key, url }），不算违规；默认（不传）仍把它们当违规
-export async function newGuardedPage(base, { viewport = { width: 1280, height: 800 }, colorScheme = 'light', fakeDirectAmap = false, ...rest } = {}) {
+//   fakeJsApi：传 true 时，https://webapi.amap.com/maps?… 换成 web/e2e/fake-amap.js 的替身（高德 JS API），其余 *.amap.com 的请求返回空，
+//     都记在 guard.jsApi 里，不算违规；默认（不传）仍把它们当违规。传 'fail' 时脚本请求直接失败（模拟 JS API 加载不出来）
+//   stubs：{ '/路径': { body, contentType?, status?, headers? } }，本站这些路径直接用给定内容回答（测试专用的页面，不进正式构建）
+export async function newGuardedPage(base, { viewport = { width: 1280, height: 800 }, colorScheme = 'light', fakeDirectAmap = false, fakeJsApi = false, stubs = {}, ...rest } = {}) {
   const b = await launchBrowser();
   const context = await b.newContext({ viewport, colorScheme, reducedMotion: 'reduce', serviceWorkers: 'block', ...rest });
-  const guard = { amapHits: [], fakedAmap: [], directAmap: [], external: [], errors: [], fakeAmapError: false, allowErrors: [] };
+  const guard = { amapHits: [], fakedAmap: [], directAmap: [], jsApi: [], external: [], errors: [], fakeAmapError: false, allowErrors: [] };
   // allowErrors：这一页上预期会有的浏览器报错（比如管理页登录前的 401），写正则；其余控制台报错一律算失败
   const origin = new URL(base).origin;
   const isAmap = (u) => /\/amap(-batch)?([/?]|$)/.test(u.pathname) || u.pathname === '/api/amap' || /(^|\.)amap\.com$/.test(u.hostname);
@@ -218,6 +223,14 @@ export async function newGuardedPage(base, { viewport = { width: 1280, height: 8
       guard.directAmap.push({ path: u.pathname, key: u.searchParams.get('key'), url: u.href });
       return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json', body: JSON.stringify(fakeAmapBody(u)) });
     }
+    if (fakeJsApi && u.protocol === 'https:' && /(^|\.)amap\.com$/.test(u.hostname) && !/^\/api\//.test(u.pathname)) {
+      guard.jsApi.push(u.href);
+      if (u.hostname === 'webapi.amap.com' && u.pathname === '/maps') {
+        if (fakeJsApi === 'fail') return route.abort('failed');
+        return route.fulfill({ status: 200, contentType: 'text/javascript', body: readFileSync(join(ROOT, 'web/e2e/fake-amap.js')) });
+      }
+      return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json', body: '{}' });
+    }
     if (isAmap(u)) {
       if (guard.fakeAmapError) {
         guard.fakedAmap.push(`${req.method()} ${u.pathname}`);
@@ -226,12 +239,16 @@ export async function newGuardedPage(base, { viewport = { width: 1280, height: 8
       guard.amapHits.push(`${req.method()} ${u.href}`);
       return route.abort('blockedbyclient');
     }
+    if (u.origin === origin && stubs[u.pathname]) {
+      const { body, contentType = 'text/html; charset=utf-8', status = 200, headers = {} } = stubs[u.pathname];
+      return route.fulfill({ status, contentType, headers, body });
+    }
     if (u.origin !== origin) { guard.external.push(u.href); return route.abort('blockedbyclient'); }
     return route.continue();
   });
   const page = await context.newPage();
   page.on('console', (m) => { if (m.type() === 'error' && !guard.allowErrors.some((re) => re.test(`${m.text()} ${m.location().url}`))) guard.errors.push(`console.error: ${m.text()} (${m.location().url})`); });
-  page.on('pageerror', (e) => guard.errors.push(`pageerror: ${e.message}`));
+  page.on('pageerror', (e) => { if (!guard.allowErrors.some((re) => re.test(e.message))) guard.errors.push(`pageerror: ${e.message}`); });
   guard.assertClean = () => {
     const bad = { 高德请求: guard.amapHits, 站外请求: guard.external, 控制台报错: guard.errors };
     for (const [what, list] of Object.entries(bad)) if (list.length) throw new Error(`${what}：\n${list.join('\n')}`);

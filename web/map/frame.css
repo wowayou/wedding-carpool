@@ -1,0 +1,15 @@
+/* 地图页面的样式：颜色全部取设计变量（web/design.css），深色由页面的 data-theme 切换 */
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--surface-2); }
+svg { max-width: none; }
+#map { position: absolute; inset: 0; background: var(--surface-2); }
+.plain-svg { position: absolute; left: 0; top: 0; display: block; }
+.plain-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.plain { touch-action: none; cursor: grab; }
+.plain .lbl { position: absolute; transform: translate(-50%, -100%); white-space: pre; font-size: var(--fs-12); line-height: 17px; padding: 1px 6px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; }
+.plain-note { position: absolute; right: 8px; top: 8px; font-size: var(--fs-12); color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 2px 8px; pointer-events: none; }
+.legend { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: var(--surface); color: var(--ink); padding: 6px 10px; border-radius: var(--r-ctl); font-size: var(--fs-12); line-height: 1.7; border: 1px solid var(--line); max-width: calc(100% - 20px); }
+.legend i { display: inline-block; margin-right: 6px; vertical-align: -1px; }
+.legend .lg-dot { width: 10px; height: 10px; border-radius: 50%; }
+.legend .lg-line { width: 14px; height: 0; vertical-align: 3px; }
+.legend .lg-circle { width: 12px; height: 12px; border: 1px solid; border-radius: 50%; }
+.map-tip { position: fixed; z-index: 10; pointer-events: none; font-size: var(--fs-12); padding: 2px 8px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; max-width: 260px; }
