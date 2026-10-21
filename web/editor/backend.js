@@ -30,7 +30,7 @@ export function capsFor(mode) {
       publishLabel: online ? '发布方案页' : '生成方案页',
       title: (t) => (online ? t.name || '未命名行程' : sample ? '试玩：拼车出行规划' : '拼车出行规划'),
       status: (t) => (sample ? '试玩 · 改动不保存，刷新后回到示例' : online ? null : t.file ? `本地 · ${t.file}` : '本地'), // null：在线版的状态要看连接和同步
-      noTrainHint: (minutes) => (sample ? `全部留空时，每个站都按默认的 ${minutes} 分钟算。` : '全部留空时改用高德估算：不含火车换乘，可能很不准。'),
+      noTrainHint: (minutes) => (sample ? `全部留空时，按家到站的直线距离估算（${minutes} 分钟加上按直线公里算的火车用时），不知道哪条线有直达车。` : '全部留空时改用高德估算：不含火车换乘，可能很不准；查不到时按直线距离估算。'),
       deleteHint: sample ? '点页面上方的「恢复示例」可以找回。' : '在线版可以在「历史」里找回。',
       importConfirm: online ? '旧内容会留在「历史」里。' : '现在的内容会被覆盖。',
       importNote: online ? '，旧内容留在「历史」里' : '',

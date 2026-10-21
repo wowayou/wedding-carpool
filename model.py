@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, field
 
 from base import DEFAULTS, INF, report
-from geo import AmapError, Place, QuotaError, parse_loc, pick_stations
+from geo import AmapError, Place, QuotaError, km_between, parse_loc, pick_stations
 
 
 @dataclass
@@ -58,6 +58,7 @@ class Trip:
     taxi_mode: str = DEFAULTS["taxi_mode"]
     taxi_extra: float = DEFAULTS["taxi_pool_extra_min"]  # 为了拼车，一个人最多比自己最快的走法多花几分钟
     taxi_wait: float = DEFAULTS["taxi_wait_min"]         # 同一辆出租里的人，到站或离场的时间最多相差几分钟
+    arrive_by: float | None = None  # 去程最晚几点到目的地（当天分钟数）；不填不检查，只规划返程时不起作用
     try_mode: bool = False  # 试玩模式（网页版 /try）：行车时间是直线距离估算的，报告不能说来自高德
 
 
@@ -108,6 +109,16 @@ def leave_time(p: dict) -> float | None:
         return None
     if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
         raise SystemExit(f"{p.get('name') or '成员'}的离场时间「{text}」要写成 时:分（24 小时制），如 21:30")
+    return float(train_times(text)[0])
+
+
+def arrive_by_time(opt: dict) -> float | None:
+    """去程最晚到达时间 arrive_by：时:分，24 小时制；没填返回 None。"""
+    text = str(opt.get("arrive_by") or "").strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
+        raise SystemExit(f"去程的「最晚几点到」（arrive_by）「{text}」要写成 时:分（24 小时制），如 12:00")
     return float(train_times(text)[0])
 
 
@@ -167,6 +178,7 @@ def load_trip(cfg: dict, amap) -> Trip:
     taxi_mode = str(opt.get("taxi_mode", DEFAULTS["taxi_mode"]))
     if taxi_mode not in ("save", "fast"):
         raise SystemExit(f"打车方式 taxi_mode 只能是 \"save\"（尽量拼车省钱）或 \"fast\"（各人走自己最快的站），现在是「{taxi_mode}」")
+    arrive_by = arrive_by_time(opt) if outbound else None  # 只规划返程时这一项不起作用，也不检查格式
     resolved: list[dict] = []
     venue, people = load_places(cfg, amap, resolved)
     if not people:
@@ -189,6 +201,9 @@ def load_trip(cfg: dict, amap) -> Trip:
         for s in sorted({*(p.stations or []), *p.rail_min, *p.trains, *p.back_trains, *p.back_rail_min}):
             if s not in names:
                 warnings.append(f"{p.name} 写的站「{s}」不在候选站里，已忽略（名字要和候选站完全一致）")
+    unknown = unchecked_riders(people) if arrive_by is not None else []
+    if unknown:
+        warnings.append(f"没填车次的人不知道几点到，没按最晚到达时间检查（{'、'.join(unknown)}）")
     # 只规划返程时没有去程日期可借用，日期取返程日期
     date = str((opt.get("travel_date") if outbound else cfg["return"]["date"]) or dt.date.today() + dt.timedelta(days=1))
     y, m, d = (int(x) for x in date.replace("/", "-").split("-"))
@@ -199,7 +214,12 @@ def load_trip(cfg: dict, amap) -> Trip:
                 exit_buffer=float(opt.get("exit_buffer_min", DEFAULTS["exit_buffer_min"])), resolved=resolved, back=back,
                 outbound=outbound, ride_extra=float(opt.get("ride_extra_min", DEFAULTS["ride_extra_min"])), taxi_mode=taxi_mode,
                 taxi_extra=float(opt.get("taxi_pool_extra_min", DEFAULTS["taxi_pool_extra_min"])),
-                taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])))
+                taxi_wait=float(opt.get("taxi_wait_min", DEFAULTS["taxi_wait_min"])), arrive_by=arrive_by)
+
+
+def unchecked_riders(people: list[Person]) -> list[str]:
+    """不开车、又没填去程车次时刻的人：不知道几点到，最晚到达时间对他们不起作用。"""
+    return [p.name for p in people if not p.drives and not any(train_times(t) for t in p.trains.values())]
 
 
 def back_leg(cfg: dict) -> "Leg | None":
@@ -228,14 +248,11 @@ def clock(minute: float) -> str:
 
 def estimate_rail(amap, trip: Trip) -> None:
     """用高德公共交通规划（含跨城火车）估算不开车的人到各候选站要多久。
-    填了某些站的人只估算他填了、但没有分钟数的站（只写了发车时刻的车次推不出分钟数）；没填的人估算所有能去的站。"""
+    估算谁、估算哪些站由 estimate_targets 决定；只规划返程时，回程车次填了的人不估算。"""
     by_name = {s.name: s for s in trip.stations}
 
     def to_estimate(p: Person) -> list[str]:
-        filled = filled_stations(p, list(by_name))
-        if filled:
-            return [s for s in filled if s not in p.rail_min]
-        return list(by_name) if p.stations is None else [s for s in p.stations if s in by_name]
+        return estimate_targets(p, list(by_name), trip.outbound)
 
     riders = [p for p in trip.people if not p.drives and to_estimate(p)]
     if not trip.estimate_rail or not riders or not by_name:
@@ -261,10 +278,11 @@ def estimate_rail(amap, trip: Trip) -> None:
             else:
                 missing.append(s)
         if filled:
-            continue  # 没估算出来的站，rider_options 按 station_cost 估
+            continue  # 没估算出来的站，station_minutes 按直线距离估
         if not p.rail_est:
             trip.warnings.append(f"没查到 {p.name} 到任何候选站的公共交通方案{'（' + error + '）' if error else ''}，"
-                                 f"改按每站 {trip.station_cost:.0f} 分钟估算；建议去 12306 查好后填 rail_min")
+                                 f"改按直线距离估算（每站 {trip.station_cost:.0f} 分钟加上按直线公里算的火车用时）；"
+                                 "建议去 12306 查好后填 rail_min")
         elif missing:
             trip.warnings.append(f"没查到 {p.name} 到 {'、'.join(missing)} 的公共交通方案"
                                  f"{'（' + error + '）' if error else ''}，已不考虑这些站；实际能到的话给他填 rail_min")
@@ -331,3 +349,64 @@ def filled_stations(p: Person, station_names: list[str], leg: Leg = OUT) -> list
     只填了发车时刻的车次推不出分钟数，但也算填了这个站。合集不为空，他就只去这些站。"""
     rail, trains = (p.back_rail_min, p.back_trains) if leg.reverse else (p.rail_min, p.trains)
     return [s for s in station_names if s in rail or s in trains]
+
+
+# 兜底：车次、分钟数、高德估算都没有时，一个站的用时 = station_cost_min + 家到站的直线公里 × 系数 ÷ 速度 × 60。
+# 系数和速度取自 v3.14 计划第三节 B 的核对表（故城真实车次，8 个区间）：直达线路误差多在半小时以内，
+# 要换乘或绕线的会少估一个小时左右，所以只作兜底，不知道哪条线有直达车。
+LINE_DETOUR_FACTOR = 1.3  # 铁路比直线长的折算
+LINE_SPEED_KMH = 200.0    # 平均时速（含停靠）
+
+
+def line_minutes(station_cost: float, home: Place | None, station: Place | None) -> float:
+    """按直线距离估一个站的用时（分钟）；不知道坐标时只有 station_cost。"""
+    if home is None or station is None:
+        return station_cost
+    return station_cost + km_between(home, station) * LINE_DETOUR_FACTOR / LINE_SPEED_KMH * 60
+
+
+# station_minutes 返回的用时来源
+SRC_OWN = "own"    # 这一段自己填的分钟数（或按车次算出的）
+SRC_OUT = "out"    # 返程没填回程分钟数，用去程的分钟数
+SRC_EST = "est"    # 高德估算
+SRC_LINE = "line"  # 直线距离估算
+
+
+def station_minutes(p: Person, station_names: list[str], station_cost: float, places: dict[str, Place] | None = None,
+                    leg: Leg = OUT) -> dict[str, tuple[float, str]]:
+    """乘客在这一段能去哪些站、各要多久（分钟）、用时从哪来：{站名: (分钟, 来源)}。取数顺序只在这里写。
+
+    去程：填了某些站的车次或分钟数的人只去这些站（见 filled_stations）；没填的人用高德估算（估算不到的站不考虑），
+    一个估算都没有就每个站都去。分钟数依次取：去程分钟数 → 高德估算 → 直线距离估算。
+    返程：回程填了站，只去这些站，分钟数依次取 回程分钟数 → 去程分钟数 → 高德估算 → 直线距离估算；
+    回程一个都没填但去程填了，只去去程填了的站，依次取 去程分钟数 → 高德估算 → 直线距离估算；
+    都没填，和去程没填的人一样。places 是站名到坐标，用来按直线距离估；没给坐标就只有 station_cost。"""
+    chain = ((p.back_rail_min, SRC_OWN), (p.rail_min, SRC_OUT)) if leg.reverse else ((p.rail_min, SRC_OWN),)
+    stations = filled_stations(p, station_names, leg)
+    if not stations and leg.reverse:
+        stations = filled_stations(p, station_names)  # 回程都没填：沿用去程填的站
+    if not stations:
+        allowed = station_names if p.stations is None else [s for s in p.stations if s in station_names]
+        stations = [s for s in allowed if s in p.rail_est] if p.rail_est else allowed
+    out = {}
+    for s in stations:
+        for table, src in chain:
+            if s in table:
+                out[s] = (table[s], src)
+                break
+        else:
+            out[s] = ((p.rail_est[s][0], SRC_EST) if s in p.rail_est
+                      else (line_minutes(station_cost, p.home, (places or {}).get(s)), SRC_LINE))
+    return out
+
+
+def estimate_targets(p: Person, station_names: list[str], outbound: bool = True) -> list[str]:
+    """要用高德估算哪些站。填了某些站的人只估算他填了、但没有分钟数的站（只写了发车时刻的车次推不出分钟数）；
+    没填的人估算所有能去的站。去程没填的站，返程也沿用这些估算。
+    只规划返程（outbound = False）时：回程填了车次或分钟数的人不估算；其余同上。"""
+    if not outbound and filled_stations(p, station_names, Leg("back", "返程", reverse=True)):
+        return []
+    filled = filled_stations(p, station_names)
+    if filled:
+        return [s for s in filled if s not in p.rail_min]
+    return list(station_names) if p.stations is None else [s for s in p.stations if s in station_names]

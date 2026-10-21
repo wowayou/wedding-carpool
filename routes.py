@@ -7,7 +7,8 @@ import itertools
 from dataclasses import dataclass
 
 from base import INF
-from model import OUT, Leg, Person, filled_stations, train_times
+from geo import Place
+from model import OUT, Leg, Person, station_minutes, train_times
 
 
 @dataclass(frozen=True)
@@ -38,32 +39,15 @@ class Plan:
         return (-self.carried, round(self.cost, 1), sum(len(r.stops) for r in self.routes))
 
 
-def rider_options(p: Person, station_names: list[str], station_cost: float, leg: Leg = OUT) -> dict[str, float]:
+def rider_options(p: Person, station_names: list[str], station_cost: float, leg: Leg = OUT,
+                  places: dict[str, Place] | None = None) -> dict[str, float]:
     """乘客能在哪些点上（下）车，以及到该点的额外成本（分钟）。
 
-    填了某些站的车次或分钟数的人，只去这些站（见 filled_stations）。去车站上车意味着要先坐一趟高铁：
-    优先用手填的（或按车次算出的）rail_min，其次用高德估算的 rail_est，都没有就按 station_cost 估。
-    没填的人：去程有高德估算就用估算（查不到的站不考虑），没有就每个站按 station_cost 估。
-    这样顺路的「到家附近接」会排在「坐高铁去站」前面。返程同理，用返程的车次和分钟数，没有估算。
+    去车站上车意味着要先坐一趟高铁：哪些站能去、各要多久、数从哪来，见 model.station_minutes
+    （手填的 → 高德估算 → 按直线距离估；返程没填回程车次的按去程来）。places 是站名到坐标，按直线距离估时用。
+    送到（接到）家附近的 home 点照旧是 0，这样顺路的「到家附近接」会排在「坐高铁去站」前面。
     """
-    filled = filled_stations(p, station_names, leg)
-    if leg.reverse:
-        if filled:
-            opts = {f"st:{s}": p.back_rail_min.get(s, station_cost) for s in filled}
-        else:
-            opts = {f"st:{s}": station_cost for s in (station_names if p.stations is None else
-                                                      [x for x in p.stations if x in station_names])}
-        if p.pickup_at_home:
-            opts[f"home:{p.name}"] = 0.0
-        return opts
-    if filled:
-        opts = {f"st:{s}": p.rail_min[s] if s in p.rail_min else p.rail_est[s][0] if s in p.rail_est else station_cost for s in filled}
-    else:
-        allowed = station_names if p.stations is None else [s for s in p.stations if s in station_names]
-        if p.rail_est:
-            opts = {f"st:{s}": p.rail_est[s][0] for s in allowed if s in p.rail_est}
-        else:
-            opts = {f"st:{s}": station_cost for s in allowed}
+    opts = {f"st:{s}": m for s, (m, _) in station_minutes(p, station_names, station_cost, places, leg).items()}
     if p.pickup_at_home:
         opts[f"home:{p.name}"] = 0.0
     return opts
@@ -89,6 +73,21 @@ def car_routes(driver: Person, pickups: list[str], T, max_stops: int, leg: Leg =
                 if detour <= limit and (key not in best or detour < best[key].detour):
                     best[key] = Route(driver.name, seq, total, max(detour, 0.0))
     return [Route(driver.name, (), direct, 0.0), *sorted(best.values(), key=lambda r: r.detour)]
+
+
+def latest_ready(arrive_by: float | None, ride: float) -> float:
+    """去程：要在 arrive_by 前到目的地，沿着车程 ride 分钟的路，最晚几点能上车（出租是出发）。没设最晚到达时间就没有限制。"""
+    return INF if arrive_by is None else arrive_by - ride
+
+
+def reaches_in_time(p: Person, stop: str, ride: float, exit_buffer: float, arrive_by: float | None) -> bool:
+    """去程最晚到达时间（规则第 4 版）：这个人在这个站上车（出租是出发），到目的地不晚于 arrive_by。
+    上车时刻 = 列车到站 + 出站时间，ride 是沿这辆车（出租就是直达）从这个站到目的地的车程。
+    求解（RideLimit.allows）、打车（taxi.taxi_slot）、自己单独走（timetable.solo_minutes）都调用它，规则只写在这一处。
+    一辆车的到达时刻 = 车上每个人「上车时刻 + 从上车点到目的地的车程」里最晚的那个（出发时刻按最晚的那位倒推），
+    所以逐人检查就等于整车按时到。没填车次、不知道几点到的人，和在家附近上车的人（车主可以早点出发），不检查。"""
+    arr = arrival_at(p, stop)
+    return arr is None or arr + exit_buffer <= latest_ready(arrive_by, ride) + 1e-9
 
 
 def back_deadline(p: Person, stop: str, leg: Leg) -> float | None:

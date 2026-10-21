@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from base import INF
 from model import Leg, Person, Trip
-from routes import arrival_at, back_deadline, leave_of
+from routes import arrival_at, back_deadline, latest_ready, leave_of
 
 TAXI_COMBO_LIMIT = 20_000  # 打车选站组合的穷举上限，超过就用贪心
 CAR_SEATS = 4  # 一辆出租最多坐几个人
@@ -24,16 +24,17 @@ class Arrangement:
     ride: float             # 车数 × 车程分钟数，打车费按它粗估
 
 
-def taxi_slot(p: Person, stop: str, T, leg: Leg, exit_buffer: float) -> tuple[float | None, float, float]:
+def taxi_slot(p: Person, stop: str, T, leg: Leg, exit_buffer: float, arrive_by: float | None = None) -> tuple[float | None, float, float]:
     """这个人去这个站打车：(能上车/出发的时刻, 最晚能走的时刻, 站和目的地之间的车程)。
-    去程：到站后加出站时间才能上车，没填车次就不知道时刻（None，当作可以和任何人拼）。
+    去程：到站后加出站时间才能上车，没填车次就不知道时刻（None，当作可以和任何人拼）；
+    设了最晚到达时间（arrive_by）时，最晚能走的时刻 = 最晚到达时刻 − 车程（规则见 routes.reaches_in_time）。
     返程：从自己的离场时间走，要赶在发车前 N 分钟到站，所以出发不能晚于「发车前提前量 − 车程」。"""
     ride = leg.station_to_venue(T, stop)
     if leg.reverse:
         deadline = back_deadline(p, stop, leg)
         return leave_of(p, leg), INF if deadline is None else deadline - ride, ride
     arr = arrival_at(p, stop)
-    return None if arr is None else arr + exit_buffer, INF, ride
+    return None if arr is None else arr + exit_buffer, latest_ready(arrive_by, ride), ride
 
 
 def pack_cars(members: list[tuple], wait: float) -> list[dict]:
@@ -67,7 +68,7 @@ def taxi_cars(assigned: dict[str, str], people: dict[str, Person], T, leg: Leg, 
     """每辆出租：站点、同车的人、出发（汇合）时刻、车程。报告和方案页用，和选站时的分车规则一样。"""
     by_stop: dict[str, list[tuple]] = {}
     for name, stop in assigned.items():
-        t, latest, _ = taxi_slot(people[name], stop, T, leg, trip.exit_buffer)
+        t, latest, _ = taxi_slot(people[name], stop, T, leg, trip.exit_buffer, trip.arrive_by)
         by_stop.setdefault(stop, []).append((name, people[name].party, t, latest))
     out = []
     for stop, members in by_stop.items():
@@ -93,8 +94,8 @@ class TaxiPool:
             for s, c in opts[p.name].items():
                 if not s.startswith("st:"):
                     continue
-                t, latest, ride = taxi_slot(p, s, T, leg, trip.exit_buffer)
-                if ride != INF and (t is None or t <= latest):
+                t, latest, ride = taxi_slot(p, s, T, leg, trip.exit_buffer, trip.arrive_by)
+                if ride != INF and (t is None or t <= latest + 1e-9):
                     found.append((c + ride, s, t, latest, ride))
             self.cands[p.name] = sorted(found, key=lambda x: (x[0], x[1]))
         self.party = {p.name: p.party for p in riders}

@@ -83,8 +83,8 @@ export function personCard(p, i) {
   const driverPart = `<div class="row">${field('空座', base + '.car_seats', { type: 'number' })}
     ${field('最多绕路（分钟）', base + '.max_detour_min', { type: 'number', placeholder: detourHint() })}</div>
     ${!backOn ? '' : `<div class="row">${field('离场时间（返程，车几点出发）', base + '.leave_time', { placeholder: leavePlaceholder() })}</div>
-    <div class="row"><label class="toggle" style="flex:2"><input type="checkbox" data-backdrive="${i}" ${p.return_drives === false ? '' : 'checked'}> 返程也开车，可以顺路送人</label>
-      ${p.return_drives === false ? '' : field('返程最多绕路', base + '.return_max_detour_min', { type: 'number', placeholder: noteOf('people[].return_max_detour_min') })}</div>`}`;
+    <div class="row"><label class="toggle" style="flex:2"><input type="checkbox" data-backdrive="${i}" ${p.return_drives === false ? '' : 'checked'}> 返程顺路送人</label>
+      ${p.return_drives === false ? '<span class="muted" style="flex:3;margin-bottom:var(--sp-2)">车主照样开车回家，只是不送人</span>' : field('返程最多绕路', base + '.return_max_detour_min', { type: 'number', placeholder: noteOf('people[].return_max_detour_min') })}</div>`}`;
   return `<div class="card c-card ${drives ? 'c-card--drive driver' : 'c-card--ride rider'}">
     <div class="row head">${field('名字', base + '.name', { placeholder: '比如 老王' })}
       <label class="toggle"><input type="checkbox" data-car="${i}" ${drives ? 'checked' : ''}> 开车</label>
@@ -194,7 +194,10 @@ export function renderForm() {
       <div class="row">${field('默认最多绕路（分钟）', 'options.max_detour_min', { type: 'number' })}
         ${field('每车最多停几次', 'options.max_stops', { type: 'number' })}</div>
       ${outboundOn() ? `<div class="row">${field('出发日期', 'options.travel_date')}
-        ${field('出发时间', 'options.travel_time')}</div><div class="place-hint" data-sale="options.travel_date" hidden></div>` : ''}
+        ${field('出发时间', 'options.travel_time')}
+        ${field('最晚几点到', 'options.arrive_by')}</div>
+      <div class="muted">${esc(fieldOf('options.arrive_by')?.hint)}。</div>
+      <div class="place-hint" data-sale="options.travel_date" hidden></div>` : ''}
       <div class="row">${outboundOn() ? field('下车到上车（分钟）', 'options.exit_buffer_min', { type: 'number' }) : ''}
         ${field('去车站+候车（分钟）', 'options.station_access_min', { type: 'number' })}</div>
       <div class="row">${field('搭车最多多花（分钟）', 'options.ride_extra_min', { type: 'number' })}</div>

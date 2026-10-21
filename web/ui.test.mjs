@@ -755,8 +755,8 @@ test('能力表：三种模式能做什么、文案怎么写', () => {
   assert.equal(capsFor('online').text.title({ name: '周末' }), '周末');
   assert.equal(capsFor('online').text.title({}), '未命名行程');
   assert.equal(capsFor('try').text.title({}), '试玩：拼车出行规划');
-  assert.match(capsFor('try').text.noTrainHint(30), /默认的 30 分钟/);
-  assert.match(capsFor('local').text.noTrainHint(30), /改用高德估算/);
+  assert.match(capsFor('try').text.noTrainHint(30), /直线距离估算（30 分钟/);
+  assert.match(capsFor('local').text.noTrainHint(30), /改用高德估算.*查不到时按直线距离估算/);
   // 启动时按模式填一次，别的模块读 caps
   initBackend('try');
   assert.equal(caps.fixedSample, true);

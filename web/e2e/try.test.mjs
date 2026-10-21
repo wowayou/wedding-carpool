@@ -52,6 +52,36 @@ test('试玩：改一个字段后方案显示「已过期」', async () => {
   await page.locator('#stale').waitFor({ state: 'hidden' });
 });
 
+test('试玩：填一个很早的「最晚几点到」，报告里说明谁赶不上', { timeout: SLOW }, async () => {
+  const field = bind(page, 'options.arrive_by');
+  assert.equal(await page.locator('#form label.f', { hasText: '最晚几点到' }).count(), 1);
+  await field.fill('06:00');
+  await page.locator('#plan').click();
+  await page.waitForFunction(() => /晚于 06:00/.test(document.querySelector('#report')?.innerText || ''), null, { timeout: SLOW });
+  const report = await page.locator('#report').innerText();
+  assert.match(report, /最晚到达时间 06:00/);
+  assert.match(report, /小李[^\n]*按填的车次，最早 \d\d:\d\d 到，晚于 06:00，需要单独安排/);
+  assert.match(report, /小陈[^\n]*按填的车次，最早 \d\d:\d\d 到，晚于 06:00，需要单独安排/);
+  // 填错格式有红框，清空就回到不检查
+  await field.fill('25:00');
+  await page.locator('#plan').click();
+  await page.locator('dialog.c-modal[open]').waitFor();
+  await page.keyboard.press('Escape');
+  await field.fill('');
+  await page.locator('#plan').click();
+  await page.waitForFunction(() => !/晚于 06:00/.test(document.querySelector('#report')?.innerText || ''), null, { timeout: SLOW });
+});
+
+test('试玩：车主卡片的勾选框叫「返程顺路送人」，去掉勾时说明车主照样开车回家', async () => {
+  const box = page.locator('#form [data-backdrive="0"]');
+  assert.match(await page.locator('#form label.toggle:has([data-backdrive="0"])').innerText(), /返程顺路送人/);
+  assert.equal(await page.locator('#form').getByText('返程也开车').count(), 0);
+  await box.uncheck();
+  await page.getByText('车主照样开车回家，只是不送人').waitFor();
+  await page.locator('#form [data-backdrive="0"]').check();
+  assert.equal(await page.getByText('车主照样开车回家，只是不送人').count(), 0);
+});
+
 test('试玩：清空必填项，计算方案弹出校验清单，点一条跳到输入框', async () => {
   const depart = bind(page, 'return.depart_time');
   await depart.fill('');

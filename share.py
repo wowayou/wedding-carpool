@@ -219,7 +219,8 @@ def _outbound(state: dict, index: int) -> tuple[str, dict]:
     # 车主
     drivers = []
     for r, car in zip(plan.routes, tl.cars):
-        steps = [_step(_t(car.depart), "从出发地出发")]
+        steps = [_step(_t(car.depart), "从出发地出发") if car.latest_depart is None
+                 else _step("", f"最晚 {_t(car.latest_depart)} 出发")]
         for s in car.stops:
             steps.append(_step(_t(s.time), f"到 <b>{escape(carpool.stop_label(s.point, pts))}</b>，接 {escape('、'.join(s.people))}", stop_link(s.point)))
         steps.append(_step(_t(car.arrive), f"到目的地 <b>{escape(venue.name)}</b>", venue_link))
@@ -258,7 +259,8 @@ def _outbound(state: dict, index: int) -> tuple[str, dict]:
                      _step(_t(m.arrive), "到目的地", venue_link)]
             riders.append(_card("taxi", carpool.who([m.name], trip), "打车", steps, _time_note(times.get(m.name)) + note(m.name)))
     for st in tl.stranded:
-        riders.append(_card("taxi", carpool.who([st.name], trip), "待安排", [_step("", "没有可用的候选站，需要单独商量")], note(st.name)))
+        why = f"{carpool.late_reason(st.earliest, trip)}，需要单独商量" if st.earliest is not None else "没有可用的候选站，需要单独商量"
+        riders.append(_card("taxi", carpool.who([st.name], trip), "待安排", [_step("", why)], note(st.name)))
 
     # 地图数据：目的地、用到的车站，以及模糊处理后的车主路线。车主出发地和成员的家都不放精确位置
     used = {s for r in plan.routes for s in r.stops if s.startswith("st:")} | set(plan.taxi.values())
@@ -359,6 +361,9 @@ def render_share(state: dict, index: int, back_index: int = 0, generated: dt.dat
         timing = ([f"时刻按车次到站后 {round(trip.exit_buffer)} 分钟出站推算"] if known else []) + (["车主时间来自高德路况估算"] if tl.cars else [])
         tips = [("，".join(timing) + "。" if timing else "") + "路线和时间都只供参考，当天以实际路况和群里的实时位置为准"
                 + ("，开车遵守交通规则。" if tl.cars else "。")]
+        if trip.arrive_by is not None:
+            tips.append(f"最晚 {carpool.clock(trip.arrive_by)} 到目的地。"
+                        + (f"没填车次的人（{'、'.join(unchecked)}）不知道几点到，没按这个时间检查。" if (unchecked := carpool.unchecked_riders(trip.people)) else ""))
         if any(s.point.startswith("st:") for c in tl.cars for s in c.stops):
             tips.append("高铁站一般不能在送客平台停车，去停车场或网约车上车点接人；到了在群里发「共享实时位置」。")
         if tl.taxis:

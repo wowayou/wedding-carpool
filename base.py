@@ -14,7 +14,7 @@ from pathlib import Path
 INF = math.inf
 
 # 计算规则的版本：只有排序规则或成本口径变了才加一；改界面、改文字不加。说明见 /guide/method
-RULES_VERSION = 3
+RULES_VERSION = 4
 # 配置项只在 config-fields.json 里定义一处（路径、类型、默认值、范围、单位、中文名……）。
 # 网页版把这个文件和 .py 一起加载（见 web/pyworker.js）；编辑页、规则页的测试读的也是它
 FIELDS_FILE = Path(__file__).with_name("config-fields.json")

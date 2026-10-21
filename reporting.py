@@ -9,7 +9,8 @@ import urllib.parse
 
 from base import INF, RULES_VERSION
 from geo import Place
-from model import OUT, Leg, Trip, clock, filled_stations
+from model import (LINE_DETOUR_FACTOR, LINE_SPEED_KMH, OUT, SRC_EST, SRC_OWN, SRC_OUT, Leg, Trip, clock, filled_stations,
+                   station_minutes)
 from routes import Plan, Route, leg_minutes
 from timetable import PersonTime, Timeline, Timelines
 
@@ -148,14 +149,20 @@ def time_table(tl: Timeline, trip: Trip, back: bool = False) -> list[str]:
     return out
 
 
+def late_reason(earliest: float, trip: Trip) -> str:
+    """去程待安排的原因：按填的车次，最早几点到，晚于最晚到达时间。报告和方案页共用。"""
+    return f"按填的车次，最早 {clock(earliest)} 到，晚于 {clock(trip.arrive_by)}"
+
+
 def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> list[str]:
     """去程方案的文字说明。时刻都读行程表 tl；plan 只用来生成导航链接。"""
     seats = {p.name: p.seats for p in trip.people if p.drives}
     lines = []
     for r, car in zip(plan.routes, tl.cars):
         if not car.stops:
+            latest = f"，最晚 {clock(car.latest_depart)} 出发" if car.latest_depart is not None else ""
             lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：直接开到目的地，"
-                         f"约 {fmt_min(car.minutes)}，不接人。")
+                         f"约 {fmt_min(car.minutes)}，不接人{latest}。")
             continue
         legs = []
         for s in car.stops:
@@ -165,7 +172,8 @@ def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> lis
             timing = (f"建议 **{clock(car.depart)} 出发** → {' → '.join(legs)} → "
                       f"约 {clock(car.arrive)} 到目的地；")
         else:
-            timing = f"出发 → {' → '.join(legs)} → 目的地；出发后约 {fmt_min(car.first_leg)} 到第一个接人点；"
+            latest = f"最晚 {clock(car.latest_depart)} 出发 → " if car.latest_depart is not None else "出发 → "
+            timing = f"{latest}{' → '.join(legs)} → 目的地；出发后约 {fmt_min(car.first_leg)} 到第一个接人点；"
         lines.append(f"- **{car.driver}**（空 {seats[car.driver]} 座）：{timing}"
                      f"全程约 {fmt_min(car.minutes)}，比直达多绕 **{fmt_min(car.detour)}**。{route_links(r, pts)}")
     for car in tl.taxis:
@@ -176,7 +184,10 @@ def describe(plan: Plan, tl: Timeline, pts: dict[str, Place], trip: Trip) -> lis
         lines.append(f"- **打车/包车组**：{who(car.names, trip)} 坐高铁到 **{pts[s].name}**，"
                      f"一起打车到目的地，{timing}{taxi_fare(ride, car.n)}。[导航]({nav_url(pts[s], pts['venue'])})")
     for st in tl.stranded:
-        lines.append(f"- **{st.name}**：没有可用的候选站，需要单独安排。")
+        if st.earliest is not None and trip.arrive_by is not None:
+            lines.append(f"- **{st.name}**：{late_reason(st.earliest, trip)}，需要单独安排。")
+        else:
+            lines.append(f"- **{st.name}**：没有可用的候选站，需要单独安排。")
     return lines
 
 
@@ -271,29 +282,59 @@ def station_table(trip: Trip, pts: dict[str, Place], T, leg: Leg = OUT) -> list[
     return out
 
 
+LINE_NOTE = "按直线距离估算，建议填车次"
+
+
 def rail_section(trip: Trip) -> list[str]:
-    lines = []
+    """每位不开车的人到各站（返程是回各站）的用时和来源。用时的取数顺序在 model.station_minutes。"""
+    names = [s.name for s in trip.stations]
+    places = {s.name: s for s in trip.stations}
+    back = trip.back
+    lines, used_line = [], False
+
+    def items(p, leg) -> tuple[str, bool]:
+        """（各站用时的文字，其中有没有借用去程的用时）"""
+        nonlocal used_line
+        got = station_minutes(p, names, trip.station_cost, places, leg)
+        out = []
+        for s, (m, src) in got.items():
+            if src == SRC_OWN:
+                desc = (p.back_trains if leg.reverse else p.trains).get(s) or ("回程手填" if leg.reverse else "手填")
+            elif src == SRC_OUT:
+                desc = "按去程的用时"
+            elif src == SRC_EST:
+                desc = p.rail_est[s][1]
+            else:
+                desc, used_line = LINE_NOTE, True
+            out.append((m, s, desc))
+        return "；".join(f"{s} {fmt_min(m)}（{desc}）" for m, s, desc in sorted(out)), any(src == SRC_OUT for _, src in got.values())
+
     for p in trip.people:
         if p.drives:
             continue
-        filled = filled_stations(p, [s.name for s in trip.stations])
-        if filled:  # 填了的站：有分钟数用分钟数，只写了发车时刻的用高德估算
-            items = [(p.rail_min[s], s, p.trains.get(s) or "手填") if s in p.rail_min else (p.rail_est[s][0], s, p.rail_est[s][1])
-                     for s in filled if s in p.rail_min or s in p.rail_est]
-        else:
-            items = [(m, s, desc) for s, (m, desc) in p.rail_est.items()]
-        if items:
-            lines.append(f"- **{p.name}**：" + "；".join(
-                f"{s} {fmt_min(m)}（{desc}）" for m, s, desc in sorted(items)))
+        back_filled = back is not None and bool(filled_stations(p, names, back))
+        if trip.outbound:
+            text, _ = items(p, OUT)
+            if text:
+                note = "" if back is None or back_filled else "（返程没填回程车次，按去程的用时估，用时一样）"
+                lines.append(f"- **{p.name}**{note}：{text}")
+        if back is not None and (back_filled or not trip.outbound):
+            text, borrowed = items(p, back)
+            if text:
+                note = " 返程" if back_filled else "（返程没填回程车次，按去程填的用时估）" if borrowed else ""
+                lines.append(f"- **{p.name}**{note}：{text}")
     if not lines:
         return []
-    return ["## 不开车的人到各站要多久", "",
-            "括号里是配置里填的车次（标「手填」的只填了分钟数）。试玩里的车次和时刻都是示意，不是真实车次。"
-            if trip.try_mode else
-            "括号里是配置里填的车次（标「手填」的只填了分钟数）；其余按 "
-            f"{trip.travel_date} {trip.travel_time} 出发，用高德公共交通最快方案估算。"
-            "高德跨城只给直达火车，不含火车换乘和刚开通的线路，估算可能偏差很大，请用 12306 核对。",
-            "", *lines, ""]
+    intro = ("括号里是配置里填的车次（标「手填」的只填了分钟数）。试玩里的车次和时刻都是示意，不是真实车次。"
+             if trip.try_mode else
+             "括号里是配置里填的车次（标「手填」的只填了分钟数）；其余按 "
+             f"{trip.travel_date} {trip.travel_time} 出发，用高德公共交通最快方案估算。"
+             "高德跨城只给直达火车，不含火车换乘和刚开通的线路，估算可能偏差很大，请用 12306 核对。")
+    if used_line:
+        intro += (f"标「{LINE_NOTE}」的，没有车次、分钟数，也没有高德估算：用每站 {trip.station_cost:.0f} 分钟"
+                  f"加上直线公里 × {LINE_DETOUR_FACTOR:g} ÷ {LINE_SPEED_KMH:g} 公里/小时 估，"
+                  "不知道哪条线有直达车，只保证方向不会错得离谱。")
+    return ["## 不开车的人到各站要多久" if trip.outbound else "## 不开车的人回各站要多久", "", intro, "", *lines, ""]
 
 
 def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelines) -> str:
@@ -313,7 +354,8 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
         L += ["## 结论", "",
               f"- 不开车的 {total} 人里，**{best.carried} 人能搭上顺风车**，"
               f"车主合计多绕 {fmt_min(best.detour)}。",
-              f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or '不需要坐到站'}**。",
+              f"- 建议坐到的站：**{'、'.join(pts[s].name for s in sorted(used)) or ('没有合适的站，见下面需要单独安排的人' if best.stranded else '不需要坐到站')}**。",
+              *([f"- 最晚到达时间 {clock(trip.arrive_by)}：填了车次的人，不会安排在这之后才到的走法。"] if trip.arrive_by is not None else []),
               "", "## 推荐方案", "", *describe(best, tls.out[0], pts, trip), "",
               *paragraphs(rank_basis(best)), *time_table(tls.out[0], trip), ""]
         for i, pl in enumerate(plans[1:], 2):
@@ -334,7 +376,7 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
     else:
         L += ["## 候选站对比", "",
               "每个车主「只在这个站送一次」时比直接回家多绕多久；✅ 表示在他能接受的绕路范围内。", "",
-              *station_table(trip, pts, T, trip.back), ""]
+              *station_table(trip, pts, T, trip.back), "", *rail_section(trip)]
     if trip.discovered:
         L += ["> 候选站是自动搜出来的（含普速站）。确认后把需要的站写进配置的 `[[stations]]`，"
               "可以去掉没有高铁的站、补上漏掉的站。", ""]
@@ -347,13 +389,13 @@ def render(trip: Trip, pts: dict[str, Place], T, plans: list[Plan], tls: Timelin
     else:
         L += ["- 时间来自高德驾车测距，接近查询时的路况，当天可能有出入；车次和到站时间请在 12306 核对。"]
     if trip.outbound:
-        L += ["- 不开车的人到各站的用时：用配置里填的车次和分钟数；没填的按默认每站 "
-              f"{trip.station_cost:.0f} 分钟算。"] if trip.try_mode else [
-              "- 不开车的人到各站的用时：优先用配置里手填的 `rail_min`，否则用高德公共交通估算；"
+        L += ["- 不开车的人到各站的用时：用配置里填的车次和分钟数；没填的按直线距离估算"
+              f"（每站 {trip.station_cost:.0f} 分钟加上直线公里 × {LINE_DETOUR_FACTOR:g} ÷ {LINE_SPEED_KMH:g} 公里/小时）。"] if trip.try_mode else [
+              "- 不开车的人到各站的用时：优先用配置里手填的 `rail_min`，否则用高德公共交通估算，都没有就按直线距离估算；"
               "估算不准或想排除某些站时，给他填 `stations` 或 `rail_min`。"]
     else:
-        L += ["- 乘客从各站坐的车：用配置里填的回程车次（`return_trains`）；没填的人不限制赶车，到站用时按默认每站 "
-              f"{trip.station_cost:.0f} 分钟算。"]
+        L += ["- 乘客从各站坐的车：用配置里填的回程车次（`return_trains`）；没填的人不限制赶车，只去配置里填过车次或分钟数的站，"
+              "用时按填的分钟数；都没填，用高德公共交通估算，再没有按直线距离估算。"]
     spans = (["去程从出门算到目的地"] if trip.outbound else []) + (["返程从离场算到家"] if trip.back else [])
     L += [f"- 每个人的用时是约数，只用来看各人的负担，不参与排序。{'，'.join(spans)}；坐火车的人含车次用时和去车站、候车的时间（和排序里「乘客到上车点」的口径一样）。"
           "「比自己单独走」：车主和直达比；不开车的人和自己从最快的站单独打车比，多出来的通常是等人或为了搭车、拼车去了慢一点的站。"]
