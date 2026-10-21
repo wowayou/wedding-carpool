@@ -35,7 +35,7 @@ export function previewParts(cfg) {
   add(cfg.venue?.location, 'venue', cfg.venue?.name || '目的地', 10);
   (cfg.stations || []).forEach((s) => add(s.location, 'st', s.name || '车站', 6));
   (cfg.people || []).forEach((p) => add(p.location, p.car_seats !== undefined ? 'car' : 'home', `${p.name || '成员'}${p.car_seats !== undefined ? '（开车）' : ''}`, 7));
-  return { points, lines: [], circles: [], fit: { points: points.map((p) => [p.lng, p.lat]), padding: 40, maxZoom: 11 } };
+  return { points, lines: [], circles: [], fit: { points: points.map((p) => [p.lng, p.lat]), padding: 48, maxZoom: 11 } };
 }
 
 // 算出方案后：车主路线、不接人的直达路线（虚线）、打车（虚线）、用到的站高亮、附注「多绕 X 分钟」。
@@ -82,7 +82,7 @@ export function planParts(result, view) {
     });
   }
   const focus = [lg('venue'), ...[...used].map(lg), ...routes.flatMap((r) => [...(r.path ? r.path.map(swap) : [lg(`car:${r.driver}`)]), ...(r.direct_path ? r.direct_path.map(swap) : [])])];
-  return { points, lines, circles: [], fit: { points: focus, padding: 24 } };
+  return { points, lines, circles: [], fit: { points: focus, padding: 48 } };
 }
 
 // 找站过程：搜过的圈、车主路线（点线）、候选站（只在悬停时显示名字）
