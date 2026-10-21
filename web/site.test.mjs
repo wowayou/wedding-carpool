@@ -75,10 +75,10 @@ test('页眉操作区有「试玩」(/try) 和「新建行程」(/#create)，页
   } finally { rmSync(b.dir, { recursive: true, force: true }); }
 });
 
-// 静态页面的 CSP 在构建时（web/build.mjs）检查：script-src 只能是本站、cdnjs 和内嵌脚本的哈希
+// 静态页面的 CSP 在构建时（web/build.mjs）检查：script-src 只能是本站和内嵌脚本的哈希
 test('方案页的 CSP 不放行第三方统计脚本（隐私页写了 Cloudflare 自动注入的会被拦下）', () => {
   const worker = readFileSync('web/worker.js', 'utf8');
-  const share = worker.slice(worker.indexOf('const SHARE_CSP'), worker.indexOf('];', worker.indexOf('const SHARE_CSP')));
+  const share = worker.slice(worker.indexOf('const SHARE_CSP'), worker.indexOf("].join('; ')", worker.indexOf('const SHARE_CSP')));
   assert.match(share, /"script-src 'unsafe-inline'"/); // 没有 cdnjs（v3.16 起方案页不加载 Leaflet）
   assert.match(share, /"style-src 'unsafe-inline'"/);
   assert.match(share, /"frame-src 'self'"/); // 地图在 /map/share 的 iframe 里
@@ -153,7 +153,13 @@ test('构建产物里有试玩页 try.html 和 try-trip.json，CSP 与编辑页�
   assert.doesNotMatch(edit, /leaflet/i);
   assert.ok(existsSync('dist/vendor/marked/marked.min.js') && existsSync('dist/vendor/pyodide/pyodide.mjs'));
   const demo = readFileSync('dist/demo.html', 'utf8');
-  assert.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(demo)[1], /cdnjs\.cloudflare\.com/, '示例页还用 Leaflet（cdnjs），到切片 3 才改');
+  // 示例页（切片 3）：地图是同源 iframe 里的 /map，只多一条 frame-src 'self'；不放行 cdnjs、高德，更没有 unsafe-eval
+  const demoCsp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(demo)[1];
+  assert.match(demoCsp, /frame-src 'self'(;|$)/);
+  assert.doesNotMatch(demoCsp, /cdnjs|autonavi|amap|unsafe-eval/);
+  assert.doesNotMatch(demo, /leaflet|cdnjs|autonavi/i);
+  assert.match(demo, /<iframe id="mapFrame"/);
+  assert.match(demo, /frame\.src = '\/map'/);
 });
 
 // config-fields.json：网页版 Python 在 py/ 下读，编辑页从站点根目录取；Pyodide 要把它和 .py 一起加载

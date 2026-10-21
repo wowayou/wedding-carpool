@@ -128,12 +128,14 @@ test('地图提示框里的名字都经过转义（审计 S-13）', () => {
   }
 });
 
-// 编辑页的地图 v3.16 起在 /map 的 iframe 里（高德 JS API 自己带标识和审图号），不再有 attribution；方案页模板和示例页要等切片 3 才改
-test('两处还在用 Leaflet 的地图（方案页模板、示例页）的角标一样，带审图号', () => {
-  const attr = (text) => [...text.matchAll(/attribution:\s*'([^']*)'/g)].map((m) => m[1]);
-  const found = [['share.py', readFileSync('share.py', 'utf8')], ['web/demo.html', readFileSync('web/demo.html', 'utf8')]].map(([name, text]) => [name, attr(text)]);
-  for (const [name, list] of found) assert.equal(list.length, 1, `${name} 里的 attribution 应该正好一处`);
-  assert.deepEqual(new Set(found.map(([, list]) => list[0])), new Set(['© 高德地图 GS(2025)5996号']));
+// v3.16：三处地图（编辑页、方案页、示例页）都画在 /map 或 /map/share 的 iframe 里，页面自己不再画角标。
+// 带底图时，高德标识和审图号由高德 JS API 在地图上自己画，我们不能把它藏起来；不带底图的画法没有底图，也就不需要审图号（角上写「没有底图」）。
+test('地图角标：页面自己不再写 attribution 和审图号；也没有藏起高德标识、版权的样式或参数', () => {
+  const pages = ['share.py', 'web/demo.html', 'web/editor/map.js', 'ui.html'];
+  for (const f of pages) assert.doesNotMatch(readFileSync(f, 'utf8'), /attribution|GS\(20\d\d\)|autonavi|appmaptile/i, `${f} 里不该再有 Leaflet 的角标或瓦片地址`);
+  const hide = /amap-logo|amap-copyright|logoVisible|copyright/i;
+  for (const f of ['web/map/frame.css', 'web/map/amap-render.js', 'web/map/frame.js', 'web/map.html']) assert.doesNotMatch(readFileSync(f, 'utf8'), hide, `${f} 不能藏高德自己画的标识和审图号`);
+  assert.match(readFileSync('web/map/plain-render.js', 'utf8'), /没有底图/, '不带底图的画法在角上写明没有底图');
 });
 
 test('成员的出发地下面有提示（不用精确、可以粘贴分享的位置），目的地写明可以粘贴分享的位置', () => {
@@ -634,9 +636,8 @@ test('推荐车站的样式：通用的在 design.css（c- 组件），页面里
   // 可交互元素有焦点样式
   assert.match(mine, /\.c-pick-row:has\(input:focus-visible\)/);
   assert.match(mine, /\.c-fold > summary:focus-visible/);
-  // 自建 Leaflet pane 里的 svg：全局的 svg { max-width: 100% } 会把它压成 0 宽
   assert.match(css, /\nimg, svg \{ max-width: 100%; \}/);
-  assert.match(css, /\.leaflet-pane svg \{ max-width: none !important; max-height: none !important; \}/);
+  assert.doesNotMatch(css, /leaflet/i, '地图画在 /map 的 iframe 里，样式表里不再有 Leaflet 的规则（v3.16）');
   assert.doesNotMatch(page, /\.leaflet-sug-pane/);
 });
 

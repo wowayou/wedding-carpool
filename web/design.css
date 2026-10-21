@@ -430,9 +430,8 @@ dialog.c-drawer { position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); 
 .c-fold__row > span:first-child { min-width: 0; }
 .c-fold__row small { display: block; color: var(--ink-2); }
 
-/* ---------- 13. 地图（Leaflet） ---------- */
-/* 页面自己用 map.createPane 建的图层：Leaflet 只给自带的 overlayPane 取消了 svg 的最大宽度，上面的 svg { max-width: 100% } 会把它们压成 0 宽 */
-.leaflet-pane svg { max-width: none !important; max-height: none !important; }
+/* ---------- 13. 地图 ---------- */
+/* 地图画在单独的页面里（/map、/map/share，样式见 web/map/frame.css），这里不需要样式 */
 
 /* ---------- 14. 打印：隐藏站点页头页脚，强制浅色 ---------- */
 @media print {

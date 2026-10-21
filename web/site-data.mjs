@@ -19,11 +19,11 @@ const HOME_DESC = '多人从不同城市去同一个地方（婚礼、聚会、�
 // ---------- 页面清单 ----------
 // path：站内路径；src：源文件（相对仓库根目录）；out：dist 下的文件；index：是否可被收录（进 sitemap、不加 noindex）
 // ld：要生成的结构化数据，faq:键 和 howto:键 对应下面的数据；crumbs：面包屑（最后一项是当前页，不写路径）
-// ownHead：页面自己写了 <head>（示例方案页由生成器产出），只补公共部分；csp：这一页要额外放行的 CSP 来源（见 web/build.mjs）
+// ownHead：页面自己写了 <head>（示例方案页由生成器产出），只补公共部分；csp：这一页要额外放行的 CSP 来源（见 web/build.mjs；frame：地图 iframe，只放行本站）
 export const PAGES = [
   { path: '/', src: 'web/landing.html', out: 'index.html', index: true, og: 'website',
     title: '拼车出行规划：多人异地出行，算出谁顺路接谁、在哪个高铁站接', description: HOME_DESC, ld: ['webapp', 'faq:home'] },
-  { path: '/demo', src: 'web/demo.html', out: 'demo.html', index: true, ownHead: true, csp: 'leaflet',
+  { path: '/demo', src: 'web/demo.html', out: 'demo.html', index: true, ownHead: true, csp: 'frame',
     title: '宏村示例酒店 出行方案', description: '示例方案页：虚构的行程，看看每个人一张时间线、地图上的路线和车站长什么样。' },
   { path: '/guide', src: 'web/pages/guide.html', out: 'guide.html', index: true, og: 'article',
     title: '使用指南：从新建行程到发布方案页 · 拼车出行规划',
