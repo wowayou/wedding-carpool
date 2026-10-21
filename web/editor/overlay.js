@@ -66,9 +66,10 @@ export function askName() {
 }
 
 // Key 遮罩：额度用完时改用自己的 Key、主动改用、这台设备没填 Key、更换 Key 共用一个。Key 在浏览器里验证并存本机，见 wire.js
-function openKeyBox(title, text) {
+function openKeyBox(title, text, later = false) {
   $('#quotaTitle').textContent = title;
   $('#quotaText').textContent = text;
+  $('#quotaLater').hidden = !later; // 「明天再来」只对额度用完说
   $('#quotaErr').textContent = '';
   $('#quotaKey').value = '';
   showOverlay('quotaBox', '#quotaKey');
@@ -76,7 +77,7 @@ function openKeyBox(title, text) {
 
 export function showQuota(message, proactive = false) {
   if (proactive) openKeyBox('改用自己的高德 Key', '换成你自己的 Key 后，这个行程的高德调用都算在你的额度里，不再占用站点的公共额度。');
-  else openKeyBox('今天的高德额度用完了', `${message} 已经停下，没有继续调用。`);
+  else openKeyBox('今天的高德额度用完了', `${/[。！？]$/.test(message) ? message : `${message}。`}已经停下，没有继续调用。`, true);
 }
 
 // 自己的 Key 模式：这台设备上没填 Key（missing），或者想换一个（change）

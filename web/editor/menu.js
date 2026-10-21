@@ -6,7 +6,7 @@ import { alertDialog, confirmDialog, promptDialog, toast } from './dialogs.js';
 import { closeDrawer, openDrawer } from './drawer.js';
 import { renderForm } from './form.js';
 import { showOwnKey, showQuota } from './overlay.js';
-import { clearOwnKey, keyTail, ownKey, ownUsage } from './own-key.js';
+import { OWN_DAILY_LIMIT, clearOwnKey, keyTail, ownKey, ownUsage } from './own-key.js';
 import { me, state, trip } from './state.js';
 import { markDirty } from './sync.js';
 import { fmtDate, fmtTime } from './time.js';
@@ -34,11 +34,11 @@ export function openMenu() {
         ${trip.editCode ? '<button class="c-btn c-btn--link" id="editCodeClear">清除编辑口令</button> ' : ''}<span class="muted">4 到 20 个字符。设了以后，新设备打开编辑链接要先输口令，正在编辑的其他人会被请出、重新输入。和方案页的访问口令是两回事</span></span>
       <span>保留到</span><span class="muted">${expires ? fmtDate(trip.expiresAt) : '—'}：出行日期过后 60 天、或连续 180 天没人编辑，自动删除（取较晚的）</span>
       <span>高德额度</span><span class="muted">${ownMode
-        ? `用你自己的高德 Key，由这台设备的浏览器直接请求高德，今天在这台设备上已请求 ${ownUsage(state.tripId).count} 次；有每日上限，只为防程序出错，到上限会停下提示`
+        ? `用你自己的 Key，今天这台设备已请求 ${ownUsage(state.tripId).count} 次（每天最多 ${OWN_DAILY_LIMIT} 次，只防程序出错）`
         : `用站点的公共额度，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用<br><button class="c-btn c-btn--link" id="ownKeyBtn">改用自己的高德 Key</button>`}</span>
       ${ownMode ? `<span>这台设备上的高德 Key</span><span>${myKey
         ? `已填（尾号 ${esc(keyTail(myKey))}） <button class="c-btn c-btn--link" id="ownKeyChange">更换</button> <button class="c-btn c-btn--link" id="ownKeyClear">清除</button>`
-        : '还没填 <button class="c-btn c-btn--link" id="ownKeyFill">填写</button>'}<br><span class="muted">Key 只存在这台设备的浏览器里，本站服务器不保存、不经手；计算时浏览器直接请求高德，高德能看到你的 IP；换设备要再填一次；需要「Web服务」类型的 Key，不能设 IP 白名单</span></span>` : ''}
+        : '还没填 <button class="c-btn c-btn--link" id="ownKeyFill">填写</button>'}<br><span class="muted">只存在这台设备的浏览器里，本站服务器不保存；计算时浏览器直接请求高德</span></span>` : ''}
     </div>
     <p class="muted">编辑链接等于编辑权限，只发给一起规划的人。要给大家看结果，发「方案页」链接就行，不用发编辑链接。<a href="/privacy" target="_blank" rel="noopener">数据存了什么、存多久、可能的费用</a></p>` : ''}
     <h3 class="sec">关于</h3>

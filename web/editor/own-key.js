@@ -10,6 +10,7 @@ const USAGE_STORE = 'carpool_own_usage'; // { 行程编号: { day, count } }：�
 const KEY_RE = /^[0-9a-f]{32}$/i;
 export const QUOTA_RE = /DAILY_QUERY_OVER_LIMIT|QUOTA_PLAN_RUN_OUT|SERVICE_EXPIRED/;
 export const QPS_RE = /QPS|TOO_FREQUENT/;
+export const OWN_DAILY_LIMIT = 3000; // 每台设备、每个行程、每个北京日最多请求几次，和 browser.py 的 OWN_DAILY_LIMIT 一致（测试核对）
 
 export const ownKey = () => { const k = store.get(KEY_STORE, ''); return typeof k === 'string' && KEY_RE.test(k) ? k : ''; };
 export const saveOwnKey = (key) => store.set(KEY_STORE, key);

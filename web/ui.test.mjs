@@ -1027,6 +1027,8 @@ test('v3.15 配额和频率的判断口径：worker.js、编辑页模块、首�
   assert.match(landing, /const KEY_STORE = 'carpool_amap_key';/);
   assert.equal(own.KEY_STORE, 'carpool_amap_key');
   assert.match(landing, /\^\[0-9a-f\]\{32\}\$/i);
+  // 每天的请求上限：编辑页显示的数和计算线程（browser.py）用的数一致
+  assert.equal(own.OWN_DAILY_LIMIT, Number(/^OWN_DAILY_LIMIT = (\d+)/m.exec(readFileSync('browser.py', 'utf8'))?.[1]));
 });
 
 // 在线版的计算线程：记下发给它的消息
