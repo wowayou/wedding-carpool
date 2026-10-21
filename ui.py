@@ -131,7 +131,7 @@ def make_handler(app: App):
             url = urllib.parse.urlsplit(self.path)
             if url.path in ("/", "/index.html"):
                 self._send(200, (HERE / "ui.html").read_bytes(), "text/html; charset=utf-8")
-            elif url.path == "/map" and MAP_PAGE.exists():
+            elif url.path in ("/map", "/map/share") and MAP_PAGE.exists():  # /map/share：方案页预览（/share）嵌的；本地版没有 Referer 规则，同一份页面
                 self._send(200, render_map_page(js_key()), "text/html; charset=utf-8")
             elif url.path in STATIC_FILES and STATIC_FILES[url.path][0].exists():
                 path, ctype = STATIC_FILES[url.path]
