@@ -462,9 +462,10 @@ class BrowserBridgeTest(unittest.TestCase):
         self.assertEqual(amap.cache, {})
 
     def test_share_tooltips_are_plain_text(self):
-        # 地图提示框里的成员名字不能当 HTML 解析（审计 S-13）
-        self.assertNotIn(".bindTooltip(r.label", share.TEMPLATE)
-        self.assertIn("function text(s)", share.TEMPLATE)
+        # 地图提示框里的成员名字不能当 HTML 解析（审计 S-13）：v3.16 起方案页只把名字当数据放进 scene，不拼 HTML；画的是地图页面（web/map/frame.js 用 textContent）
+        self.assertNotIn("innerHTML", share.TEMPLATE)
+        self.assertNotIn("insertAdjacentHTML", share.TEMPLATE)
+        self.assertIn("tooltip: r.label", share.TEMPLATE)
 
     def test_browser_single_request_posts_query_in_body(self):
         # 单个请求也走 POST 批量接口：地点文字不出现在网址上（审计 S-12/D-14）
@@ -2389,11 +2390,18 @@ class ShareStyleTest(unittest.TestCase):
     def test_rendered_page_is_self_contained_dark_and_print_light(self):
         cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")])
         html = share.render_share(service.compute(cfg, FakeAmap()), 0)
-        self.assertNotIn('href="/design.css"', html)  # 沙箱里只放行 cdnjs 和高德瓦片
+        self.assertNotIn('href="/design.css"', html)  # 沙箱里只放行内嵌的脚本、样式和本站的地图 iframe
         self.assertNotIn("@@", html)  # 占位都换掉了
         self.assertIn("prefers-color-scheme: dark", html)
         self.assertIn(f"--bg: {share.DARK['--bg']};", html)
-        self.assertIn("var(--map-filter)", html)  # 深色下降低瓦片亮度，只作用在瓦片层
+        # 地图（v3.16）：iframe 嵌 /map/share，没有 Leaflet、cdnjs、高德瓦片；深色由 scene 的 theme 交给地图页面，页面里没有瓦片滤镜
+        self.assertIn('<iframe id="mapFrame"', html)
+        self.assertIn("frame.src = '/map/share'", html)
+        self.assertIn('referrerpolicy="no-referrer-when-downgrade"', html)
+        self.assertIn("postMessage({ type: 'scene'", html)
+        for gone in ("leaflet", "Leaflet", "cdnjs", "autonavi", "L.map"):
+            self.assertNotIn(gone, html)
+        self.assertIn("beforeprint", html)  # 打印一律用浅色
         print_css = html[html.index("@media print"):html.index("</style>")]
         self.assertIn(f"--bg: {share.LIGHT['--bg']};", print_css)  # 打印时强制回到浅色
         for text in ("border-left-style: double", "border-left-style: dotted"):  # 黑白打印靠线型区分开车、坐车、打车

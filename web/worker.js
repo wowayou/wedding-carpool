@@ -464,13 +464,17 @@ function codePage(id, message, status) {
 }
 
 // 方案页的 HTML 是编辑者的浏览器生成后上传的，不能当作本站的可信代码：放进沙箱（独立的匿名来源），
-// 读不到本站的 localStorage（里面有编辑链接）和 Cookie；只放行地图要用的脚本、样式和瓦片，不能发请求、不能提交表单
+// 读不到本站的 localStorage（里面有编辑链接）和 Cookie；只放行内嵌的脚本和样式，不能发请求、不能提交表单。
+// 地图（v3.16 起）画在 iframe 里：frame-src 只放本站，嵌的是 /map/share（高德 JS API 在那个页面里加载，方案页自己不放行任何外部脚本）。
+// 旧方案页（3.15 以前发布的）HTML 里还是 Leaflet：脚本、样式、瓦片都被这套策略拦下，页面里「Leaflet 没加载就把地图那块藏起来」的老逻辑生效，
+// 所以旧方案页不显示地图，其余照常；重新发布一次就有新地图。
 const SHARE_CSP = [
   'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-top-navigation-by-user-activation',
   "default-src 'none'",
-  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com",
-  "style-src 'unsafe-inline' https://cdnjs.cloudflare.com",
-  'img-src data: https://cdnjs.cloudflare.com https://*.is.autonavi.com https://carpool.eigentime.org', // 最后一个是站点图标
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  'img-src data: https://carpool.eigentime.org', // 后一个是站点图标
+  "frame-src 'self'",
   "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "frame-ancestors 'none'",
 ].join('; ');
 

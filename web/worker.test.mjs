@@ -1245,6 +1245,15 @@ test('SHARE_CSP 允许沙箱里的方案页加载站点图标', async () => {
   assert.match((await call(share.url)).headers.get('content-security-policy'), /img-src [^;]*https:\/\/carpool\.eigentime\.org/);
 });
 
+test('SHARE_CSP：地图改用 iframe 嵌本站的 /map/share，去掉 cdnjs 和高德瓦片', async () => {
+  const t = await newTrip();
+  const share = (await publish(t, '<!doctype html><p>hi</p>')).share;
+  const csp = (await call(share.url)).headers.get('content-security-policy');
+  assert.match(csp, /frame-src 'self'(;|$)/);
+  assert.match(csp, /script-src 'unsafe-inline'(;|$)/);
+  assert.doesNotMatch(csp, /cdnjs|autonavi|amap|unsafe-eval/);
+});
+
 test('改动状态的请求：跨站 Origin 被拒，同源和不带 Origin 的放行', async () => {
   const evil = 'https://evil.example';
   const same = 'https://carpool.test';

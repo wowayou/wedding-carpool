@@ -79,7 +79,10 @@ test('页眉操作区有「试玩」(/try) 和「新建行程」(/#create)，页
 test('方案页的 CSP 不放行第三方统计脚本（隐私页写了 Cloudflare 自动注入的会被拦下）', () => {
   const worker = readFileSync('web/worker.js', 'utf8');
   const share = worker.slice(worker.indexOf('const SHARE_CSP'), worker.indexOf('];', worker.indexOf('const SHARE_CSP')));
-  assert.match(share, /"script-src 'unsafe-inline' https:\/\/cdnjs\.cloudflare\.com"/);
+  assert.match(share, /"script-src 'unsafe-inline'"/); // 没有 cdnjs（v3.16 起方案页不加载 Leaflet）
+  assert.match(share, /"style-src 'unsafe-inline'"/);
+  assert.match(share, /"frame-src 'self'"/); // 地图在 /map/share 的 iframe 里
+  assert.doesNotMatch(share, /cdnjs|autonavi|amap\.com|unsafe-eval/, '方案页的策略不放行 cdnjs、高德，更不放开 unsafe-eval');
   assert.doesNotMatch(worker, /cloudflareinsights/);
 });
 
