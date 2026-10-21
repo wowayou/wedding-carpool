@@ -18,7 +18,7 @@ import { locLine, placeField, stationRow } from './editor/form.js';
 import { view } from './editor/map.js';
 import { importConfig } from './editor/menu.js';
 import { planStats } from './editor/results.js';
-import { resetState, state, sug } from './editor/state.js';
+import { resetState, state, sug, trip } from './editor/state.js';
 import * as suggest from './editor/suggest.js';
 import { clearSugLayer, initSugLayer, syncSugLayer } from './editor/sug-layer.js';
 import { scheduleSync, syncSave } from './editor/sync.js';
@@ -927,4 +927,250 @@ test('批量删除车站：每行一个复选框（试玩也有），两个站�
   assert.match(del, /confirmDialog\([^)]*\{ title: `删除 \$\{doomed\.length\} 个候选站？`, okText: '删除', danger: true \}/);
   assert.match(del, /if \(left\.has\(s\.name\)\) continue;/);
   assert.match(src.wire, /else if \(t\.dataset\.stDel !== undefined\) deleteStations\(\);/);
+});
+
+// ---------- v3.15：自己的高德 Key 只留在浏览器里 ----------
+const workerSrc = readFileSync('web/worker.js', 'utf8');
+const landing = readFileSync('web/landing.html', 'utf8');
+const KEY = 'b'.repeat(32);
+
+// 假 localStorage：测试里按需装上，用完拿掉（别的测试要求导入模块时没有这个全局）
+function withStorage(fn, { broken = false } = {}) {
+  const map = new Map();
+  globalThis.localStorage = broken
+    ? { getItem() { throw new Error('禁用了'); }, setItem() { throw new Error('禁用了'); }, removeItem() { throw new Error('禁用了'); } }
+    : { getItem: (k) => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k) };
+  return Promise.resolve(fn(map)).finally(() => { delete globalThis.localStorage; });
+}
+
+test('v3.15 Key 存取：存在 localStorage，读不到当作没填；尾号只露 4 位；读写都不抛错', async () => {
+  const own = await import('./editor/own-key.js');
+  await withStorage((map) => {
+    assert.equal(own.ownKey(), '');
+    own.saveOwnKey(KEY);
+    assert.equal(own.ownKey(), KEY);
+    assert.equal(own.keyTail(KEY), 'bbbb');
+    assert.equal([...map.keys()].join(), 'carpool_amap_key');
+    own.clearOwnKey();
+    assert.equal(own.ownKey(), '');
+  });
+  await withStorage(() => { // 隐私模式、禁用存储：不抛错
+    assert.equal(own.ownKey(), '');
+    assert.doesNotThrow(() => own.saveOwnKey(KEY));
+    assert.doesNotThrow(() => own.clearOwnKey());
+    assert.deepEqual(own.ownUsage('abcdefghij'), { day: bjDate(Date.now()), count: 0 });
+  }, { broken: true });
+  assert.equal(own.ownKey(), ''); // 没有 localStorage 这个全局也一样
+  await withStorage((map) => { // 存进去的不是 32 位十六进制的（被别的脚本写坏）：不当作有 Key
+    map.set('carpool_amap_key', JSON.stringify('short'));
+    assert.equal(own.ownKey(), '');
+  });
+});
+
+test('v3.15 每天用量：按行程分开记，只留今天的，只增不减', async () => {
+  const own = await import('./editor/own-key.js');
+  const today = bjDate(Date.now());
+  await withStorage((map) => {
+    assert.deepEqual(own.ownUsage('aaaaaaaaaa'), { day: today, count: 0 });
+    own.noteOwnUsage('aaaaaaaaaa', { day: today, count: 12 });
+    own.noteOwnUsage('bbbbbbbbbb', { day: today, count: 5 });
+    own.noteOwnUsage('aaaaaaaaaa', { day: today, count: 7 }); // 别的标签页报的更少：不往回退
+    assert.equal(own.ownUsage('aaaaaaaaaa').count, 12);
+    assert.equal(own.ownUsage('bbbbbbbbbb').count, 5);
+    map.set('carpool_own_usage', JSON.stringify({ aaaaaaaaaa: { day: '2000-01-01', count: 2999 } })); // 昨天的不算
+    assert.equal(own.ownUsage('aaaaaaaaaa').count, 0);
+    own.noteOwnUsage('cccccccccc', { day: today, count: 1 });
+    assert.deepEqual(Object.keys(JSON.parse(map.get('carpool_own_usage'))), ['cccccccccc'], '旧日期的记录顺手清掉');
+    own.noteOwnUsage('dddddddddd', { day: '2000-01-01', count: 9 }); // 不是今天的上报不记
+    assert.equal(own.ownUsage('dddddddddd').count, 0);
+  });
+});
+
+test('v3.15 验证 Key：先看格式，再浏览器直连高德「北京市」；配额用完、频率超限不算无效', async () => {
+  const own = await import('./editor/own-key.js');
+  const seen = [];
+  const reply = (body) => { globalThis.fetch = async (url, opts) => { seen.push([String(url), opts]); if (body instanceof Error) throw body; return { json: async () => body }; }; };
+  try {
+    for (const bad of ['', 'short', 'z'.repeat(32), `${KEY}0`]) assert.match(await own.verifyKey(bad), /32 位的字母和数字/);
+    assert.equal(seen.length, 0, '格式不对不请求高德');
+    reply({ status: '1', info: 'OK' });
+    assert.equal(await own.verifyKey(KEY), '');
+    const [url, opts] = seen[0];
+    assert.equal(url, `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent('北京市')}&key=${KEY}`);
+    assert.ok(!opts?.credentials || opts.credentials === 'omit', '不带 Cookie');
+    for (const info of ['DAILY_QUERY_OVER_LIMIT', 'QUOTA_PLAN_RUN_OUT', 'SERVICE_EXPIRED', 'CUQPS_HAS_EXCEEDED_THE_LIMIT', 'TOO_FREQUENT']) {
+      reply({ status: '0', info });
+      assert.equal(await own.verifyKey(KEY), '', info);
+    }
+    reply({ status: '0', info: 'INVALID_USER_KEY' });
+    const bad = await own.verifyKey(KEY);
+    assert.match(bad, /INVALID_USER_KEY/);
+    assert.match(bad, /Web服务/);
+    assert.ok(!bad.includes(KEY), '错误提示里不回显 Key');
+    reply(new TypeError('Failed to fetch'));
+    assert.match(await own.verifyKey(KEY), /暂时连不上高德/);
+    assert.ok(!(await own.verifyKey(KEY)).includes(KEY));
+  } finally { restoreFetch(); }
+});
+
+test('v3.15 配额和频率的判断口径：worker.js、编辑页模块、首页脚本三处一致', async () => {
+  const own = await import('./editor/own-key.js');
+  const literal = (text, name) => new RegExp(`const ${name} = (/.*?/);`).exec(text)?.[1];
+  for (const name of ['QUOTA_RE', 'QPS_RE']) {
+    const server = literal(workerSrc, name);
+    assert.ok(server, `worker.js 里找不到 ${name}`);
+    assert.equal(literal(readFileSync('web/editor/own-key.js', 'utf8'), name), server, `own-key.js 的 ${name}`);
+    assert.equal(literal(landing, name), server, `landing.html 的 ${name}`);
+    assert.equal(own[name].source, new Function(`return ${server}`)().source);
+  }
+  // 首页要验证的 Key 格式、存 Key 的名字也和编辑页一致
+  assert.match(landing, /const KEY_STORE = 'carpool_amap_key';/);
+  assert.equal(own.KEY_STORE, 'carpool_amap_key');
+  assert.match(landing, /\^\[0-9a-f\]\{32\}\$/i);
+  // 每天的请求上限：编辑页显示的数和计算线程（browser.py）用的数一致
+  assert.equal(own.OWN_DAILY_LIMIT, Number(/^OWN_DAILY_LIMIT = (\d+)/m.exec(readFileSync('browser.py', 'utf8'))?.[1]));
+});
+
+// 在线版的计算线程：记下发给它的消息
+function fakeWorkerClass() {
+  return class FakeWorker {
+    constructor() { FakeWorker.created += 1; }
+    postMessage(m) {
+      FakeWorker.sent.push(m);
+      if (m.method === 'init') return;
+      queueMicrotask(() => {
+        if (FakeWorker.report) this.onmessage({ data: { ownUsed: FakeWorker.report } });
+        this.onmessage({ data: { id: m.id, result: {} } });
+      });
+    }
+    terminate() {}
+    static created = 0;
+    static sent = [];
+    static report = null;
+  };
+}
+
+test('v3.15 自己的 Key 模式：这台设备没有 Key 时，计算和搜索在发出前就报「还没填」，不去连计算环境', async () => {
+  const FakeWorker = fakeWorkerClass();
+  const realWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  try {
+    await withStorage(async () => {
+      fresh('online');
+      state.tripId = 'abcdefghij';
+      trip.mode = 'own';
+      for (const call of [() => backend.plan({}), () => backend.search('北京', null, false)]) {
+        await assert.rejects(call(), (e) => e.needKey === true && /这个行程用自己的高德 Key，这台设备上还没填/.test(e.message));
+      }
+      assert.equal(FakeWorker.sent.length, 0);
+    });
+  } finally { globalThis.Worker = realWorker; }
+});
+
+test('v3.15 自己的 Key 模式：初始化把本机的 Key 交给计算线程；每次调用带今天已用次数；线程报的用量写回本机；改了模式或换了 Key 重新初始化', async () => {
+  const FakeWorker = fakeWorkerClass();
+  const realWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  const own = await import('./editor/own-key.js');
+  const today = bjDate(Date.now());
+  try {
+    await withStorage(async () => {
+      fresh('online');
+      state.tripId = 'abcdefghij';
+      trip.mode = 'own';
+      own.saveOwnKey(KEY);
+      own.noteOwnUsage('abcdefghij', { day: today, count: 40 });
+      FakeWorker.report = { day: today, count: 43 };
+      await backend.search('北京', null, false);
+      const [init, call] = FakeWorker.sent;
+      assert.deepEqual(plain(init), { id: 0, method: 'init', args: { base: '/api/t/abcdefghij', own_key: KEY } });
+      assert.equal(call.method, 'search');
+      assert.deepEqual(plain(call.args.own_used), { day: today, count: 40 });
+      assert.equal(own.ownUsage('abcdefghij').count, 43, '线程报的用量写回本机');
+      await backend.search('上海', null, false);
+      assert.equal(FakeWorker.sent.filter((m) => m.method === 'init').length, 1, '没变就不重新初始化');
+      assert.equal(FakeWorker.sent.at(-1).args.own_used.count, 43);
+      // 换了 Key：重新初始化
+      own.saveOwnKey('c'.repeat(32));
+      await backend.search('上海', null, false);
+      assert.equal(FakeWorker.sent.filter((m) => m.method === 'init').at(-1).args.own_key, 'c'.repeat(32));
+      // 改回公共额度：不带 Key，也不带用量
+      trip.mode = 'owner';
+      await backend.search('上海', null, false);
+      const last = FakeWorker.sent.filter((m) => m.method === 'init').at(-1);
+      assert.deepEqual(plain(last.args), { base: '/api/t/abcdefghij' });
+      assert.ok(!('own_used' in FakeWorker.sent.at(-1).args));
+      assert.equal(FakeWorker.created, 1, '同一个计算线程');
+    });
+  } finally { globalThis.Worker = realWorker; }
+});
+
+test('v3.15 公共额度和试玩的行程不碰本机的 Key', async () => {
+  const FakeWorker = fakeWorkerClass();
+  const realWorker = globalThis.Worker;
+  globalThis.Worker = FakeWorker;
+  const own = await import('./editor/own-key.js');
+  try {
+    await withStorage(async () => {
+      own.saveOwnKey(KEY);
+      fresh('online');
+      state.tripId = 'abcdefghij';
+      trip.mode = 'owner';
+      await backend.search('北京', null, false);
+      assert.deepEqual(plain(FakeWorker.sent[0].args), { base: '/api/t/abcdefghij' });
+      FakeWorker.sent = [];
+      fresh('try');
+      await backend.plan({});
+      assert.deepEqual(plain(FakeWorker.sent[0].args), { try: true });
+      assert.ok(!JSON.stringify(FakeWorker.sent).includes(KEY));
+    });
+  } finally { globalThis.Worker = realWorker; }
+});
+
+test('v3.15 改用自己的 Key：只通知服务端改模式，请求体不带 Key', async () => {
+  fresh('online');
+  state.tripId = 'abcdefghij';
+  const calls = stubFetch(() => ({ mode: 'own' }));
+  try {
+    assert.equal(backend.setOwnKey.length, 0);
+    await backend.setOwnKey(KEY); // 就算调用方传了，也不能发出去
+    assert.equal(calls[0][0], '/api/t/abcdefghij/own-mode');
+    assert.deepEqual(JSON.parse(calls[0][1].body), {});
+    assert.ok(!JSON.stringify(calls).includes(KEY));
+  } finally { restoreFetch(); }
+});
+
+test('v3.15 编辑页的界面：「更多」里显示本机 Key 状态，缺 Key 和额度用完共用 Key 遮罩，验证在浏览器里做', () => {
+  assert.match(src.menu, /这台设备上的高德 Key/);
+  for (const id of ['ownKeyChange', 'ownKeyClear', 'ownKeyFill']) assert.ok(src.menu.includes(`id="${id}"`), `缺少 #${id}`);
+  assert.match(src.menu, /尾号/);
+  assert.match(src.overlay, /export function showOwnKey\(/);
+  assert.match(src.overlay, /export function showKeyOverlay\(/);
+  assert.match(src.overlay, /这个行程用自己的高德 Key，这台设备上还没填/);
+  for (const name of ['actions', 'results', 'suggest']) {
+    assert.match(src[name], /showKeyOverlay\(e\)/, `${name}.js 出错时要走 showKeyOverlay`);
+    assert.doesNotMatch(src[name], /caps\.quota && isQuotaError/, `${name}.js 不再自己判断额度错误`);
+  }
+  // 遮罩里的按钮：先在浏览器里验证并存本机，再通知服务端改模式（不传 Key）
+  const handler = /\$\('#quotaKeyBtn'\)\.addEventListener\('click'[\s\S]*?\n  \}\);\n/.exec(src.wire)?.[0] || '';
+  assert.match(handler, /verifyKey\(/);
+  assert.match(handler, /saveOwnKey\(/);
+  assert.match(handler, /backend\.setOwnKey\(\)/);
+  assert.doesNotMatch(handler, /setOwnKey\([^)]/);
+  assert.match(ui, /Key 只存在这台设备的浏览器里/);
+  assert.doesNotMatch(ui, /Key 只保存在服务器上/);
+});
+
+test('v3.15 首页：新建「自己的 Key」先在浏览器里验证并存本机，请求体只表明模式、不带 Key', () => {
+  const script = scripts(landing).at(-1);
+  assert.doesNotThrow(() => new vm.Script(script));
+  assert.match(script, /https:\/\/restapi\.amap\.com\/v3\/geocode\/geo\?/);
+  assert.match(script, /own: true/);
+  assert.doesNotMatch(script, /amapKey:\s*\$\('#amapKey'\)/, '请求体不能带 Key');
+  assert.doesNotMatch(script, /body[^\n]*amapKey|JSON\.stringify\([^)]*amapKey/);
+  const submit = /\$\('#create'\)\.addEventListener\('submit'[\s\S]*?\n\}\);\n/.exec(script)?.[0] || '';
+  assert.ok(submit.indexOf('verifyKey(') >= 0 && submit.indexOf('verifyKey(') < submit.indexOf("fetch('/api/trips'"), '先验证，再新建');
+  assert.ok(submit.indexOf('store.set(KEY_STORE') > submit.indexOf('verifyKey(') && submit.indexOf('store.set(KEY_STORE') < submit.indexOf("fetch('/api/trips'"), '验证通过后存本机，再新建');
+  assert.doesNotMatch(landing, /Key 只保存在服务器上/);
+  assert.match(landing, /只存在这台设备的浏览器里/);
 });

@@ -15,6 +15,7 @@ import { narrow, setPane } from './layout.js';
 import { declutter, drawPlan, drawPreview, initMap, refreshMap, view } from './map.js';
 import { importConfig, openMenu, refreshMenu } from './menu.js';
 import { hideOverlay } from './overlay.js';
+import { saveOwnKey, verifyKey } from './own-key.js';
 import { setPath } from './paths.js';
 import { renderTabs, runPlan } from './results.js';
 import { isStale, outboundOn, state, sug, trip } from './state.js';
@@ -39,10 +40,14 @@ export function bindEvents() {
     btn.disabled = true;
     $('#quotaErr').textContent = '正在验证…';
     try {
-      await backend.setOwnKey($('#quotaKey').value.trim());
-      trip.mode = 'own';
+      const key = $('#quotaKey').value.trim();
+      const problem = await verifyKey(key); // 在浏览器里直接问高德，Key 不经过本站服务器
+      if (problem) throw new Error(problem);
+      saveOwnKey(key);
+      if (trip.mode !== 'own') { await backend.setOwnKey(); trip.mode = 'own'; } // 只通知服务端改模式，不带 Key
       hideOverlay('quotaBox');
-      toast('已改用你的高德 Key，可以接着算了', 4000);
+      refreshMenu();
+      toast('已存到这台设备，可以接着算了', 4000);
     } catch (e) {
       $('#quotaErr').textContent = e.message;
     } finally {

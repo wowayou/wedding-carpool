@@ -65,7 +65,7 @@
           <label class="c-field" id="codeField"><span class="c-field__label">邀请码（站长发的）</span><input class="c-input" type="text" id="code" autocomplete="off" spellcheck="false"></label>
           <div id="keyField" hidden>
             <label class="c-field"><span class="c-field__label">高德 Web 服务 Key</span><input class="c-input" type="text" id="amapKey" autocomplete="off" placeholder="32 位字母和数字"></label>
-            <p class="c-hint">在 <a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只保存在服务器上，不会再显示在网页里；调用次数算在你自己的免费额度里，用完会停下提示。</p>
+            <p class="c-hint">在 <a href="https://console.amap.com/" target="_blank" rel="noopener">高德开放平台控制台</a>（个人需实名）→ 应用管理 → 创建应用 → 添加 Key，服务平台选「Web服务」，不要设 IP 白名单。Key 只存在这台设备的浏览器里，本站服务器不保存、不经手；计算时浏览器直接请求高德，高德能看到你的 IP，调用次数算在你自己的免费额度里，用完会停下提示。换设备要再填一次。</p>
           </div>
           <button class="c-btn c-btn--primary c-btn--lg c-btn--block" id="createBtn">新建并开始编辑</button>
           <p class="c-hint">没有邀请码？<a href="/try">先试玩一下</a>：用虚构的行程点一遍，不保存，也不用高德 Key。</p>
@@ -108,6 +108,24 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 隐私模式 */ } } };
 
+// 自己的 Key：在浏览器里直接问高德验证，通过后只存本机（localStorage），新建行程的请求里不带 Key。
+// 下面三个常量和 web/worker.js、web/editor/own-key.js 保持一致（web/ui.test.mjs 核对）
+const KEY_STORE = 'carpool_amap_key';
+const QUOTA_RE = /DAILY_QUERY_OVER_LIMIT|QUOTA_PLAN_RUN_OUT|SERVICE_EXPIRED/;
+const QPS_RE = /QPS|TOO_FREQUENT/;
+// 返回错误说明，可用时返回空；配额用完、频率超限不算 Key 无效
+async function verifyKey(key) {
+  if (!/^[0-9a-f]{32}$/i.test(key)) return '高德 Key 应该是 32 位的字母和数字';
+  const check = await fetch(`https://restapi.amap.com/v3/geocode/geo?${new URLSearchParams({ address: '北京市', key })}`, { credentials: 'omit' })
+    .then((r) => r.json()).catch(() => null);
+  if (!check) return '暂时连不上高德，稍后再试';
+  const info = String(check.info || '');
+  if (String(check.status) !== '1' && !QUOTA_RE.test(info) && !QPS_RE.test(info)) {
+    return `这个高德 Key 用不了（${info}）。需要「Web服务」类型的 Key，且不能设置 IP 白名单`;
+  }
+  return '';
+}
+
 function renderTrips() {
   const list = store.get('carpool_trips', []);
   $('#mine').hidden = !list.length;
@@ -133,10 +151,16 @@ $('#create').addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!creating) return;
   const byKey = document.querySelector('input[name=mode]:checked').value === 'key';
-  const body = { name: $('#name').value.trim(), ...(byKey ? { amapKey: $('#amapKey').value.trim() } : { code: $('#code').value }) };
+  const body = { name: $('#name').value.trim(), ...(byKey ? { own: true } : { code: $('#code').value }) };
   $('#createBtn').disabled = true;
   $('#err').textContent = '';
   try {
+    if (byKey) {
+      const key = $('#amapKey').value.trim();
+      const problem = await verifyKey(key);
+      if (problem) throw new Error(problem);
+      store.set(KEY_STORE, key);
+    }
     const res = await fetch('/api/trips', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || res.statusText);

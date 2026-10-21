@@ -5,8 +5,7 @@
 // 绑定：ROOM（Durable Object，每个行程一个实例）、USAGE（Durable Object，全站计数）、
 //       DATA（KV：方案页、高德配额标记）、ASSETS（静态文件 dist/）
 // 密钥：AMAP_KEY（站长的高德 Key）、ACCESS_CODE（站长口令，只用于登录管理页，不能当邀请码）
-// 可选变量：TRIP_DAILY_LIMIT（用站长 Key 的行程每天的高德调用上限）、OWN_TRIP_DAILY_LIMIT（自带 Key 的行程每天上限，
-//          只防程序出错时无限调用）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）、
+// 可选变量：TRIP_DAILY_LIMIT（用公共额度的行程每天的高德调用上限）、OWNER_DAILY_LIMIT（站长 Key 全站每天上限）、
 //          OWNER_MONTHLY_LBS_BUDGET / OWNER_MONTHLY_SEARCH_BUDGET（站长 Key 每月的路线测距类、搜索类预算）
 
 import pkg from '../package.json' with { type: 'json' }; // 版本号：/api/env 返回，页脚和更新记录也用它
@@ -22,7 +21,6 @@ const MAX_PAGE_BYTES = 2 * 1024 * 1024;
 const HISTORY_LIMIT = 100; // 每个行程保留的历史版本数
 const HISTORY_MERGE_MS = 2 * 60 * 1000; // 同一个人 2 分钟内的连续保存合并成一个历史版本
 const DEFAULT_TRIP_DAILY_LIMIT = 1500;
-const DEFAULT_OWN_TRIP_DAILY_LIMIT = 3000;
 const DEFAULT_OWNER_DAILY_LIMIT = 4000;
 // 站长 Key 每月预算，按高德的两类分别记；比高德的免费额度留一点余量。高德没有查剩余额度的接口，只能自己计数
 const DEFAULT_OWNER_MONTHLY_BUDGET = { lbs: 140000, search: 4500 };
@@ -155,7 +153,7 @@ const FORWARDABLE = [
   ['GET', /^\/history$/], ['GET', /^\/history\/\d+$/], ['POST', /^\/restore$/], ['POST', /^\/rename$/],
 ];
 // 行程实例里只接受内部请求的路径
-const ROOM_INTERNAL_ONLY = new Set(['/init', '/exists', '/auth', '/whoami', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/amap-refund', '/set-key', '/delete']);
+const ROOM_INTERNAL_ONLY = new Set(['/init', '/exists', '/auth', '/whoami', '/published', '/share', '/rotate', '/edit-code', '/amap-take', '/amap-refund', '/set-own-mode', '/delete']);
 const TRIP_MODES = new Set(['owner', 'own']);
 
 // ---------- 流量统计：写入 Usage 实例，不拖慢响应 ----------
@@ -206,43 +204,25 @@ async function servePage(request, env, url, ctx) {
 
 // ---------- 新建行程 ----------
 
-// 用一次真实调用确认 Key 可用；配额或频率问题不算 Key 无效。返回错误说明，可用时返回空
-async function amapKeyProblem(amapKey) {
-  if (!/^[0-9a-f]{32}$/i.test(amapKey)) return '高德 Key 应该是 32 位的字母和数字';
-  const check = await fetch(`https://restapi.amap.com/v3/geocode/geo?${new URLSearchParams({ address: '北京市', key: amapKey })}`)
-    .then((r) => r.json()).catch(() => null);
-  if (!check) return '暂时连不上高德，稍后再试';
-  const info = String(check.info || '');
-  if (String(check.status) !== '1' && !QUOTA_RE.test(info) && !QPS_RE.test(info)) {
-    return `这个高德 Key 用不了（${info}）。需要「Web服务」类型的 Key，且不能设置 IP 白名单`;
-  }
-  return '';
-}
-
 const tripNameOf = (body) => String(body.name || '').trim().slice(0, 60) || '未命名行程';
 
 async function createTrip(request, env, ctx) {
   const body = await readJson(request, 4096);
   const name = tripNameOf(body);
-  let mode, amapKey = null;
+  let mode;
   const code = String(body.code || '').trim();
   if (code) {
     mode = 'owner'; // 邀请码：用站点的公共额度（站长口令只能登录管理页，不能当邀请码）
-  } else if (body.amapKey) {
-    amapKey = String(body.amapKey).trim();
-    mode = 'own';
+  } else if (body.own === true) {
+    mode = 'own'; // 自己的 Key：Key 只在用户的浏览器里，请求里带了 amapKey 也不读
   } else {
-    return json({ error: '要么填邀请码，要么填自己的高德 Key' }, 400);
+    return json({ error: '要么填邀请码，要么选用自己的高德 Key' }, 400);
   }
-  // 先过新建限速（暂停新建、单个来源每天、全站每天），再验 Key 或邀请码：没通过的不对外请求，也不能拿它无限验 Key
+  // 先过新建限速（暂停新建、单个来源每天、全站每天），再验邀请码
   const usage = usageOf(env);
   const gate = await usage.fetch(internal('/create', { ip: await ipHashOf(request, env) }));
   if (!gate.ok) return gate;
   const refund = () => usage.fetch(internal('/create-refund', {})); // 没建成：退还全站名额（单个来源的计数保留，用来限制乱试）
-  if (mode === 'own') {
-    const problem = await amapKeyProblem(amapKey);
-    if (problem) { await refund(); return json({ error: problem }, 400); }
-  }
   const id = randomId(10), key = randomId(24);
   let invite = null, tripLimit = null;
   if (code) {
@@ -251,7 +231,7 @@ async function createTrip(request, env, ctx) {
     if (!res.ok) { await refund(); await sleep(800); return res; } // 拖慢猜邀请码
     ({ invite, tripLimit } = await res.json());
   }
-  await roomOf(env, id).fetch(internal('/init', { id, name, mode, amapKey, invite, tripLimit, keyHash: await sha256(key) }));
+  await roomOf(env, id).fetch(internal('/init', { id, name, mode, invite, tripLimit, keyHash: await sha256(key) }));
   track(env, ctx, { kind: 'create', source: code ? 'invite' : 'own' });
   return json({ id, key, url: `/t/${id}#k=${key}` });
 }
@@ -262,7 +242,7 @@ async function adminCreateTrip(request, env, ctx) {
   const gate = await usageOf(env).fetch(internal('/create', { ip: null, admin: true }));
   if (!gate.ok) return gate;
   const id = randomId(10), key = randomId(24);
-  await roomOf(env, id).fetch(internal('/init', { id, name, mode: 'owner', amapKey: null, invite: null, tripLimit: null, keyHash: await sha256(key) }));
+  await roomOf(env, id).fetch(internal('/init', { id, name, mode: 'owner', invite: null, tripLimit: null, keyHash: await sha256(key) }));
   await usageOf(env).fetch(internal('/admin-log', { op: '用公共额度新建行程', target: id }));
   track(env, ctx, { kind: 'create', source: 'admin' });
   return json({ id, key, url: `/t/${id}#k=${key}` });
@@ -367,13 +347,8 @@ async function tripApi(request, env, url, id, sub, ctx) {
   if (sub === '/share' && request.method === 'POST') return shareSettings(request, env, room, auth);
   if (sub === '/rotate-key' && request.method === 'POST') return rotateKey(request, env, url, room, auth, id);
   if (sub === '/edit-code' && request.method === 'POST') return editCodeSettings(request, room, secure, auth, id);
-  if (sub === '/key' && request.method === 'POST') { // 改用自己的高德 Key：公共额度用完时可以接着算
-    const amapKey = String((await readJson(request, 1024)).amapKey || '').trim();
-    const who = await room.fetch(internal('/whoami', {}, auth)); // 先确认是这个行程的编辑者，再对外验 Key
-    if (!who.ok) return who;
-    const problem = await amapKeyProblem(amapKey);
-    if (problem) return json({ error: problem }, 400);
-    return room.fetch(internal('/set-key', { amapKey }, auth));
+  if (sub === '/own-mode' && request.method === 'POST') { // 改用自己的高德 Key：公共额度用完时可以接着算；Key 只在浏览器里，这里只改模式
+    return room.fetch(internal('/set-own-mode', {}, auth));
   }
   if (sub === '/delete' && request.method === 'POST') {
     const res = await room.fetch(internal('/delete', {}, auth));
@@ -607,12 +582,11 @@ async function tripAmap(request, env, url, room, auth, sub) {
   const grant = await room.fetch(internal('/amap-take', {
     n: misses.length,
     limit: limitOf(env, 'TRIP_DAILY_LIMIT', DEFAULT_TRIP_DAILY_LIMIT),
-    ownLimit: limitOf(env, 'OWN_TRIP_DAILY_LIMIT', DEFAULT_OWN_TRIP_DAILY_LIMIT),
   }, auth));
   if (!grant.ok) return grant;
-  const { mode, amapKey, granted: tripGranted, limit: tripLimit, usedBefore, invite, tripId, createdAt } = await grant.json();
+  const { granted: tripGranted, limit: tripLimit, usedBefore, invite, tripId, createdAt } = await grant.json();
   const tripLimitError = { status: '0', info: 'TRIP_DAILY_LIMIT', error: `这个行程今天的高德调用已到上限（${tripLimit} 次），明天再试` };
-  const apiKey = mode === 'own' ? amapKey : env.AMAP_KEY;
+  const apiKey = env.AMAP_KEY;
   const keyHash = (await sha256(apiKey || '')).slice(0, 16);
   const quotaKeyOf = (i) => `amap_quota_until:${keyHash}:${quotaClass(items[i].path)}`; // 按 Key 和接口类别记，互不影响
   const blockedOf = (i) => ({
@@ -630,7 +604,7 @@ async function tripAmap(request, env, url, room, auth, sub) {
   for (const i of misses) if (spent.has(quotaClass(items[i].path))) results[i] = blockedOf(i);
   for (const i of open.slice(tripGranted)) results[i] = tripLimitError;
   let todo = open.slice(0, tripGranted);
-  if (mode !== 'own' && todo.length) { // 不是自带 Key 的一律走公共额度的全部护栏（宁可拦错，不能放过）
+  if (todo.length) { // 走代理的一律是公共额度，全部护栏都要过（宁可拦错，不能放过）
     // 站长 Key：按类别向全站计数领取（每日总上限、每月预算、应急开关都在那边判断）
     const want = { lbs: 0, search: 0 };
     for (const i of todo) want[quotaClass(items[i].path)] += 1;
@@ -721,6 +695,10 @@ export class ConfigRoom {
     const path = url.pathname;
     if (path === '/init') return this.init(await request.json());
     const meta = await this.storage.get('meta');
+    if (meta && 'amapKey' in meta) { // 3.15 以前存下的自己的 Key：收到任何请求都删掉（懒删除）
+      delete meta.amapKey;
+      await this.storage.put('meta', meta);
+    }
     // 全站计数核对邀请码名额时问：这个行程还在不在、是不是还用这个邀请码的公共额度（不用密钥，只回答这两件事）
     if (path === '/exists') return json({ exists: Boolean(meta), invite: meta && meta.mode !== 'own' ? meta.invite || null : null });
     if (!meta) { // 行程已删除或到期：和「密钥不对」分开，让编辑页能提示。行程 id 是 10 位随机串，说出「存在与否」不会帮人猜到什么
@@ -789,10 +767,10 @@ export class ConfigRoom {
       if (usage?.day === today) await this.storage.put('usage', { day: today, count: Math.max(0, usage.count - (Number(body.n) || 0)) });
       return json({ ok: true });
     }
-    if (path === '/set-key') {
-      Object.assign(meta, { mode: 'own', amapKey: body.amapKey });
+    if (path === '/set-own-mode') {
+      meta.mode = 'own';
       await this.storage.put('meta', meta);
-      await this.storage.delete('usage'); // 之前的用量算在站长 Key 上，换 Key 后重新计
+      await this.storage.delete('usage'); // 之前的用量算在公共额度上，改用自己的 Key 后不再经过这里
       await this.tellUsage('/invite-release', { id: meta.id }); // 不再用公共额度，还回邀请码的名额
       this.broadcast({ type: 'meta', name: meta.name, mode: 'own' });
       return json({ mode: 'own' });
@@ -849,14 +827,14 @@ export class ConfigRoom {
     }
   }
 
-  async init({ id, name, mode, amapKey, keyHash, invite = null, tripLimit = null }) {
+  async init({ id, name, mode, keyHash, invite = null, tripLimit = null }) {
     if (await this.storage.get('meta')) return json({ error: '行程已存在' }, 409);
     const limitOk = tripLimit === null || (Number.isInteger(tripLimit) && tripLimit > 0 && tripLimit <= 100000);
-    if (!TRIP_MODES.has(mode) || !/^[0-9a-f]{64}$/.test(String(keyHash)) || !limitOk || (mode === 'own') !== Boolean(amapKey)) {
+    if (!TRIP_MODES.has(mode) || !/^[0-9a-f]{64}$/.test(String(keyHash)) || !limitOk) {
       return json({ error: '行程参数不对' }, 400);
     }
     const now = Date.now();
-    const meta = { id, name, mode, amapKey, keyHash, invite, tripLimit, createdAt: now, pageAt: null, shareId: randomId(10), shareCode: null };
+    const meta = { id, name, mode, keyHash, invite, tripLimit, createdAt: now, pageAt: null, shareId: randomId(10), shareCode: null };
     await this.storage.put('meta', meta);
     await this.storage.put('state', { config: structuredClone(EMPTY_CONFIG), version: 1, at: now, author: '' });
     await this.schedule(meta, EMPTY_CONFIG, now);
@@ -978,17 +956,19 @@ export class ConfigRoom {
     return json({ name: meta.name });
   }
 
-  async take(meta, { n = 0, limit, ownLimit }) {
-    // 自带 Key 用单独的上限；用邀请码建的行程按邀请码设的上限
-    if (meta.mode === 'own') limit = ownLimit;
-    else if (meta.tripLimit) limit = meta.tripLimit;
+  async take(meta, { n = 0, limit }) {
+    // 自己的 Key 由浏览器直接调用高德，不走代理（旧页面还在走代理时给明确的错误）
+    if (meta.mode === 'own') {
+      return json({ error: '这个行程用自己的 Key，由浏览器直接调用；请刷新页面', status: '0', info: 'OWN_KEY_IN_BROWSER' }, 409);
+    }
+    if (meta.tripLimit) limit = meta.tripLimit; // 用邀请码建的行程按邀请码设的上限
     const today = beijingDay();
     const usage = await this.storage.get('usage');
     const used = usage?.day === today ? usage.count : 0;
     const granted = Math.max(0, Math.min(Number(n) || 0, limit - used));
     if (granted) await this.storage.put('usage', { day: today, count: used + granted });
     return json({
-      mode: meta.mode, amapKey: meta.mode === 'own' ? meta.amapKey : null, invite: meta.mode === 'own' ? null : meta.invite || null,
+      invite: meta.invite || null,
       granted, limit, usedBefore: used, used: used + granted, tripId: meta.id, createdAt: meta.createdAt,
     });
   }

@@ -7,14 +7,14 @@ import { alertDialog, confirmDialog, toast } from './dialogs.js';
 import { renderSteps } from './form.js';
 import { narrow, setPane } from './layout.js';
 import { drawPlan } from './map.js';
-import { showQuota } from './overlay.js';
+import { showKeyOverlay } from './overlay.js';
 import { startProgress, stopProgress } from './progress.js';
 import { updateStale } from './stale.js';
 import { configHash, state } from './state.js';
 import { clearSugLayer } from './sug-layer.js';
 import { save } from './sync.js';
 import { fmtMin } from './time.js';
-import { $, esc, isQuotaError } from './util.js';
+import { $, esc } from './util.js';
 import { decorateProblems, problemsDialog, validate } from './validate.js';
 
 // 报告是 Markdown，里面有成员名字等用户输入：HTML 一律当文本输出，链接只放行 http(s)，不渲染图片，防止脚本注入。
@@ -35,7 +35,7 @@ export function setupMarked() {
 }
 
 export async function reportError(action, e) {
-  if (caps.quota && isQuotaError(e.message)) { showQuota(e.message); return false; }
+  if (showKeyOverlay(e)) return false;
   if (e.envFail) {
     return confirmDialog(`${e.message}\n可能是网络不太好，或者浏览器拦住了计算环境的文件。你填的内容都还在，不会丢。`, { title: '计算环境没加载出来', okText: '重试' });
   }

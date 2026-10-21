@@ -157,3 +157,24 @@ test('构建产物里有 config-fields.json（根目录和 py/ 各一份），�
   assert.ok(files.includes('config-fields.json') && files.includes('browser.py'));
   for (const name of files) assert.equal(readFileSync(`dist/py/${name}`, 'utf8'), readFileSync(name, 'utf8'), name);
 });
+
+// v3.15：自己的高德 Key 只在浏览器里，用户的浏览器直接请求高德。只有要发这个请求的页面（首页验证 Key、编辑页和计算线程计算）放行 restapi.amap.com，别的页面一律不放行
+test('CSP：只有首页、编辑页和试玩页的 connect-src 放行 restapi.amap.com，其余页面和方案页不放行', { skip: !existsSync('.cache/vendor') && '没有依赖缓存，先 npm run build 一次' }, () => {
+  const child = spawnSync(process.execPath, ['web/build.mjs'], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const AMAP = 'https://restapi.amap.com';
+  const connectOf = (html) => /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1].split('; ').find((d) => d.startsWith('connect-src '));
+  const allowed = new Set(['index.html', 'edit.html', 'try.html']);
+  const files = htmlFiles('dist');
+  for (const f of allowed) assert.ok(files.includes(f), `dist 里没有 ${f}`);
+  for (const f of files) {
+    const connect = connectOf(readFileSync(join('dist', f), 'utf8'));
+    assert.ok(connect, `${f} 没有 connect-src`);
+    if (allowed.has(f)) assert.equal(connect, `connect-src 'self' ${AMAP}`, `${f} 只放行本站和 ${AMAP}`);
+    else assert.equal(connect, "connect-src 'self'", `${f} 不该放行高德`);
+  }
+  // 方案页（Worker 生成）不能发任何请求；管理页、隐私页、指南也在上面的循环里
+  assert.match(readFileSync('web/worker.js', 'utf8'), /"connect-src 'none'"/);
+  // 计算线程是同源的模块 Worker，没有单独的 CSP 响应头：它的请求受创建它的编辑页和试玩页的策略约束，两页都放行了
+  assert.ok(!existsSync('dist/_headers') || !/restapi\.amap\.com/.test(readFileSync('dist/_headers', 'utf8')));
+});

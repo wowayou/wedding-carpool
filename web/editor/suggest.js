@@ -7,13 +7,13 @@ import { caps } from './caps.js';
 import { toast } from './dialogs.js';
 import { openDrawer, sugOpen } from './drawer.js';
 import { fieldOf } from './fields.js';
-import { showQuota } from './overlay.js';
+import { showKeyOverlay } from './overlay.js';
 import { startProgress, stopProgress } from './progress.js';
 import { outboundOn, sgSettingsKey, state, sug } from './state.js';
 import { syncSugLayer } from './sug-layer.js';
 import { markDirty } from './sync.js';
 import { fmtMin } from './time.js';
-import { $, esc, isQuotaError, same } from './util.js';
+import { $, esc, same } from './util.js';
 
 export const SG_PREFIX = 'options.suggest.';
 export const SG_GROUPS = [
@@ -298,7 +298,7 @@ export async function runSugEstimate() {
     sug.est = null;
     sug.estErr = e.message;
     renderSugEst();
-    if (caps.quota && isQuotaError(e.message)) showQuota(e.message);
+    if (!e.needKey) showKeyOverlay(e); // 自动估算时没填 Key：只在估算栏写明，不弹遮罩（点「开始找」才弹）
   }
 }
 
@@ -412,7 +412,7 @@ export async function runSuggest() {
     stopProgress();
     sug.running = false;
     sug.error = e;
-    if (caps.quota && isQuotaError(e.message)) showQuota(e.message);
+    showKeyOverlay(e);
   }
   if (!sugOpen()) { syncSugLayer(true); return; }
   renderSugEst();

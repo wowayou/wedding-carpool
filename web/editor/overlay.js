@@ -2,8 +2,9 @@
 // 打开：记住原来的焦点，把焦点放到第一个输入框或主按钮，背景（主区域、侧边面板、冲突提示）设 inert，Tab 键只在遮罩里循环。
 // 关闭：恢复 inert，焦点还给原来的元素。只有额度遮罩可以关闭，支持 Esc；取名和口令必须完成，不支持 Esc。
 
+import { caps } from './caps.js';
 import { me } from './state.js';
-import { $, store } from './util.js';
+import { $, isQuotaError, store } from './util.js';
 
 export const OVERLAY_IDS = ['nameBox', 'codeBox', 'denied', 'gone', 'quotaBox'];
 export const openOverlays = () => OVERLAY_IDS.map((id) => $(`#${id}`)).filter((el) => !el.hidden);
@@ -64,13 +65,31 @@ export function askName() {
   });
 }
 
-export function showQuota(message, proactive = false) {
-  $('#quotaTitle').textContent = proactive ? '改用自己的高德 Key' : '今天的高德额度用完了';
-  $('#quotaText').textContent = proactive
-    ? '换成你自己的 Key 后，这个行程的高德调用都算在你的额度里，不再占用站点的公共额度。'
-    : `${message} 已经停下，没有继续调用。`;
+// Key 遮罩：额度用完时改用自己的 Key、主动改用、这台设备没填 Key、更换 Key 共用一个。Key 在浏览器里验证并存本机，见 wire.js
+function openKeyBox(title, text, later = false) {
+  $('#quotaTitle').textContent = title;
+  $('#quotaText').textContent = text;
+  $('#quotaLater').hidden = !later; // 「明天再来」只对额度用完说
   $('#quotaErr').textContent = '';
   $('#quotaKey').value = '';
   showOverlay('quotaBox', '#quotaKey');
+}
+
+export function showQuota(message, proactive = false) {
+  if (proactive) openKeyBox('改用自己的高德 Key', '换成你自己的 Key 后，这个行程的高德调用都算在你的额度里，不再占用站点的公共额度。');
+  else openKeyBox('今天的高德额度用完了', `${/[。！？]$/.test(message) ? message : `${message}。`}已经停下，没有继续调用。`, true);
+}
+
+// 自己的 Key 模式：这台设备上没填 Key（missing），或者想换一个（change）
+export function showOwnKey(why) {
+  if (why === 'change') openKeyBox('更换这台设备上的高德 Key', '新的 Key 只存在这台设备的浏览器里，本站服务器不保存、不经手；这个行程接着用它。');
+  else openKeyBox('这台设备上还没填高德 Key', '这个行程用自己的高德 Key，这台设备上还没填。填上以后才能计算和搜索，已经填的内容都在。');
+}
+
+// 计算、搜索出错时的统一入口：这台设备没填 Key，或公共额度用完了，就弹 Key 遮罩。返回是否弹了
+export function showKeyOverlay(e) {
+  if (e.needKey) { showOwnKey('missing'); return true; }
+  if (caps.quota && isQuotaError(e.message)) { showQuota(e.message); return true; }
+  return false;
 }
 

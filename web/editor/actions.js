@@ -4,12 +4,12 @@ import { backend } from './backend.js';
 import { caps } from './caps.js';
 import { confirmDialog, toast } from './dialogs.js';
 import { pickedRows, refreshDerived, renderForm, rerenderKeepingFocus, syncPicked } from './form.js';
-import { showQuota } from './overlay.js';
+import { showKeyOverlay } from './overlay.js';
 import { getPath, setPath } from './paths.js';
 import { parseShared } from './shared-place.js';
 import { state } from './state.js';
 import { markDirty } from './sync.js';
-import { esc, isQuotaError } from './util.js';
+import { esc } from './util.js';
 
 export const candidates = {}; // 每个输入框最近一次的搜索结果
 
@@ -54,7 +54,7 @@ export async function search(base, textKey) {
       : '<button disabled>没找到，换个说法试试</button>';
   } catch (e) {
     box.innerHTML = `<button disabled>${esc(e.message)}</button>`;
-    if (caps.quota && isQuotaError(e.message)) showQuota(e.message);
+    showKeyOverlay(e);
   }
 }
 

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import time
 import tomllib
 import unittest
@@ -484,6 +485,145 @@ class BrowserBridgeTest(unittest.TestCase):
 
     def test_browser_urls_go_through_proxy_without_key(self):
         self.assertEqual(browser.BrowserAmap("/api/t/abc")._url("/v3/distance", "a=1"), "/api/t/abc/amap/v3/distance?a=1")
+
+
+class DirectAmapTest(unittest.TestCase):
+    """自己的高德 Key 模式（v3.15）：Key 只在浏览器里，计算线程直接请求 restapi.amap.com。"""
+
+    KEY = "a" * 32
+
+    def amap(self, **kwargs):
+        return browser.DirectAmap(self.KEY, pause=0, **kwargs)
+
+    def test_url_points_at_amap_with_the_key(self):
+        url = self.amap()._url("/v3/distance", "a=1")
+        self.assertEqual(url, f"https://restapi.amap.com/v3/distance?a=1&key={self.KEY}")
+
+    def test_fetch_is_a_direct_get_and_parses_json(self):
+        amap = self.amap()
+        with mock.patch.object(amap, "_xhr_get", return_value='{"status": "1", "info": "OK", "geocodes": []}') as get:
+            self.assertIsNone(amap.geocode("杭州东站"))
+        self.assertTrue(get.call_args[0][0].startswith("https://restapi.amap.com/v3/geocode/geo?"))
+        self.assertIn(f"key={self.KEY}", get.call_args[0][0])
+        self.assertEqual(amap.calls, 1)
+
+    def test_satisfies_the_interface_and_inherits_the_rules_of_amap(self):
+        amap = self.amap()
+        self.assertIsInstance(amap, carpool.Amap)
+        self.assertIsInstance(amap, carpool.AmapLike)
+        self.assertIsInstance(amap, carpool.AmapPrefetch)
+        self.assertEqual(amap.cache, {})
+        # 配额用完：沿用 Amap 的判断，直接停下
+        with mock.patch.object(amap, "_xhr_get", return_value='{"status": "0", "info": "DAILY_QUERY_OVER_LIMIT"}'):
+            with self.assertRaises(carpool.QuotaError):
+                amap.geocode("某地")
+        # 频率超限：沿用 Amap 的重试
+        replies = ['{"status": "0", "info": "CUQPS_HAS_EXCEEDED_THE_LIMIT"}', '{"status": "1", "info": "OK", "geocodes": []}']
+        with mock.patch.object(amap, "_xhr_get", side_effect=replies) as get, mock.patch("time.sleep"):
+            amap.geocode("另一地")
+        self.assertEqual(get.call_count, 2)
+
+    def test_network_errors_are_retried_and_never_mention_the_key(self):
+        amap = self.amap()
+        with mock.patch.object(amap, "_xhr_get", side_effect=ConnectionError("网络连不上高德")) as get, mock.patch("time.sleep"):
+            with self.assertRaises(carpool.AmapError) as cm:
+                amap.geocode("某地")
+        self.assertEqual(get.call_count, carpool.RETRIES + 1)
+        self.assertNotIn(self.KEY, str(cm.exception))
+
+    def test_xhr_get_wraps_failures_without_the_url(self):
+        class FakeXhr:
+            status, responseText, fail_send = 200, '{"status": "1"}', None
+
+            @classmethod
+            def new(cls):
+                return cls()
+
+            def open(self, method, url, is_async):
+                self.method, self.url, self.is_async = method, url, is_async
+                FakeXhr.last = self
+
+            def send(self):
+                if FakeXhr.fail_send:
+                    raise RuntimeError(f"NetworkError at {self.url}")
+
+        fake_js = types.ModuleType("js")
+        fake_js.XMLHttpRequest = FakeXhr
+        with mock.patch.dict(sys.modules, {"js": fake_js}):
+            amap = self.amap()
+            self.assertEqual(amap._xhr_get(f"https://restapi.amap.com/v3/x?key={self.KEY}"), '{"status": "1"}')
+            self.assertEqual((FakeXhr.last.method, FakeXhr.last.is_async), ("GET", False))
+            FakeXhr.fail_send = True
+            with self.assertRaises(ConnectionError) as cm:
+                amap._xhr_get(f"https://restapi.amap.com/v3/x?key={self.KEY}")
+            self.assertNotIn(self.KEY, str(cm.exception))
+            FakeXhr.fail_send, FakeXhr.status = None, 0  # 同步 XHR 被拦（CORS、断网）时 status 是 0
+            with self.assertRaises(ConnectionError) as cm:
+                amap._xhr_get(f"https://restapi.amap.com/v3/x?key={self.KEY}")
+            self.assertNotIn(self.KEY, str(cm.exception))
+
+    def test_daily_limit_stops_and_reports_usage(self):
+        reports = []
+        amap = self.amap(used=2, limit=4)
+        ok = '{"status": "1", "info": "OK", "geocodes": []}'
+        with mock.patch.object(amap, "_xhr_get", return_value=ok) as get, mock.patch.object(browser, "_post_own_used", side_effect=lambda day, n: reports.append((day, n))):
+            amap.geocode("甲")
+            amap.geocode("乙")
+            self.assertEqual(amap.used, 4)
+            with self.assertRaises(carpool.QuotaError) as cm:
+                amap.geocode("丙")
+        self.assertEqual(get.call_count, 2)  # 到上限后不再发请求
+        self.assertIn("4", str(cm.exception))
+        self.assertIn("明天", str(cm.exception))
+        self.assertNotRegex(str(cm.exception), "额度|配额|上限")  # 不能让编辑页误弹「公共额度用完」
+        self.assertEqual([n for _, n in reports], [3, 4])
+        self.assertTrue(all(day == amap.day for day, _ in reports))
+
+    def test_default_daily_limit_is_3000(self):
+        self.assertEqual(browser.OWN_DAILY_LIMIT, 3000)
+        self.assertEqual(self.amap().limit, 3000)
+
+    def test_usage_from_the_page_counts_and_new_day_resets(self):
+        amap = self.amap()
+        today = amap.day
+        amap.sync_used(today, 120)
+        self.assertEqual(amap.used, 120)
+        amap.sync_used(today, 50)  # 别的标签页报的比自己少：不往回退
+        self.assertEqual(amap.used, 120)
+        amap.sync_used("2000-01-01", 2999)  # 不是今天的用量不算
+        self.assertEqual(amap.used, 120)
+        amap.day = "2000-01-01"  # 过了北京时间零点：从 0 重新计
+        with mock.patch.object(amap, "_xhr_get", return_value='{"status": "1", "info": "OK", "geocodes": []}'), mock.patch.object(browser, "_post_own_used"):
+            amap.geocode("某地")
+        self.assertEqual((amap.day, amap.used), (browser.beijing_day(), 1))
+
+    def test_handle_init_picks_the_direct_amap_and_passes_usage(self):
+        saved = browser.amap, browser._last
+        try:
+            out = json.loads(browser.handle("init", json.dumps({"base": "/api/t/abc", "own_key": self.KEY})))
+            self.assertEqual(out, {"ok": True})
+            self.assertIsInstance(browser.amap, browser.DirectAmap)
+            self.assertEqual(browser.amap.key, self.KEY)
+            self.assertNotIn(self.KEY, json.dumps(out))
+            browser.handle("plan", json.dumps({"config": config([]), "own_used": {"day": browser.beijing_day(), "count": 77}}))  # 配置有误：不发请求，只同步用量
+            self.assertEqual(browser.amap.used, 77)
+            browser.handle("init", json.dumps({"base": "/api/t/abc"}))  # 改回公共额度
+            self.assertIsInstance(browser.amap, browser.BrowserAmap)
+            browser.handle("init", json.dumps({"try": True}))
+            self.assertIsInstance(browser.amap, browser.TryAmap)
+        finally:
+            browser.amap, browser._last = saved
+
+    def test_errors_in_the_browser_never_echo_the_key(self):
+        saved = browser.amap, browser._last
+        try:
+            browser.handle("init", json.dumps({"base": "/api/t/abc", "own_key": self.KEY}))
+            with mock.patch.object(browser.amap, "_xhr_get", side_effect=ConnectionError("网络连不上高德")), mock.patch("time.sleep"):
+                out = browser.handle("search", json.dumps({"q": "某地"}))
+            self.assertIn("error", json.loads(out))
+            self.assertNotIn(self.KEY, out)
+        finally:
+            browser.amap, browser._last = saved
 
 
 class ResolveAndSuggestTest(unittest.TestCase):
@@ -2654,12 +2794,13 @@ def protocol_members(proto) -> set[str]:
 
 
 class AmapInterfaceTest(unittest.TestCase):
-    """高德客户端的接口（geo.AmapLike）：四个实现都满足，计算核心和 service.py 调用的方法都在接口里。"""
+    """高德客户端的接口（geo.AmapLike）：五个实现都满足，计算核心和 service.py 调用的方法都在接口里。"""
 
     def implementations(self):
-        return {"Amap": carpool.Amap("fake-key"), "BrowserAmap": browser.BrowserAmap(), "TryAmap": browser.TryAmap(), "FakeAmap": FakeAmap()}
+        return {"Amap": carpool.Amap("fake-key"), "BrowserAmap": browser.BrowserAmap(), "DirectAmap": browser.DirectAmap("a" * 32),
+                "TryAmap": browser.TryAmap(), "FakeAmap": FakeAmap()}
 
-    def test_all_four_implementations_satisfy_amap_like(self):
+    def test_all_implementations_satisfy_amap_like(self):
         for name, amap in self.implementations().items():
             with self.subTest(impl=name):
                 self.assertIsInstance(amap, carpool.AmapLike)
@@ -2693,6 +2834,7 @@ class AmapInterfaceTest(unittest.TestCase):
     def test_prefetch_sub_interface(self):
         self.assertIsInstance(carpool.Amap("k"), carpool.AmapPrefetch)
         self.assertIsInstance(browser.BrowserAmap(), carpool.AmapPrefetch)
+        self.assertIsInstance(browser.DirectAmap("a" * 32), carpool.AmapPrefetch)  # 继承 Amap 的空实现：逐个请求
         # 试玩和测试用的实现没有批量预取：carpool.prefetch 只在有 prefetch 时才调用，*_query 不会被调到
         self.assertNotIsInstance(browser.TryAmap(), carpool.AmapPrefetch)
         self.assertNotIsInstance(FakeAmap(), carpool.AmapPrefetch)

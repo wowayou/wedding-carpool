@@ -47,10 +47,13 @@ const LEAFLET = { 'script-src': [CDNJS], 'style-src': [CDNJS], 'img-src': [CDNJS
 const PAGES = Object.fromEntries(Object.entries(site.csp).map(([out, kind]) => [out, kind === 'leaflet' ? LEAFLET : {}]));
 // 编辑页：Leaflet、marked、Pyodide 都是自己托管的同源文件（见 web/vendor.mjs），不放行任何 CDN，只放行高德瓦片图片。
 // 计算线程是同源的模块 Worker：Worker 里 import 的脚本由 worker-src 管（Chromium 实测），wasm 编译要 script-src 里的 'wasm-unsafe-eval'
+// 自己的高德 Key 的行程由用户的浏览器直接请求高德（v3.15）：编辑页（含计算线程）要放行 restapi.amap.com；试玩页同一份策略，但试玩从不发这个请求。
+// 首页在浏览器里验证 Key 也要放行；其余页面（方案页、示例页、管理页、静态页）一律不放行
+const AMAP_API = 'https://restapi.amap.com';
 const EDIT_CSP = {
-  'worker-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'img-src': ['https://*.is.autonavi.com'],
+  'worker-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'img-src': ['https://*.is.autonavi.com'], 'connect-src': [AMAP_API],
 };
-Object.assign(PAGES, { 'edit.html': EDIT_CSP, 'try.html': EDIT_CSP }); // 试玩页和编辑页同一份策略
+Object.assign(PAGES, { 'edit.html': EDIT_CSP, 'try.html': EDIT_CSP, 'index.html': { 'connect-src': [AMAP_API] } }); // 试玩页和编辑页同一份策略
 
 // 可执行的内嵌脚本：没有 src，类型不是 JSON 数据块（application/json、application/ld+json）
 function inlineScriptHashes(html) {

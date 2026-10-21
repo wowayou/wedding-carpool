@@ -92,7 +92,7 @@ async function ownerInvite() {
 
 async function newTrip(body = {}) {
   body = { name: '测试行程', ...body };
-  if (!body.amapKey && !body.code) body.code = await ownerInvite();
+  if (!body.own && !body.code) body.code = await ownerInvite();
   const res = await call('/api/trips', { method: 'POST', body });
   assert.equal(res.status, 200, await res.clone().text());
   const trip = await res.json();
@@ -107,20 +107,29 @@ const roomOf2 = (id) => env.ROOM.get(env.ROOM.idFromName(id));
 const sha256hex = async (text) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 const save = (t, body) => call(`${t.base}/config`, { method: 'POST', cookie: t.cookie, body });
 
-test('新建行程：口令、自带 Key、什么都不填', async () => {
+test('新建行程：口令、自己的 Key 模式、什么都不填', async () => {
   assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'guess' } })).status, 401);
   assert.equal((await call('/api/trips', { method: 'POST', body: { code: 'open-sesame' } })).status, 401); // 站长口令不是邀请码
   assert.equal(upstream.length, 0);
   assert.equal((await call('/api/trips', { method: 'POST', body: {} })).status, 400);
-  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: 'short' } })).status, 400);
-  globalThis.nextAmapReply = { status: '0', info: 'INVALID_USER_KEY' };
-  assert.match((await (await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY } })).json()).error, /INVALID_USER_KEY/);
-  globalThis.nextAmapReply = null;
-  const own = await newTrip({ name: '自带', amapKey: OWN_KEY });
+  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY } })).status, 400); // 只带 Key 不算：要明确选自己的 Key 模式
+  const own = await newTrip({ name: '自己的 Key', own: true });
   const owner = await newTrip();
   assert.match(owner.url, /^\/t\/[a-z2-9]{10}#k=[a-z2-9]{24}$/);
   assert.equal((await (await call(`${own.base}/config`, { cookie: own.cookie })).json()).mode, 'own');
   assert.equal((await (await call(`${owner.base}/config`, { cookie: owner.cookie })).json()).name, '测试行程');
+  assert.equal(upstream.length, 0, '新建不对外请求（不验 Key）');
+});
+
+test('v3.15 新建自己的 Key 模式：请求里带了 amapKey 也不读、不验、不存', async () => {
+  const res = await call('/api/trips', { method: 'POST', body: { own: true, amapKey: OWN_KEY, name: 'x' } });
+  assert.equal(res.status, 200);
+  const trip = await res.json();
+  assert.equal(upstream.length, 0);
+  const meta = await rooms.get(trip.id).storage.get('meta');
+  assert.equal(meta.mode, 'own');
+  assert.ok(!('amapKey' in meta), '行程元数据里没有 amapKey');
+  assert.ok(!JSON.stringify([...rooms.get(trip.id).storage.map]).includes(OWN_KEY), '实例存储里哪都没有 Key');
 });
 
 test('同一 IP 每天新建次数有上限', async () => {
@@ -165,8 +174,8 @@ test('历史版本：同一人连续保存合并，换人另起一条，可以�
   assert.equal(sockets[1].sent.at(-1).restored, 3);
 });
 
-test('高德代理：只放行白名单，按行程用对应的 Key', async () => {
-  const owner = await newTrip(), own = await newTrip({ amapKey: OWN_KEY });
+test('高德代理：只放行白名单，用站长 Key；自己的 Key 模式不代理', async () => {
+  const owner = await newTrip(), own = await newTrip({ own: true });
   upstream = [];
   assert.equal((await call(`${owner.base}/amap/v3/ip`, { cookie: owner.cookie })).status, 403);
   // 查询里自带 key（任何大小写）直接拒绝，不对外请求
@@ -178,7 +187,7 @@ test('高德代理：只放行白名单，按行程用对应的 Key', async () =
   assert.equal(new URL(upstream[0]).searchParams.get('callback'), null, '改变返回格式的参数被去掉');
   assert.equal(new URL(upstream[0]).searchParams.get('output'), null);
   await call(`${own.base}/amap-batch`, { method: 'POST', cookie: own.cookie, body: { requests: [{ path: '/v3/distance', query: 'a=1' }] } });
-  assert.deepEqual(upstream.map((u) => new URL(u).searchParams.getAll('key').join()), ['server-key', OWN_KEY]);
+  assert.deepEqual(upstream.map((u) => new URL(u).searchParams.getAll('key').join()), ['server-key'], '自己的 Key 模式不对外请求');
   assert.equal((await call(`${owner.base}/amap/v3/distance`)).status, 401);
 });
 
@@ -206,24 +215,56 @@ test('高德结果的节点缓存：最长 1 小时，行车时间和路线 20 �
 test('行程每日上限和站长 Key 全站上限', async () => {
   env.TRIP_DAILY_LIMIT = '2';
   env.OWNER_DAILY_LIMIT = '3';
-  const a = await newTrip(), b = await newTrip(), own = await newTrip({ amapKey: OWN_KEY });
+  const a = await newTrip(), b = await newTrip();
   const batch = (t, n, tag) => call(`${t.base}/amap-batch`, { method: 'POST', cookie: t.cookie,
     body: { requests: Array.from({ length: n }, (_, i) => ({ path: '/v3/distance', query: `${tag}=${i}` })) } }).then((r) => r.json());
   assert.deepEqual((await batch(a, 3, 'a')).results.map((r) => r.info), ['OK', 'OK', 'TRIP_DAILY_LIMIT']);
   assert.deepEqual((await batch(b, 2, 'b')).results.map((r) => r.info), ['OK', 'OWNER_DAILY_LIMIT']);
-  assert.deepEqual((await batch(own, 3, 'c')).results.map((r) => r.info), ['OK', 'OK', 'OK']); // 自带 Key 不占站长额度，也不受行程上限 2 的限制
   assert.equal((await (await call(`${a.base}/config`, { cookie: a.cookie })).json()).usage, 2);
 });
 
-test('配额用完按 Key 分别停：站长 Key 用完不影响自带 Key 的行程', async () => {
-  const owner = await newTrip(), own = await newTrip({ amapKey: OWN_KEY });
+test('配额用完后不再对外请求（站长 Key）；自己的 Key 模式的行程不受影响也不代理', async () => {
+  const owner = await newTrip(), own = await newTrip({ own: true });
   globalThis.nextAmapReply = { status: '0', info: 'DAILY_QUERY_OVER_LIMIT' };
   await call(`${owner.base}/amap/v3/distance?a=1`, { cookie: owner.cookie });
   globalThis.nextAmapReply = null;
   upstream = [];
   assert.equal((await (await call(`${owner.base}/amap/v3/distance?a=2`, { cookie: owner.cookie })).json()).info, 'DAILY_QUERY_OVER_LIMIT');
   assert.equal(upstream.length, 0);
-  assert.equal((await (await call(`${own.base}/amap/v3/distance?a=3`, { cookie: own.cookie })).json()).info, 'OK');
+  assert.equal((await (await call(`${own.base}/amap/v3/distance?a=3`, { cookie: own.cookie })).json()).info, 'OWN_KEY_IN_BROWSER');
+  assert.equal(upstream.length, 0);
+});
+
+test('v3.15 自己的 Key 模式：代理一律拒绝（批量、单个），不对外请求，不占行程用量', async () => {
+  const own = await newTrip({ own: true });
+  const one = await call(`${own.base}/amap/v3/distance?a=1`, { cookie: own.cookie });
+  assert.equal(one.status, 409);
+  const data = await one.json();
+  assert.equal(data.info, 'OWN_KEY_IN_BROWSER');
+  assert.match(data.error, /由浏览器直接调用/);
+  const batch = await call(`${own.base}/amap-batch`, { method: 'POST', cookie: own.cookie, body: { requests: [{ path: '/v3/distance', query: 'a=1' }] } });
+  assert.equal(batch.status, 409);
+  assert.equal((await batch.json()).info, 'OWN_KEY_IN_BROWSER');
+  assert.equal(upstream.length, 0);
+  assert.equal((await (await call(`${own.base}/config`, { cookie: own.cookie })).json()).usage ?? 0, 0);
+});
+
+test('v3.15 懒删除：meta 里还留着旧 amapKey 的行程，收到任何一次请求就删掉', async () => {
+  const t = await newTrip({ own: true });
+  const storage = rooms.get(t.id).storage;
+  await storage.put('meta', { ...(await storage.get('meta')), amapKey: OWN_KEY }); // 模拟 3.15 以前存下的
+  assert.equal((await call(`${t.base}/config`, { cookie: t.cookie })).status, 200);
+  assert.ok(!('amapKey' in (await storage.get('meta'))));
+  // 密钥不对的请求也算（收到请求就清）
+  await storage.put('meta', { ...(await storage.get('meta')), amapKey: OWN_KEY });
+  assert.equal((await call(`${t.base}/config`, { cookie: `tk_${t.id}=wrong` })).status, 401);
+  assert.ok(!('amapKey' in (await storage.get('meta'))));
+  // 旧的自己的 Key 行程之后走浏览器直连，不会拿旧 Key 对外请求
+  await storage.put('meta', { ...(await storage.get('meta')), amapKey: OWN_KEY });
+  upstream = [];
+  assert.equal((await (await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie })).json()).info, 'OWN_KEY_IN_BROWSER');
+  assert.equal(upstream.length, 0);
+  assert.ok(!JSON.stringify([...storage.map]).includes(OWN_KEY));
 });
 
 test('配额按接口类别分别停：搜索配额用完不影响测距和路线', async () => {
@@ -255,7 +296,7 @@ test('安全（审计 S-1/S-2/S-3）：行程实例的内部接口不能从外�
   assert.equal(shared.status, 200);
   const before = JSON.stringify(await rooms.get(t.id).storage.get('meta'));
   const probes = [
-    ['POST', '/init'], ['GET', '/init'], ['POST', '/amap-take'], ['POST', '/set-key'], ['POST', '/published'], ['GET', '/published'],
+    ['POST', '/init'], ['GET', '/init'], ['POST', '/amap-take'], ['POST', '/set-own-mode'], ['POST', '/published'], ['GET', '/published'],
     ['POST', '/rotate'], ['POST', '/auth'], ['GET', '/share'], ['GET', '/edit-code'], ['GET', '/delete'], ['GET', '/rotate-key'],
     ['GET', '/page'], ['POST', '/nothing'], ['DELETE', '/config'],
   ];
@@ -288,10 +329,13 @@ test('安全：行程实例的内部接口必须带内部标记；init 校验参
   assert.equal(bare.status, 404);
   const init = (body) => roomOf2(body.id).fetch(new Request('https://internal/init', { method: 'POST', headers: { 'x-carpool-internal': '1' }, body: JSON.stringify(body) }));
   const ok = { id: 'kmnpqrstuv', name: 'x', mode: 'owner', amapKey: null, keyHash: 'b'.repeat(64), invite: null, tripLimit: null };
-  for (const bad of [{ mode: 'bogus' }, { mode: 'own' }, { keyHash: 'nothex' }, { tripLimit: 1e9 }, { tripLimit: -1 }, { amapKey: OWN_KEY }]) {
+  for (const bad of [{ mode: 'bogus' }, { keyHash: 'nothex' }, { tripLimit: 1e9 }, { tripLimit: -1 }]) {
     assert.equal((await init({ ...ok, ...bad })).status, 400, JSON.stringify(bad));
   }
   assert.equal((await init(ok)).status, 200);
+  const own = { ...ok, id: 'kmnpqrstvw', mode: 'own', amapKey: OWN_KEY }; // 自己的 Key 模式：就算传了 Key 也不存
+  assert.equal((await init(own)).status, 200);
+  assert.ok(!('amapKey' in (await rooms.get(own.id).storage.get('meta'))));
 });
 
 test('费用护栏：不是自带 Key 的行程一律走公共额度的全部护栏（模式字段被篡改也一样）', async () => {
@@ -320,26 +364,22 @@ test('审计 S-4/D-6：管理登录并发试错也不会超过单来源上限；
   assert.equal((await call('/api/admin/login', { method: 'POST', body: { code: 'open-sesame' }, ip: '8.8.8.8' })).status, 200);
 });
 
-test('审计 S-5/D-4：没登录不能拿 /key 对外验 Key；自带 Key 新建先过限速再验 Key', async () => {
+test('审计 S-5/D-4：没登录不能改行程模式；自己的 Key 新建照样先过限速，也从不对外请求', async () => {
   upstream = [];
-  const r = await call('/api/t/aaaaaaaaaa/key', { method: 'POST', cookie: 'tk_aaaaaaaaaa=junk', body: { amapKey: OWN_KEY } });
+  const r = await call('/api/t/aaaaaaaaaa/own-mode', { method: 'POST', cookie: 'tk_aaaaaaaaaa=junk', body: {} });
   assert.notEqual(r.status, 200);
-  assert.equal(upstream.length, 0, '没鉴权就不能对外请求');
-  // 同一来源每天 10 次新建：第 11 次在验 Key 之前就被拒
-  globalThis.nextAmapReply = { status: '0', info: 'INVALID_USER_KEY' };
-  for (let i = 0; i < 10; i += 1) await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '7.7.7.7' });
-  upstream = [];
-  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '7.7.7.7' })).status, 429);
+  assert.equal(upstream.length, 0);
+  // 同一来源每天 10 次新建：第 11 次被拒
+  for (let i = 0; i < 10; i += 1) await call('/api/trips', { method: 'POST', body: { own: true }, ip: '7.7.7.7' });
+  assert.equal((await call('/api/trips', { method: 'POST', body: { own: true }, ip: '7.7.7.7' })).status, 429);
   assert.equal(upstream.length, 0);
 });
 
-test('审计 S-7/D-8：邀请码不对或 Key 不对，不占全站每天的新建名额', async () => {
+test('审计 S-7/D-8：邀请码不对，不占全站每天的新建名额', async () => {
   const usage = env.USAGE.get();
   const total = async () => ((await usage.storage.get('create')) || {}).total || 0;
   const before = await total();
   for (let i = 0; i < 3; i += 1) await call('/api/trips', { method: 'POST', body: { code: 'zzzzzzzz' }, ip: `6.6.6.${i}` });
-  globalThis.nextAmapReply = { status: '0', info: 'INVALID_USER_KEY' };
-  await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '6.6.6.9' });
   assert.equal(await total(), before);
 });
 
@@ -401,7 +441,7 @@ test('审计 D-7：环境变量能强制暂停公共额度和新建，不依赖�
   upstream = [];
   assert.equal((await (await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie })).json()).info, 'PUBLIC_PAUSED');
   assert.equal(upstream.length, 0);
-  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY }, ip: '3.3.3.3' })).status, 503);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { own: true }, ip: '3.3.3.3' })).status, 503);
   assert.equal((await (await call('/api/status')).json()).public.level, 'paused');
   usage.env = {};
 });
@@ -603,19 +643,20 @@ test('在线名单和正在编辑的格子', async () => {
   room.webSocketMessage(sockets[1], 'not json'); // 乱发的消息忽略
 });
 
-test('额度用完后改用自己的 Key：校验 Key、重置用量、之后走新 Key', async () => {
+test('额度用完后改用自己的 Key：只改模式（不收 Key）、重置用量、之后不再代理', async () => {
   env.TRIP_DAILY_LIMIT = '1';
   const t = await newTrip();
   const one = (q) => call(`${t.base}/amap/v3/distance?${q}`, { cookie: t.cookie }).then((r) => r.json());
   await one('a=1');
   assert.equal((await one('a=2')).info, 'TRIP_DAILY_LIMIT');
-  assert.equal((await call(`${t.base}/key`, { method: 'POST', cookie: t.cookie, body: { amapKey: 'bad' } })).status, 400);
-  assert.equal((await call(`${t.base}/key`, { method: 'POST', body: { amapKey: OWN_KEY } })).status, 401);
-  assert.equal((await (await call(`${t.base}/key`, { method: 'POST', cookie: t.cookie, body: { amapKey: OWN_KEY } })).json()).mode, 'own');
+  assert.equal((await call(`${t.base}/own-mode`, { method: 'POST', body: {} })).status, 401);
+  assert.equal((await call(`${t.base}/key`, { method: 'POST', cookie: t.cookie, body: { amapKey: OWN_KEY } })).status, 404); // 旧接口没了
+  assert.equal((await (await call(`${t.base}/own-mode`, { method: 'POST', cookie: t.cookie, body: { amapKey: OWN_KEY } })).json()).mode, 'own');
   assert.equal(sockets[0].sent.at(-1).mode, 'own');
+  assert.ok(!JSON.stringify([...rooms.get(t.id).storage.map]).includes(OWN_KEY), '带来的 Key 不读不存');
   upstream = [];
-  assert.equal((await one('a=3')).info, 'OK');
-  assert.equal(new URL(upstream.at(-1)).searchParams.get('key'), OWN_KEY);
+  assert.equal((await one('a=3')).info, 'OWN_KEY_IN_BROWSER');
+  assert.equal(upstream.length, 0);
 });
 
 test('删除行程：数据和方案页都清掉，之后链接失效', async () => {
@@ -703,7 +744,7 @@ test('邀请码名额：删除行程、到期自动删除、改用自己的 Key�
   assert.equal(await inviteSlots(cookie, inv.code), 0);
   // 改用自己的 Key：不再用公共额度，不占名额；行程本身还在
   const c = await newTrip({ code: inv.code });
-  assert.equal((await call(`${c.base}/key`, { method: 'POST', cookie: c.cookie, body: { amapKey: OWN_KEY } })).status, 200);
+  assert.equal((await call(`${c.base}/own-mode`, { method: 'POST', cookie: c.cookie, body: {} })).status, 200);
   assert.equal(await inviteSlots(cookie, inv.code), 0);
   assert.equal((await call(`${c.base}/config`, { cookie: c.cookie })).status, 200);
   await newTrip({ code: inv.code });
@@ -968,7 +1009,7 @@ const adminStats = (cookie) => call('/api/admin/stats', { cookie }).then((r) => 
 
 test('应急开关：暂停公共额度只影响用公共额度的行程，恢复后可用', async () => {
   const cookie = await adminCookie();
-  const owner = await newTrip(), own = await newTrip({ amapKey: OWN_KEY });
+  const owner = await newTrip(), own = await newTrip({ own: true });
   assert.deepEqual((await flags(cookie, { publicPaused: true })).flags, { publicPaused: true });
   upstream = [];
   const paused = (await batchOf(owner, lbs(2))).results;
@@ -977,7 +1018,7 @@ test('应急开关：暂停公共额度只影响用公共额度的行程，恢�
   assert.match(paused[0].error, /自己的高德 Key/);
   assert.equal(upstream.length, 0);
   assert.equal((await call(`${owner.base}/amap/v3/distance?q=1`, { cookie: owner.cookie }).then((r) => r.json())).info, 'PUBLIC_PAUSED');
-  assert.deepEqual((await batchOf(own, lbs(1, 'o'))).results.map((r) => r.info), ['OK']); // 自带 Key 不受影响
+  assert.equal((await batchOf(own, lbs(1, 'o'))).info, 'OWN_KEY_IN_BROWSER'); // 自己的 Key 模式不受暂停影响，也不代理
   assert.equal((await adminStats(cookie)).quota.today.lbs, 0); // 没有花站长的额度
   await flags(cookie, { publicPaused: false });
   assert.deepEqual((await batchOf(owner, lbs(1, 'r'))).results.map((r) => r.info), ['OK']);
@@ -989,7 +1030,7 @@ test('应急开关：暂停新建行程，邀请码和自带 Key 都拦，管理
   const cookie = await adminCookie();
   const code = await ownerInvite();
   await flags(cookie, { creationPaused: true });
-  for (const body of [{ code }, { amapKey: OWN_KEY }]) {
+  for (const body of [{ code }, { own: true }]) {
     const res = await call('/api/trips', { method: 'POST', body });
     assert.equal(res.status, 503);
     assert.equal((await res.json()).error, '站点暂停了新建行程');
@@ -999,7 +1040,7 @@ test('应急开关：暂停新建行程，邀请码和自带 Key 都拦，管理
   assert.equal((await adminStats(cookie)).invites[0].trips.length, 0); // 被拦的没占邀请码名额
   await flags(cookie, { creationPaused: false });
   assert.equal((await call('/api/trips', { method: 'POST', body: { code } })).status, 200);
-  assert.equal((await call('/api/trips', { method: 'POST', body: { amapKey: OWN_KEY } })).status, 200);
+  assert.equal((await call('/api/trips', { method: 'POST', body: { own: true } })).status, 200);
 });
 
 test('应急开关：一键停用所有邀请码，已建行程要改用自己的 Key', async () => {
@@ -1288,7 +1329,7 @@ test('统计：/try 试玩页计页面访问，带编辑页一样的防嵌入头
 });
 
 test('统计：新建行程按来源分、发布方案页、方案页被打开、当天有计算的行程数', async () => {
-  await newTrip({ amapKey: OWN_KEY });
+  await newTrip({ own: true });
   const t = await newTrip(); // 邀请码
   await call('/api/admin/trips', { method: 'POST', cookie: await adminCookie(), body: { name: '管理页建的' } });
   await call(`${t.base}/amap/v3/distance?a=1`, { cookie: t.cookie });

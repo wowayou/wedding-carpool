@@ -5,7 +5,8 @@ import { caps } from './caps.js';
 import { alertDialog, confirmDialog, promptDialog, toast } from './dialogs.js';
 import { closeDrawer, openDrawer } from './drawer.js';
 import { renderForm } from './form.js';
-import { showQuota } from './overlay.js';
+import { showOwnKey, showQuota } from './overlay.js';
+import { OWN_DAILY_LIMIT, clearOwnKey, keyTail, ownKey, ownUsage } from './own-key.js';
 import { me, state, trip } from './state.js';
 import { markDirty } from './sync.js';
 import { fmtDate, fmtTime } from './time.js';
@@ -17,6 +18,7 @@ export function openMenu() {
   const share = trip.share || {};
   const shareLink = share.url ? location.origin + share.url : '';
   const expires = trip.expiresAt ? new Date(trip.expiresAt) : null;
+  const ownMode = trip.mode === 'own', myKey = ownMode ? ownKey() : ''; // 自己的 Key 模式：Key 在这台设备的浏览器里
   openDrawer('更多', `
     ${caps.hasTrip ? `
     <div class="kv"><span>行程名称</span><span class="row"><input class="c-input" id="tripName" value="${esc(trip.name)}"><button class="c-btn c-btn--sm" id="renameBtn">改名</button></span>
@@ -31,7 +33,12 @@ export function openMenu() {
       <span>编辑口令</span><span><span class="row"><input class="c-input" id="editCode" maxlength="20" autocomplete="off" placeholder="${trip.editCode ? '已设置；输入新口令可更换' : '不设'}"><button class="c-btn c-btn--sm" id="editCodeBtn">${trip.editCode ? '更换' : '设置'}</button></span>
         ${trip.editCode ? '<button class="c-btn c-btn--link" id="editCodeClear">清除编辑口令</button> ' : ''}<span class="muted">4 到 20 个字符。设了以后，新设备打开编辑链接要先输口令，正在编辑的其他人会被请出、重新输入。和方案页的访问口令是两回事</span></span>
       <span>保留到</span><span class="muted">${expires ? fmtDate(trip.expiresAt) : '—'}：出行日期过后 60 天、或连续 180 天没人编辑，自动删除（取较晚的）</span>
-      <span>高德额度</span><span class="muted">${trip.mode === 'own' ? '用你自己的高德 Key' : '用站点的公共额度'}，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用${trip.mode === 'own' ? '' : '<br><button class="c-btn c-btn--link" id="ownKeyBtn">改用自己的高德 Key</button>'}</span>
+      <span>高德额度</span><span class="muted">${ownMode
+        ? `用你自己的 Key，今天这台设备已请求 ${ownUsage(state.tripId).count} 次（每天最多 ${OWN_DAILY_LIMIT} 次，只防程序出错）`
+        : `用站点的公共额度，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用<br><button class="c-btn c-btn--link" id="ownKeyBtn">改用自己的高德 Key</button>`}</span>
+      ${ownMode ? `<span>这台设备上的高德 Key</span><span>${myKey
+        ? `已填（尾号 ${esc(keyTail(myKey))}） <button class="c-btn c-btn--link" id="ownKeyChange">更换</button> <button class="c-btn c-btn--link" id="ownKeyClear">清除</button>`
+        : '还没填 <button class="c-btn c-btn--link" id="ownKeyFill">填写</button>'}<br><span class="muted">只存在这台设备的浏览器里，本站服务器不保存；计算时浏览器直接请求高德</span></span>` : ''}
     </div>
     <p class="muted">编辑链接等于编辑权限，只发给一起规划的人。要给大家看结果，发「方案页」链接就行，不用发编辑链接。<a href="/privacy" target="_blank" rel="noopener">数据存了什么、存多久、可能的费用</a></p>` : ''}
     <h3 class="sec">关于</h3>
@@ -46,6 +53,17 @@ export function openMenu() {
     <button class="c-btn c-btn--danger" id="deleteBtn">删除这个行程</button>` : ''}`);
   $('#exportBtn').onclick = exportConfig;
   if ($('#ownKeyBtn')) $('#ownKeyBtn').onclick = () => { closeDrawer(); showQuota('', true); };
+  for (const [id, why] of [['ownKeyChange', 'change'], ['ownKeyFill', 'missing']]) {
+    if ($(`#${id}`)) $(`#${id}`).onclick = () => { closeDrawer(); showOwnKey(why); };
+  }
+  if ($('#ownKeyClear')) {
+    $('#ownKeyClear').onclick = async () => {
+      if (!await confirmDialog('清除后，这台设备上不能再计算和搜索这个行程，要重新填 Key 才行；别的设备不受影响。', { title: '清除这台设备上的高德 Key？', okText: '清除', danger: true })) return;
+      clearOwnKey();
+      toast('已清除这台设备上的高德 Key');
+      openMenu();
+    };
+  }
   if ($('#shareCodeBtn')) {
     $('#shareCodeBtn').onclick = async () => {
       const { share: next } = await backend.shareSettings({ action: 'code', code: $('#shareCode').value });
