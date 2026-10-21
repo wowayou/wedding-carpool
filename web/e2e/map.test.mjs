@@ -279,11 +279,10 @@ test('/map 有 Key 但 JS API 加载失败：先回报 fail，再改用不带底
 });
 
 // ---------- /map/share：方案页嵌它 ----------
-// 方案页在 CSP 沙箱里（来源是 null）。实测（Chromium）：沙箱页面发出的 iframe 请求不带 Referer，不管 referrerpolicy 写什么
-// （见下面「已知问题」一条）。所以这里分开测：
-//   1) 沙箱页面的消息机制（来源 null、脚本加载、按 e.source 认父窗口）：由测试进程带着 /p/… 的 Referer 去问 wrangler，再把响应交给浏览器，模拟「Referer 规则通过」
-//   2) Worker 的 Referer 规则本身：非沙箱的 /p/… 页面（真 Referer）能画；别的来源、别的页面、只有来源的都是 403
-//   3) 已知问题：真的沙箱页面拿不到 Referer，按现在的规则是 403
+// 方案页在 CSP 沙箱里（来源是 null）。实测（Chromium）：沙箱页面发出的 iframe 请求不带 Referer，不管 referrerpolicy 写什么，
+// 所以 Worker 的规则是（方案 A）：有 Referer 就必须是本站 /p/…；没有 Referer 时看 Fetch Metadata（iframe + cross-site）放行。这里测：
+//   1) 真实的沙箱页面（不带 Referer）能画；消息机制（来源 null、脚本加载、按 e.source 认父窗口）
+//   2) 非沙箱的 /p/… 页面（真 Referer）能画；别的来源、别的页面、只有来源的、直接打开都是 403
 const SANDBOX = 'sandbox allow-scripts allow-popups allow-modals';
 const page_ = (html, { sandbox = true, policy } = {}) => ({ body: html, headers: { ...(sandbox ? { 'content-security-policy': SANDBOX } : {}), ...(policy ? { 'referrer-policy': policy } : {}) } });
 const SHARE_PATH = '/p/abcdefghjk';
@@ -307,13 +306,14 @@ async function openShare(base, stub, { path = SHARE_PATH, referer } = {}) {
 }
 const settle403 = (P) => P.page.waitForTimeout(600); // 403 没有消息可等，给 iframe 一点时间加载完
 
-test('/map/share：沙箱页面（来源 null）嵌它，按 e.source 认父窗口、目标来源用 *，能画出来（Referer 由测试进程带着去问 wrangler 来模拟）', async () => {
-  const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'" }), { policy: 'strict-origin' }), { referer: `${withKey}${SHARE_PATH}` });
+test('/map/share：真实的沙箱页面（来源 null，iframe 请求没有 Referer）嵌它，按 e.source 认父窗口、目标来源用 *，能画出来', async () => {
+  const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'" }), { policy: 'strict-origin' }));
   assert.equal(await P.page.evaluate(() => self.origin), 'null', '父页面是沙箱里的匿名来源（location.origin 在沙箱里仍是地址的来源，要看 self.origin）');
   const drawn = await send(P.page, SCENE());
   assert.deepEqual(drawn, { type: 'drawn', renderer: 'amap', points: 3, lines: 2, circles: 1 });
   assert.equal(P.seen.length, 1);
   assert.equal(P.seen[0].status, 200);
+  assert.equal(P.seen[0].referer, null, '真实的沙箱页面不带 Referer，靠 Fetch Metadata 放行');
   assert.equal(P.seen[0].xfo, null, '/map/share 不带 X-Frame-Options，沙箱页面才嵌得进来');
   assert.doesNotMatch(P.seen[0].csp, /frame-ancestors/);
   const st = await fakeState(mapFrame(P.page));
@@ -358,14 +358,24 @@ test('/map/share：别的网站、本站别的页面、不带 Referer 都是 403
   assert.doesNotMatch(await direct.text(), /amap-js-key/);
 });
 
-// 已知问题（主代理要定怎么办，见 docs/v3.16-plan.md 第七节）：Chromium 里 CSP 沙箱页面（来源 null）发出的 iframe 请求不带 Referer，
-// referrerpolicy 写 unsafe-url 也一样（本地用 node 小服务器实测过）。所以真的方案页嵌 /map/share，按「没有 Referer 就 403」的规则会被拒。
-test('已知问题：真的沙箱页面发出的 iframe 请求没有 Referer，/map/share 返回 403（Chromium）', async () => {
-  for (const attrs of ['', 'referrerpolicy="no-referrer-when-downgrade"', 'referrerpolicy="unsafe-url"']) {
+// 沙箱页面的 iframe 请求不带 Referer（Chromium），不管 referrerpolicy 怎么写：都靠 Fetch Metadata（iframe + cross-site）放行
+test('/map/share：沙箱页面不管 referrerpolicy 怎么写都没有 Referer，都能画（方案 A）', async () => {
+  for (const attrs of ['', 'referrerpolicy="no-referrer-when-downgrade"', 'referrerpolicy="unsafe-url"', 'referrerpolicy="no-referrer"']) {
     const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'", attrs }), { policy: 'strict-origin' }));
-    await settle403(P);
+    assert.equal((await send(P.page, SCENE())).renderer, 'amap', attrs || '默认');
     assert.equal(P.seen[0].referer, null, `iframe ${attrs || '默认'}`);
-    assert.equal(P.seen[0].status, 403);
+    assert.equal(P.seen[0].status, 200);
     await P.context.close();
   }
+});
+
+// 剩下的风险（见 worker.js 的 mayEmbedShareMap 和计划文件）：没有 Referer 的跨站 iframe 都放行；这里只确认直接打开（document）、本站同源 iframe 没有 Referer 时仍是 403
+test('/map/share：直接打开、没有 Referer 的本站同源 iframe 仍是 403', async () => {
+  const direct = await fetch(`${withKey}/map/share`, { headers: { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' } });
+  assert.equal(direct.status, 403);
+  const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'", attrs: 'referrerpolicy="no-referrer"' }), { sandbox: false }));
+  await settle403(P);
+  assert.equal(P.seen[0].referer, null);
+  assert.equal(P.seen[0].status, 403);
+  assert.deepEqual(P.guard.jsApi, [], '没有借到 Key');
 });

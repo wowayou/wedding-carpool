@@ -1479,7 +1479,7 @@ test('/map：只接受 GET 和 HEAD', async () => {
   assert.equal((await call('/map', { method: 'POST', body: {} })).status, 405);
 });
 
-test('/map/share：Referer 是本站 /p/… 才返回页面，没有、别的网站、本站其他页面、只有来源都是 403', async () => {
+test('/map/share：Referer 是本站 /p/… 才返回页面；别的网站、本站其他页面、只有来源都是 403', async () => {
   mapAssets();
   env.AMAP_JS_KEY = JS_KEY;
   const ref = (referer) => call('/map/share', { headers: referer ? { referer } : {} });
@@ -1487,13 +1487,38 @@ test('/map/share：Referer 是本站 /p/… 才返回页面，没有、别的网
   assert.equal(ok.status, 200);
   assert.equal(metaKey(await ok.text()), JS_KEY);
   assert.equal((await ref('https://carpool.test/p/abcdefghjkmn')).status, 200); // 12 位的旧链接
-  for (const bad of [null, 'https://evil.example/p/abcdefghjk', 'https://carpool.test.evil.example/p/abcdefghjk', 'https://carpool.test/', 'https://carpool.test/t/abcdefghjk',
+  for (const bad of ['https://evil.example/p/abcdefghjk', 'https://carpool.test.evil.example/p/abcdefghjk', 'https://carpool.test/', 'https://carpool.test/t/abcdefghjk',
     'https://carpool.test/p/abc', 'https://carpool.test/p/abcdefghjk/x', 'http://carpool.test/p/abcdefghjk', 'not a url']) {
     const res = await ref(bad);
     assert.equal(res.status, 403, String(bad));
     assert.doesNotMatch(await res.text(), /amap-js-key/);
   }
-  assert.equal((await ref('https://carpool.test/p/abcdefghjk')).headers.get('vary'), 'Referer');
+    assert.match((await ref('https://carpool.test/p/abcdefghjk')).headers.get('vary'), /Referer/);
+});
+
+test('/map/share：没有 Referer 时看 Fetch Metadata，iframe + cross-site 放行，其余 403', async () => {
+  mapAssets();
+  env.AMAP_JS_KEY = JS_KEY;
+  const go = (headers) => call('/map/share', { headers });
+  const ok = await go({ 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'cross-site' }); // 沙箱里的方案页嵌入
+  assert.equal(ok.status, 200);
+  assert.equal(metaKey(await ok.text()), JS_KEY);
+  for (const [name, h] of [
+    ['没有任何头（直接请求、旧浏览器）', {}],
+    ['没有 Referer，Dest 是 document（直接打开）', { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' }],
+    ['没有 Referer，Dest 是 document 且 cross-site（从别处点链接）', { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'cross-site' }],
+    ['没有 Referer，iframe 但 same-origin', { 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'same-origin' }],
+    ['没有 Referer，iframe 但 same-site', { 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'same-site' }],
+    ['没有 Referer，只有 cross-site', { 'sec-fetch-site': 'cross-site' }],
+    ['别的网站的 Referer + iframe + cross-site', { referer: 'https://evil.example/p/abcdefghjk', 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'cross-site' }],
+    ['只有来源的 Referer + iframe + cross-site', { referer: 'https://carpool.test/', 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'cross-site' }],
+  ]) {
+    const res = await go(h);
+    assert.equal(res.status, 403, name);
+    assert.doesNotMatch(await res.text(), /amap-js-key/, name);
+  }
+  // 有本站 /p/… 的 Referer 时不看 Fetch Metadata
+  assert.equal((await go({ referer: 'https://carpool.test/p/abcdefghjk', 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'same-origin' })).status, 200);
 });
 
 test('/map/share：不加 frame-ancestors，也不带 X-Frame-Options（沙箱里的方案页来源是 null，嵌得进来）；其余安全头照旧', async () => {
