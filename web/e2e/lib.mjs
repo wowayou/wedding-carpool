@@ -169,14 +169,39 @@ const CDN_FILES = {
   ...Object.fromEntries(['layers.png', 'layers-2x.png', 'marker-icon.png', 'marker-icon-2x.png', 'marker-shadow.png'].map((f) => [`leaflet/1.9.4/images/${f}`, `leaflet/images/${f}`])),
 };
 
+// 假的高德返回：按路径给够一次「计算方案」用的数据（测距、驾车路线），别的接口给空结果。一律不连真高德
+function fakeAmapBody(u) {
+  const q = u.searchParams, ok = { status: '1', info: 'OK', infocode: '10000' };
+  const pt = (s) => s.split(',').map(Number);
+  switch (u.pathname) {
+    case '/v3/distance':
+      return { ...ok, results: q.get('origins').split('|').map((_, i) => ({ origin_id: String(i + 1), dest_id: '1', distance: '60000', duration: '3600' })) };
+    case '/v3/direction/driving': {
+      const pts = [q.get('origin'), ...(q.get('waypoints') ? q.get('waypoints').split(';') : []), q.get('destination')].map(pt);
+      const line = pts.flatMap((a, i) => i ? [0.25, 0.5, 0.75, 1].map((k) => `${(pts[i - 1][0] + (a[0] - pts[i - 1][0]) * k).toFixed(6)},${(pts[i - 1][1] + (a[1] - pts[i - 1][1]) * k).toFixed(6)}`) : [`${a[0]},${a[1]}`]);
+      return { ...ok, route: { paths: [{ distance: '60000', duration: '3600', steps: [{ polyline: line.join(';') }] }] } };
+    }
+    case '/v3/geocode/geo':
+      return { ...ok, geocodes: [{ location: '116.397428,39.90923', formatted_address: '北京市', level: '市', citycode: '010', city: '北京市', province: '北京市' }] };
+    case '/v3/geocode/regeo':
+      return { ...ok, regeocode: { addressComponent: { citycode: '010' } } };
+    case '/v3/direction/transit/integrated':
+      return { ...ok, route: { transits: [] } };
+    default:
+      return { ...ok, pois: [], count: '0' };
+  }
+}
+
 // 新开一个带守卫的页面。返回 { page, context, guard }
 //   guard.amapHits：发往高德代理的请求（正常应为空）；guard.external：站外请求（正常应为空）
 //   guard.errors：控制台报错和页面异常
 //   guard.fakeAmapError：设为 true 时，高德代理请求不放行，直接回一个假的错误，并记在 guard.fakedAmap 里（不算违规）
-export async function newGuardedPage(base, { viewport = { width: 1280, height: 800 }, colorScheme = 'light', ...rest } = {}) {
+//   fakeDirectAmap：传 true 时，允许并伪造发往 https://restapi.amap.com 的请求（自己的高德 Key 模式，浏览器直连），
+//     每个请求记在 guard.directAmap 里（{ path, key, url }），不算违规；默认（不传）仍把它们当违规
+export async function newGuardedPage(base, { viewport = { width: 1280, height: 800 }, colorScheme = 'light', fakeDirectAmap = false, ...rest } = {}) {
   const b = await launchBrowser();
   const context = await b.newContext({ viewport, colorScheme, reducedMotion: 'reduce', serviceWorkers: 'block', ...rest });
-  const guard = { amapHits: [], fakedAmap: [], external: [], errors: [], fakeAmapError: false, allowErrors: [] };
+  const guard = { amapHits: [], fakedAmap: [], directAmap: [], external: [], errors: [], fakeAmapError: false, allowErrors: [] };
   // allowErrors：这一页上预期会有的浏览器报错（比如管理页登录前的 401），写正则；其余控制台报错一律算失败
   const origin = new URL(base).origin;
   const isAmap = (u) => /\/amap(-batch)?([/?]|$)/.test(u.pathname) || u.pathname === '/api/amap' || /(^|\.)amap\.com$/.test(u.hostname);
@@ -189,6 +214,10 @@ export async function newGuardedPage(base, { viewport = { width: 1280, height: 8
       if (rel) return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: rel.endsWith('.css') ? 'text/css' : rel.endsWith('.png') ? 'image/png' : 'text/javascript', body: readFileSync(join(ROOT, 'dist/vendor', rel)) });
     }
     if (/\.is\.autonavi\.com$/.test(u.hostname)) return route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_TILE });
+    if (fakeDirectAmap && u.origin === 'https://restapi.amap.com') {
+      guard.directAmap.push({ path: u.pathname, key: u.searchParams.get('key'), url: u.href });
+      return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json', body: JSON.stringify(fakeAmapBody(u)) });
+    }
     if (isAmap(u)) {
       if (guard.fakeAmapError) {
         guard.fakedAmap.push(`${req.method()} ${u.pathname}`);
