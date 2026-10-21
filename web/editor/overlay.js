@@ -81,7 +81,7 @@ export function showQuota(message, proactive = false) {
 
 // 自己的 Key 模式：这台设备上没填 Key（missing），或者想换一个（change）
 export function showOwnKey(why) {
-  if (why === 'change') openKeyBox('更换这台设备上的高德 Key', '新的 Key 只存在这台设备的浏览器里，这个行程接着用它。');
+  if (why === 'change') openKeyBox('更换这台设备上的高德 Key', '新的 Key 只存在这台设备的浏览器里，本站服务器不保存、不经手；这个行程接着用它。');
   else openKeyBox('这台设备上还没填高德 Key', '这个行程用自己的高德 Key，这台设备上还没填。填上以后才能计算和搜索，已经填的内容都在。');
 }
 

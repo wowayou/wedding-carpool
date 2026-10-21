@@ -38,7 +38,7 @@ export function openMenu() {
         : `用站点的公共额度，今天已用 ${trip.usage || 0} 次；到上限会停下提示，不会继续调用<br><button class="c-btn c-btn--link" id="ownKeyBtn">改用自己的高德 Key</button>`}</span>
       ${ownMode ? `<span>这台设备上的高德 Key</span><span>${myKey
         ? `已填（尾号 ${esc(keyTail(myKey))}） <button class="c-btn c-btn--link" id="ownKeyChange">更换</button> <button class="c-btn c-btn--link" id="ownKeyClear">清除</button>`
-        : '还没填 <button class="c-btn c-btn--link" id="ownKeyFill">填写</button>'}<br><span class="muted">Key 只存在这台设备的浏览器里，本站服务器不保存、不经手；换设备要再填一次</span></span>` : ''}
+        : '还没填 <button class="c-btn c-btn--link" id="ownKeyFill">填写</button>'}<br><span class="muted">Key 只存在这台设备的浏览器里，本站服务器不保存、不经手；计算时浏览器直接请求高德，高德能看到你的 IP；换设备要再填一次；需要「Web服务」类型的 Key，不能设 IP 白名单</span></span>` : ''}
     </div>
     <p class="muted">编辑链接等于编辑权限，只发给一起规划的人。要给大家看结果，发「方案页」链接就行，不用发编辑链接。<a href="/privacy" target="_blank" rel="noopener">数据存了什么、存多久、可能的费用</a></p>` : ''}
     <h3 class="sec">关于</h3>

@@ -1,6 +1,7 @@
 // 后端接口和三种实现。页面里「这个模式怎么做」的分支都收在这个文件（和启动入口 main.js）里，其他模块只调 backend 的方法、读 caps 能力表。
 //   local   本地版（python3 ui.py）：计算、搜索、保存、生成方案页都调 ui.py 的接口
-//   online  在线版（/t/<行程>）：在浏览器里用 Pyodide 计算，保存、同步、历史、发布调 Worker 的接口
+//   online  在线版（/t/<行程>）：在浏览器里用 Pyodide 计算，保存、同步、历史、发布调 Worker 的接口。
+//           高德请求：公共额度的行程发给 Worker 的代理；自己的 Key 的行程由计算线程直接请求 restapi.amap.com，Key 只在这台设备的 localStorage 里（own-key.js），不发给 Worker
 //   try     试玩（/try）：示例行程，在浏览器里用不联网的 TryAmap 计算；不保存、不实际搜索、不发布
 // 三种实现有同一组方法（见 createBackend）；这个模式没有的功能（比如本地版没有历史）调用时会报错，界面按 caps 把入口藏起来，不会走到。
 
