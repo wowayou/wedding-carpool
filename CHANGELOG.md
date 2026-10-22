@@ -15,7 +15,7 @@
 - **安全**：
   - 只有 `/map`、`/map/share` 放开 `unsafe-eval` 和高德的域名（由 Worker 的响应头给出）；编辑页、示例页、方案页的内容安全策略不放宽，只加 `frame-src 'self'`，并去掉了 cdnjs 和高德瓦片。
   - `/map` 有 `frame-ancestors 'self'`；`/map/share` 检查 Referer 加 Fetch Metadata（方案页在沙箱里，来源是 null）。剩下的风险：别的网站关掉 Referer 也能嵌，只会消耗地图额度，详见 README「安全措施」。
-- **隐私**：打开带地图的页面时，浏览器会连高德的多个域名；cdnjs 不再被任何页面使用。隐私页已改。
+- **隐私**：打开带地图的页面时，浏览器会连高德的多个域名；站点上的页面都不再从 cdnjs 加载（本地版的编辑页照旧从 cdnjs 加载 marked）。隐私页已改。
 - **自部署（不兼容）**：
   - 要设 `AMAP_JS_KEY`：`npx wrangler secret put AMAP_JS_KEY`，用高德「Web端（JS API）」的 Key，并在控制台设域名白名单；不设就是不带底图的画法。
   - `wrangler.jsonc` 的 `assets.run_worker_first` 要有 `/map` 和 `/map/share`（自己改过这个列表的要补上）。
