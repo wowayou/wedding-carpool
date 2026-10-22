@@ -45,7 +45,7 @@
   - 车主的路线从出发地约 2 公里外开始画，「到家附近接」的地点不标位置，导航链接不带出发地。
   - 可以设**访问口令**（每个方案页每小时最多试 20 次）、**换一个链接**（旧链接失效）或**停止分享**。
   - 页面上有「打印 / 存为 PDF」按钮，打印时隐藏按钮、地图固定高度（并改用浅色）、卡片不跨页，黑白打印也能看清。
-  - 地图画在页面里的 iframe（`/map/share`）里，底图由高德 JS API 加载，浏览器会连高德的多个域名（隐私页有写）。**3.16 以前发布的方案页**HTML 里还是 Leaflet，新的安全策略会拦掉它，所以那些旧页面不显示地图、其余照常；在编辑页重新发布一次就有新地图。
+  - 地图画在页面里的 iframe（`/map/share`）里，**不带底图**：只画点、线、标签和图例，不加载高德，也不连高德的域名（卡片上有「在高德里看」的链接；原因见下面「安全措施」）。深色时配色跟着换。**3.16 以前发布的方案页**HTML 里还是 Leaflet，新的安全策略会拦掉它，所以那些旧页面不显示地图、其余照常；在编辑页重新发布一次就有新地图。
 - **多人实时编辑**：
   - 改动停顿约 0.8 秒后自动保存；
   - 顶部显示谁在线，正在被别人编辑的格子会标出名字；
@@ -103,7 +103,7 @@ npx wrangler secret delete FORCE_PUBLIC_PAUSED  # 恢复（另一个同理）
 ```bash
 python3 ui.py            # 编辑 trip.toml，打开 http://127.0.0.1:8765
                          # 地图底图要高德 JS API 的 Key（和上面的 Web 服务 Key 不是同一个）：环境变量 AMAP_JS_KEY 或同目录 .amap_js_key（已加入 .gitignore）；不配就不画底图，只画点和线
-                         # 本地版的方案页预览（/share）也嵌地图（本地版自己提供 /map/share）。注意：生成的 <配置名>-plan.html 文件里的地图要从站点（本机的 ui.py 或线上）加载，单独当文件发给别人、离开 ui.py 打开就没有地图
+                         # 本地版的方案页预览（/share）也嵌地图（本地版自己提供 /map/share，不带底图，和发布出去的一致）。注意：生成的 <配置名>-plan.html 文件里的地图要从站点（本机的 ui.py 或线上）加载，单独当文件发给别人、离开 ui.py 打开就没有地图
 python3 carpool.py trip.toml   # 只用命令行：报告打印到终端，并写到 trip-report.md
 ```
 
@@ -125,8 +125,8 @@ Worker（web/worker.js，用 placement.region 固定在香港附近运行，离�
    ├─ 高德代理（只服务站点公共额度的行程）：只放行用到的接口；先查 Cloudflare 节点缓存，再按每秒 3 个批量请求。
    │                                         自己的高德 Key 的行程不经代理：Key 在浏览器里，计算线程直连 restapi.amap.com
    ├─ 管理页接口：/api/admin/*，站长口令登录，之后凭会话令牌
-   ├─ 地图页面 /map、/map/share（v3.16）：填上 AMAP_JS_KEY，加单独的安全策略（只有它放行高德的脚本和 unsafe-eval）；
-   │                                         /map 给编辑页、试玩、示例页嵌，/map/share 给方案页嵌并检查 Referer 和 Fetch Metadata
+   ├─ 地图页面 /map、/map/share（v3.16）：/map 填上 AMAP_JS_KEY，加单独的安全策略（只有它放行高德的脚本和 unsafe-eval）；
+   │                                         /map 给编辑页、试玩、示例页嵌；/map/share 给方案页嵌，不填 Key、不连高德
    └─ KV：方案页（带访问口令和过期时间）、按 Key 和接口类别记的配额标记
 ```
 
@@ -170,9 +170,9 @@ npm run deploy                             # 构建 dist/ 并部署
 
 地图底图（`AMAP_JS_KEY`，3.16 起）：
 
-- 在[高德开放平台控制台](https://console.amap.com/)新建一个「Web端（JS API）」类型的 Key（不是上面的「Web服务」Key），并给它设**域名白名单**，只填你自己的域名。这个 Key 会出现在 `/map`、`/map/share` 的页面源码里（不是秘密），白名单是防止别人拿去用的唯一办法；不要把它写进仓库。
+- 在[高德开放平台控制台](https://console.amap.com/)新建一个「Web端（JS API）」类型的 Key（不是上面的「Web服务」Key），并给它设**域名白名单**，只填你自己的域名。这个 Key 会出现在 `/map` 的页面源码里（`/map/share` 不填 Key）（不是秘密），白名单是防止别人拿去用的唯一办法；不要把它写进仓库。
 - 用 `npx wrangler secret put AMAP_JS_KEY` 设（也可以放在 `.dev.vars` 里本地调试；本机的域名多半不在白名单里，高德会拒绝，本机只能看到不带底图的画法）。只显示地图不需要「安全密钥」（`securityJsCode`），页面里不放安全密钥。
-- 不设，或者 Key 无效、高德脚本加载失败，地图页面就改用不带底图的画法：只画点、线、圈和标签，角上写「没有底图」。
+- 不设，或者 Key 无效、高德脚本加载失败，地图页面就改用不带底图的画法：只画点、线、圈和标签，角上写「没有底图」。方案页的地图（`/map/share`）一律这样，不看 Key。
 - 从 3.15 升级：除了设这个 Key，`wrangler.jsonc` 的 `assets.run_worker_first` 要有 `/map` 和 `/map/share`（仓库里的已经写了，自己改过这个列表的要补上），否则地图页面不会加载。
 
 可选设置：
@@ -209,8 +209,8 @@ npm run deploy                             # 构建 dist/ 并部署
 ## 安全措施
 
 - 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；编辑页的 Pyodide、marked 都是自己托管的同源文件，不放行任何 CDN，也不放行高德的脚本和瓦片。
-- **地图隔离在 `/map` 页面里**（3.16）：高德 JS API 要用 `unsafe-eval`，所以只有地图页面（`/map`、`/map/share`）放行它和高德的几个域名（脚本、连接、图片），由 Worker 的响应头给出，页面里没有 meta CSP；编辑页、试玩页、示例页、方案页都不放宽（没有 `unsafe-eval`、不放行高德和 CDN），只各多一条 `frame-src 'self'`，用 iframe 嵌地图页面，靠 `postMessage` 交「要画什么」（点、线、圈、标签和图例，格式见 `web/map/scene.js`），地图页面只认自己的父窗口。`/map` 加 `frame-ancestors 'self'`，别的网站嵌不了。
-- **方案页通过 `/map/share` 嵌地图**：方案页在沙箱里（来源是 null），`frame-ancestors` 对它不起作用，所以 Worker 在 `/map/share` 上看请求：有 Referer 就必须是本站的 `/p/<id>`；没有 Referer 时，要 `Sec-Fetch-Dest: iframe` 且 `Sec-Fetch-Site: cross-site`（实测沙箱页面发出的 iframe 请求就是不带 Referer 的跨站 iframe）；直接打开、别的网站带 Referer 嵌入、不支持 Fetch Metadata 的旧浏览器都是 403。**剩下的风险**：别的网站把 iframe 的 Referer 关掉（`referrerpolicy="no-referrer"`）也能通过，用你的 JS Key 画它自己的地图；后果只是消耗高德「JS 地图图面初始化」的额度（个人认证每月 150 万次，用完就停，不扣费），拿不到任何数据。以后发现被滥用，再加签名令牌或按 IP 限流；Key 的域名白名单也限制了它只能在你的域名下使用。
+- **地图隔离在 `/map` 页面里**（3.16）：高德 JS API 要用 `unsafe-eval`，所以只有地图页面 `/map` 放行它和高德的几个域名（脚本、连接、图片），由 Worker 的响应头给出，页面里没有 meta CSP；编辑页、试玩页、示例页、方案页和 `/map/share` 都不放宽（没有 `unsafe-eval`、不放行高德和 CDN），只各多一条 `frame-src 'self'`，用 iframe 嵌地图页面，靠 `postMessage` 交「要画什么」（点、线、圈、标签和图例，格式见 `web/map/scene.js`），地图页面只认自己的父窗口。`/map` 加 `frame-ancestors 'self'`，别的网站嵌不了。
+- **方案页通过 `/map/share` 嵌地图，不带底图**：方案页在沙箱里（来源是 null），嵌它的 iframe 请求拿不到 Referer，高德又要按域名白名单看 Referer，所以方案页的地图拿不到高德底图；干脆让 `/map/share` 只用不带底图的画法。它不填 Key（`AMAP_JS_KEY` 设了也不填）、不加载高德，安全策略只有自己的脚本和样式（没有高德的域名、没有 `unsafe-eval` 和 `wasm-unsafe-eval`），不带 `X-Frame-Options`、不加 `frame-ancestors`（沙箱里的方案页嵌得进来），只接受 GET 和 HEAD。**没有 Key 要保护，也没有东西要借，所以不检查 Referer，任何人直接打开或嵌入都只是一张没有底图的示意图，没有剩下的风险**。
 - 所有响应都带安全头（`nosniff`、`X-Frame-Options`、`Referrer-Policy`、HSTS、`Permissions-Policy`）：静态文件在 `web/_headers`，Worker 生成的响应在 `web/worker.js`，两处要保持一致。
 - 方案页的 HTML 由编辑者的浏览器上传，所以放进 CSP 沙箱（独立的匿名来源）：读不到本站的存储和 Cookie，也不能发请求。
 - 改动状态的请求（`/api/*` 的 POST 和 DELETE、方案页口令表单）校验 Origin，跨站来源会被拒；WebSocket 也校验 Origin；500 错误不返回内部错误原文。
@@ -256,7 +256,7 @@ npm run e2e  # 试玩、本地、在线三种模式的 18 个场景，约 2 分�
 
 ### 地图审图号
 
-3.16 起三处地图都由高德 JS API 画，高德标识和审图号由它自己写在地图上，页面不再自己写角标。不要用样式或参数把它们藏起来（`web/ui.test.mjs` 会检查）。不带底图的画法没有底图，也就没有审图号，角上写「没有底图」。
+3.16 起编辑页、试玩页、示例页的地图由高德 JS API 画（方案页的地图不带底图），高德标识和审图号由它自己写在地图上，页面不再自己写角标。不要用样式或参数把它们藏起来（`web/ui.test.mjs` 会检查）。不带底图的画法没有底图，也就没有审图号，角上写「没有底图」。
 
 ### 重新生成示例页 `/demo`
 
