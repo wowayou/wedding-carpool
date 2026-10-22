@@ -297,6 +297,16 @@ test('/map 有 Key 但 JS API 加载失败：先回报 fail，再改用不带底
 });
 
 // 点的填充（highlight）和标签显示方式（label）分开：找站的候选站可以「实心、标签只在悬停时显示」，也可以「半透明、标签只在悬停时显示」
+test('/map 标签：名字里的 HTML 标签不生成元素，原样显示成文字（审计 S-13；真的 AMap.Text 把 text 当 HTML）', async () => {
+  const name = '宏村<b id="inj">粗</b>&amp;\'"';
+  const { page } = await open(withKey, '/map');
+  await send(page, SCENE({ points: [{ lng: 117.98, lat: 30.0, kind: 'venue', name, notes: ['<i id="inj2">斜</i>'], priority: 0 }], lines: [], circles: [] }));
+  const f = mapFrame(page);
+  assert.equal(await f.locator('#inj, #inj2').count(), 0, '没有生成 b、i 元素');
+  const text = await f.locator('[data-fake=text]').evaluate((e) => ({ text: e.textContent, kids: e.children.length }));
+  assert.deepEqual(text, { text: `${name}\n<i id="inj2">斜</i>`, kids: 0 }, '标签里是原样的文字');
+});
+
 const LABEL_SCENE = () => SCENE({
   points: [
     { lng: 117.98, lat: 30.0, kind: 'venue', name: '宏村示例酒店', priority: 0 },

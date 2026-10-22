@@ -4,6 +4,8 @@
 import { declutter } from './declutter.js';
 import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets, labelAlways } from './scene.js';
 
+// AMap.Text 把 text 当 HTML 解析（线上实测），名字是用户填的，要先转义；换行靠样式 white-space: pre
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const styleOf = (theme) => (theme === 'dark' ? 'amap://styles/dark' : 'amap://styles/normal');
 
 export function createAmapRenderer(host, theme) {
@@ -59,7 +61,7 @@ export function createAmapRenderer(host, theme) {
         const marker = new AMap.CircleMarker({ center: [p.lng, p.lat], radius: r, strokeColor: host.color('--surface'), strokeWeight: 2,
           fillColor: host.color(POINT_VARS[p.kind]), fillOpacity: fill ? 1 : 0.5, zIndex: 30, bubble: false, cursor: 'pointer' });
         const content = [p.name, ...(p.notes || [])].join('\n');
-        const text = new AMap.Text({ text: content, position: [p.lng, p.lat], anchor: 'bottom-center', offset: new AMap.Pixel(0, -(r + 4)), zIndex: 40,
+        const text = new AMap.Text({ text: escapeHtml(content), position: [p.lng, p.lat], anchor: 'bottom-center', offset: new AMap.Pixel(0, -(r + 4)), zIndex: 40,
           style: { 'font-size': '12px', padding: '1px 6px', 'white-space': 'pre', color: host.color('--ink'), background: host.color('--surface'), border: `1px solid ${host.color('--line-strong')}`, 'border-radius': '4px' } });
         const m = host.measure(content, font);
         const label = { priority: p.priority ?? DEFAULT_PRIORITY, hi, text, rect() {

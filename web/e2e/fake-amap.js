@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 高德 JS API 2.0 的替身（e2e 用，不连外网）：lib.mjs 的 fakeJsApi 把 https://webapi.amap.com/maps?… 的请求换成这个文件。
 // 只实现地图页面（web/map/amap-render.js）用到的部分：Map、CircleMarker、Polyline、Circle、Text、Pixel、LngLat。
+// Text 的 text 和真的一样当 HTML 解析（所以调用方要自己转义）。
 // 覆盖物画成带 data 属性的 DOM 元素（data-fake="circlemarker|polyline|circle|text"），位置按一个简单的等距投影算，便于断言个数、位置和显示隐藏；
 // 所有调用记在 window.__fakeAmap.calls，建过的地图在 window.__fakeAmap.maps。
 (() => {
@@ -27,7 +28,7 @@
       const el = document.createElement('div');
       el.dataset.fake = this.kind.toLowerCase();
       el.style.position = 'absolute';
-      if (this.opts.text !== undefined) el.textContent = this.opts.text;
+      if (this.opts.text !== undefined) el.innerHTML = this.opts.text; // 和真的 AMap.Text 一样：text 当 HTML 解析（线上实测）
       if (this.opts.text !== undefined && this.opts.style) Object.assign(el.style, { whiteSpace: this.opts.style['white-space'] });
       const o = this.opts;
       el.dataset.stroke = o.strokeColor || '';
@@ -50,7 +51,7 @@
   class CircleMarker extends Overlay { constructor(o) { super('CircleMarker', o); log('CircleMarker', o); } }
   class Polyline extends Overlay { constructor(o) { super('Polyline', o); log('Polyline', o); } }
   class Circle extends Overlay { constructor(o) { super('Circle', o); log('Circle', o); } }
-  class Text extends Overlay { constructor(o) { super('Text', o); log('Text', o); } setText(t) { this.opts.text = t; if (this.el) this.el.textContent = t; } }
+  class Text extends Overlay { constructor(o) { super('Text', o); log('Text', o); } setText(t) { this.opts.text = t; if (this.el) this.el.innerHTML = t; } }
 
   class Map {
     constructor(container, opts) {
