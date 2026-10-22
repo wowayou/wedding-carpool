@@ -120,6 +120,16 @@ test('/map 有 Key：加载假 JS API，画出点、标签、线、圈，回报 
   assert.deepEqual(st.legend, ['目的地', '直达路线']);
 });
 
+test('/map 图例位置：高德画法抬到高德标识和审图号上面（bottom 32px），不带底图的画法留在 10px', async () => {
+  const pos = (page) => mapFrame(page).evaluate(() => ({ renderer: document.documentElement.dataset.renderer, bottom: getComputedStyle(document.getElementById('legend')).bottom, hidden: document.getElementById('legend').hidden }));
+  const a = await open(withKey, '/map');
+  assert.equal((await send(a.page, SCENE())).renderer, 'amap');
+  assert.deepEqual(await pos(a.page), { renderer: 'amap', bottom: '32px', hidden: false });
+  const b = await open(noKey, '/map');
+  assert.equal((await send(b.page, SCENE())).renderer, 'plain');
+  assert.deepEqual(await pos(b.page), { renderer: 'plain', bottom: '10px', hidden: false });
+});
+
 test('/map 标签：只留不互相遮挡的（按优先级），不高亮的悬停才显示', async () => {
   const { page } = await open(withKey, '/map');
   // 两个高亮的点在同一个位置：优先级数字小的留下；第三个不高亮，不参与

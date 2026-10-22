@@ -9,7 +9,9 @@ svg { max-width: none; }
 .plain { touch-action: none; cursor: grab; }
 .plain .lbl { position: absolute; transform: translate(-50%, -100%); white-space: pre; font-size: var(--fs-12); line-height: 17px; padding: 1px 6px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 4px; }
 .plain-note { position: absolute; right: 8px; top: 8px; font-size: var(--fs-12); color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 2px 8px; pointer-events: none; }
-.legend { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: var(--surface); color: var(--ink); padding: 6px 10px; border-radius: var(--r-ctl); font-size: var(--fs-12); line-height: 1.7; border: 1px solid var(--line); max-width: calc(100% - 20px); }
+.legend { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: var(--surface); color: var(--ink); padding: 6px 10px; border-radius: var(--r-ctl); font-size: var(--fs-12); line-height: 1.7; border: 1px solid var(--line); max-width: calc(100% - 20px); max-height: calc(100% - 20px); overflow: auto; }
+/* 高德画法：左下角有高德标识（约 20px 高）和审图号（约 16px 高），图例抬到它们上面，不能盖住 */
+:root[data-renderer="amap"] .legend { bottom: 32px; max-height: calc(100% - 42px); }
 .legend i { display: inline-block; margin-right: 6px; vertical-align: -1px; }
 .legend .lg-dot { width: 10px; height: 10px; border-radius: 50%; }
 .legend .lg-line { width: 14px; height: 0; vertical-align: 3px; }

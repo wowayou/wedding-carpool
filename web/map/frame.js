@@ -92,6 +92,7 @@ function show(scene) {
   current = scene;
   document.documentElement.dataset.theme = scene.theme; // 设计变量跟着换成深色或浅色的值
   renderer ??= makeRenderer(scene.theme);
+  document.documentElement.dataset.renderer = renderer.kind; // CSS 据此把图例抬到高德标识和审图号上面
   renderer.setTheme(scene.theme);
   drawLegend(scene);
   const counts = renderer.draw(scene);
