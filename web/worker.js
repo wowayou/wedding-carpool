@@ -465,7 +465,7 @@ function codePage(id, message, status) {
 
 // 方案页的 HTML 是编辑者的浏览器生成后上传的，不能当作本站的可信代码：放进沙箱（独立的匿名来源），
 // 读不到本站的 localStorage（里面有编辑链接）和 Cookie；只放行内嵌的脚本和样式，不能发请求、不能提交表单。
-// 地图（v3.16 起）画在 iframe 里：frame-src 只放本站，嵌的是 /map/share（高德 JS API 在那个页面里加载，方案页自己不放行任何外部脚本）。
+// 地图（v3.16 起）画在 iframe 里：frame-src 只放本站，嵌的是 /map/share（只用不带底图的画法，不加载高德；方案页自己不放行任何外部脚本）。
 // 旧方案页（3.15 以前发布的）HTML 里还是 Leaflet：脚本、样式、瓦片都被这套策略拦下，页面里「Leaflet 没加载就把地图那块藏起来」的老逻辑生效，
 // 所以旧方案页不显示地图，其余照常；重新发布一次就有新地图。
 const SHARE_CSP = [
@@ -510,7 +510,7 @@ async function sharePage(request, env, url, id, ctx) {
 
 // ---------- 地图页面（v3.16）----------
 
-// 地图页面用高德 JS API，要放开 unsafe-eval（实测不放开地图加载不完），所以单独成一个页面，只有它用这套宽松的策略；
+// /map 用高德 JS API，要放开 unsafe-eval（实测不放开地图加载不完），所以单独成一个页面，只有它用这套宽松的策略；
 // 编辑页、示例页、方案页自己的策略不放宽，用 iframe 嵌它。取值依据：docs/v3.16-plan.md 第四节
 const MAP_CSP = [
   "default-src 'none'",
@@ -521,43 +521,28 @@ const MAP_CSP = [
   "base-uri 'none'", "form-action 'none'",
 ].join('; ');
 
-// 方案页发起的请求，Referer 要是本站的 /p/<方案页>。方案页自己的 referrer-policy 是 strict-origin（只带来源），
-// 所以嵌地图的 iframe 要单独写 referrerpolicy="no-referrer-when-downgrade"（https 到 https 带完整地址）。
-// 不能写 same-origin：沙箱里的方案页来源是 null，对本站也算跨源，不会带 Referer（e2e 实测过）
-const SHARE_REFERER_PATH = /^\/p\/[a-z2-9]{10,12}$/;
-// 放行规则（方案 A，docs/v3.16-plan.md 第七节）：
-//   1) 有 Referer：必须是本站 /p/…（别的网站、本站别的页面、只带来源都不行）；
-//   2) 没有 Referer：Chromium 里 CSP 沙箱页面（来源 null）发出的 iframe 请求不带 Referer，referrerpolicy 怎么写都一样，
-//      所以改看 Fetch Metadata：Sec-Fetch-Dest 是 iframe 且 Sec-Fetch-Site 是 cross-site（沙箱页面嵌入时就是这样）才放行；
-//   3) 其他（直接打开 Dest 是 document、不支持 Fetch Metadata 的旧浏览器）：403。
-// 剩下的风险：别的网站嵌入时用 referrerpolicy="no-referrer" 关掉 Referer，就和沙箱页面一样通过，能用我们的 Key 画它自己的地图。
-// 后果只是消耗高德「JS 地图图面初始化」额度（个人每月 150 万次，用完停用不扣费），拿不到任何数据；签名令牌也只能多挡一层
-// （别人照样能从公开的方案页取到新令牌）。以后发现被滥用再加令牌或按 IP 限流
-function mayEmbedShareMap(request, url) {
-  const referer = request.headers.get('referer');
-  if (referer) {
-    try {
-      const ref = new URL(referer);
-      return ref.origin === url.origin && SHARE_REFERER_PATH.test(ref.pathname);
-    } catch { return false; }
-  }
-  return request.headers.get('sec-fetch-dest') === 'iframe' && request.headers.get('sec-fetch-site') === 'cross-site';
-}
+// /map/share：方案页嵌的，只用不带底图的画法（只画点、线、标签、图例，自己的脚本和样式），不加载高德，所以什么都不放行：
+// 没有高德的域名、没有 unsafe-eval，也没有图片和网络请求。取值依据：docs/v3.16-plan.md 切片 4
+const MAP_SHARE_CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "base-uri 'none'", "form-action 'none'",
+].join('; ');
 
-// /map：编辑页、试玩、示例页嵌，加 frame-ancestors 'self'（别的网站嵌不了）。
-// /map/share：方案页嵌。方案页在 CSP 沙箱里，来源是 null，加不了 frame-ancestors（写 'self' 也不匹配），
-// 改成只在满足上面的放行规则时返回页面：直接打开、别的网站带着自己的 Referer 嵌入都是 403。
-// 页面里的 Key 是 env.AMAP_JS_KEY（不是秘密，靠高德控制台的域名白名单限制），没设就填空，地图页面改用不带底图的画法
+// /map：编辑页、试玩、示例页嵌，加 frame-ancestors 'self'（别的网站嵌不了）。页面里的 Key 是 env.AMAP_JS_KEY（不是秘密，
+// 靠高德控制台的域名白名单限制），没设就填空，地图页面改用不带底图的画法。
+// /map/share：方案页嵌。方案页在 CSP 沙箱里，来源是 null，加不了 frame-ancestors（写 'self' 也不匹配），也不带 X-Frame-Options，
+// 任何人都能直接打开或嵌入。不填 Key（env.AMAP_JS_KEY 设了也不填），没有东西可借，所以不检查 Referer
 async function mapPage(request, env, url, share) {
   if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'method not allowed' }, 405);
-  if (share && !mayEmbedShareMap(request, url)) return new Response('forbidden', { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8', vary: 'Referer, Sec-Fetch-Dest, Sec-Fetch-Site', 'cache-control': 'no-store' } });
   const res = await env.ASSETS.fetch(new Request(new URL('/map', url)));
   if (res.status !== 200) return res;
-  const key = /^[0-9A-Za-z]{16,64}$/.test(env.AMAP_JS_KEY || '') ? env.AMAP_JS_KEY : ''; // 只放行字母数字，免得变量里的怪字符破坏页面
+  const key = !share && /^[0-9A-Za-z]{16,64}$/.test(env.AMAP_JS_KEY || '') ? env.AMAP_JS_KEY : ''; // 只放行字母数字，免得变量里的怪字符破坏页面
   const html = (await res.text()).replace(/<meta name="amap-js-key" content="[^"]*">/, `<meta name="amap-js-key" content="${key}">`);
   const headers = {
-    'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex', vary: 'Referer, Sec-Fetch-Dest, Sec-Fetch-Site',
-    'content-security-policy': share ? MAP_CSP : `${MAP_CSP}; frame-ancestors 'self'`,
+    'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex',
+    'content-security-policy': share ? MAP_SHARE_CSP : `${MAP_CSP}; frame-ancestors 'self'`,
   };
   if (!share) headers['x-frame-options'] = 'SAMEORIGIN';
   return new Response(request.method === 'HEAD' ? null : html, { headers });
@@ -1500,7 +1485,7 @@ export class Usage {
 // Worker 生成的响应（JSON、方案页、口令页、编辑页、404）也要带安全头；静态文件的同一组头在 web/_headers。
 // 两处要保持一致。X-Frame-Options 和 frame-ancestors 只能放在响应头里，meta 标签里无效。
 // 例外（只有这两个）：/map 的 X-Frame-Options 是 SAMEORIGIN（地图页面要被本站页面嵌）；/map/share 不带 X-Frame-Options
-// （嵌它的方案页在沙箱里，来源是 null，SAMEORIGIN 也会挡住；改由 Referer 检查把关，见 mapPage）。静态文件里的 /map.html 没有走这两个入口，不会被直接访问
+// （嵌它的方案页在沙箱里，来源是 null，SAMEORIGIN 也会挡住；它不填 Key，没有要保护的，见 mapPage）。静态文件里的 /map.html 没有走这两个入口，不会被直接访问
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',

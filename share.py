@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """方案页：把选定的拼车方案排成每个人的时间线，生成可以直接发给同行的人的独立 HTML。
 
-页面不依赖本地服务：文字内容是服务端写好的，没网也能看；地图画在 /map/share 的 iframe 里（高德 JS API），有网时才显示。
+页面不依赖本地服务：文字内容是服务端写好的，没网也能看；地图画在 /map/share 的 iframe 里（不带底图的示意图，不连高德），有网时才显示。
 不开车的人的家庭位置不放进页面，只放车主出发地、用到的车站和目的地。
 """
 
@@ -504,7 +504,7 @@ TEMPLATE = """<!doctype html>
 <script>
 document.getElementById('printBtn').addEventListener('click', function () { window.print(); });
 (function () {
-  // 地图画在 /map/share 的 iframe 里（高德 JS API 在那个页面里加载，方案页自己不放行任何外部脚本）。
+  // 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线、标签和图例，没有底图；方案页自己不放行任何外部脚本）。
   // 这里把 data 变成 scene（格式见 web/map/scene.js），收到 iframe 的 ready 再发；25 秒后还没 ready 就把地图那块藏起来。
   var box = document.getElementById('map'), frame = document.getElementById('mapFrame');
   var data = JSON.parse(document.getElementById('data').textContent);

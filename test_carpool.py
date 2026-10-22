@@ -2464,13 +2464,15 @@ class UiServerTest(unittest.TestCase):
             self.assertGreater(len(body), 100)
         self.assertEqual(self.call("/map/..%2Fui.py")[0], 404)
 
-    def test_map_share_is_the_same_page_as_map(self):
-        # 本地版的方案页预览（/share）嵌 /map/share：本地版没有 Referer 规则，和 /map 是同一份页面（Key 也一样）
+    def test_map_share_never_gets_the_key(self):
+        # 本地版的方案页预览（/share）嵌 /map/share：和发布出去的一致，只用不带底图的画法，配了 JS Key 也不填；/map 照旧填
         with mock.patch.object(ui, "JS_KEY_FILE", Path(self.dir.name) / "none"), mock.patch.dict(os.environ, {"AMAP_JS_KEY": "b" * 20}):
-            same = self.get("/map/share")
-            self.assertEqual(same, self.get("/map"))
-        self.assertEqual(same[0], 200)
-        self.assertIn(f'content="{"b" * 20}"', same[2])
+            share = self.get("/map/share")
+            page = self.get("/map")
+        self.assertEqual(share[0], 200)
+        self.assertIn('<meta name="amap-js-key" content="">', share[2])
+        self.assertNotIn("b" * 20, share[2])
+        self.assertIn(f'content="{"b" * 20}"', page[2])
 
     def test_js_key_from_env_or_file(self):
         good = "0123456789abcdef0123456789abcdef"

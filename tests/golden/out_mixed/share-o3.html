@@ -95,7 +95,7 @@
 <script>
 document.getElementById('printBtn').addEventListener('click', function () { window.print(); });
 (function () {
-  // 地图画在 /map/share 的 iframe 里（高德 JS API 在那个页面里加载，方案页自己不放行任何外部脚本）。
+  // 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线、标签和图例，没有底图；方案页自己不放行任何外部脚本）。
   // 这里把 data 变成 scene（格式见 web/map/scene.js），收到 iframe 的 ready 再发；25 秒后还没 ready 就把地图那块藏起来。
   var box = document.getElementById('map'), frame = document.getElementById('mapFrame');
   var data = JSON.parse(document.getElementById('data').textContent);
