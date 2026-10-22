@@ -9,12 +9,11 @@
 <meta property="og:title" content="目的地 出行方案">
 <meta property="og:description" content="10月17日（周六） 出发 · 0 人搭顺风车">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23b4442c'/%3E%3Cg fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 15C28 15 28 32 42 32'/%3E%3Cpath d='M12 49C28 49 28 32 42 32'/%3E%3C/g%3E%3Ccircle cx='47' cy='32' r='9' fill='%23fff'/%3E%3Ccircle cx='47' cy='32' r='3.6' fill='%23b4442c'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous">
 <style>
   /* 设计变量和 web/design.css 一致（test_carpool.py 会逐个比对）。方案页在沙箱里展示，不能引用站点的样式文件，所以内嵌 */
-  :root { color-scheme: light; --bg: #f7f4ee; --surface: #ffffff; --surface-2: #f1ebe1; --line: #e5ddd0; --line-strong: #cfc4b3; --ink: #221e1a; --ink-2: #5a5148; --ink-3: #857b70; --accent: #b4442c; --accent-hover: #9a3722; --accent-soft: #f7e8e2; --on-accent: #ffffff; --drive: #15803d; --ride: #c2620a; --taxi: #6b7280; --dest: #dc2626; --station: #2563eb; --ok: #15803d; --ok-soft: #ebf6ee; --warn: #b45309; --warn-soft: #fdf2e1; --danger: #b91c1c; --danger-soft: #fde9e7; --info: #1d4ed8; --info-soft: #e9effc; --map-filter: none; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { color-scheme: dark; --bg: #161412; --surface: #1f1c19; --surface-2: #28241f; --line: #35302a; --line-strong: #4a443c; --ink: #efe9e1; --ink-2: #bdb4a8; --ink-3: #8f867b; --accent: #e47a5f; --accent-hover: #f08e74; --accent-soft: #3b241d; --on-accent: #1a0f0b; --drive: #4ade80; --ride: #f59e0b; --taxi: #9ca3af; --dest: #f87171; --station: #60a5fa; --ok: #4ade80; --ok-soft: #13291b; --warn: #fbbf24; --warn-soft: #33270f; --danger: #f87171; --danger-soft: #3a1715; --info: #93c5fd; --info-soft: #16213a; --map-filter: brightness(.82) contrast(1.05); } }
-  :root[data-theme=dark] { color-scheme: dark; --bg: #161412; --surface: #1f1c19; --surface-2: #28241f; --line: #35302a; --line-strong: #4a443c; --ink: #efe9e1; --ink-2: #bdb4a8; --ink-3: #8f867b; --accent: #e47a5f; --accent-hover: #f08e74; --accent-soft: #3b241d; --on-accent: #1a0f0b; --drive: #4ade80; --ride: #f59e0b; --taxi: #9ca3af; --dest: #f87171; --station: #60a5fa; --ok: #4ade80; --ok-soft: #13291b; --warn: #fbbf24; --warn-soft: #33270f; --danger: #f87171; --danger-soft: #3a1715; --info: #93c5fd; --info-soft: #16213a; --map-filter: brightness(.82) contrast(1.05); }
+  :root { color-scheme: light; --bg: #f7f4ee; --surface: #ffffff; --surface-2: #f1ebe1; --line: #e5ddd0; --line-strong: #cfc4b3; --ink: #221e1a; --ink-2: #5a5148; --ink-3: #857b70; --accent: #b4442c; --accent-hover: #9a3722; --accent-soft: #f7e8e2; --on-accent: #ffffff; --drive: #15803d; --ride: #c2620a; --taxi: #6b7280; --dest: #dc2626; --station: #2563eb; --ok: #15803d; --ok-soft: #ebf6ee; --warn: #b45309; --warn-soft: #fdf2e1; --danger: #b91c1c; --danger-soft: #fde9e7; --info: #1d4ed8; --info-soft: #e9effc; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { color-scheme: dark; --bg: #161412; --surface: #1f1c19; --surface-2: #28241f; --line: #35302a; --line-strong: #4a443c; --ink: #efe9e1; --ink-2: #bdb4a8; --ink-3: #8f867b; --accent: #e47a5f; --accent-hover: #f08e74; --accent-soft: #3b241d; --on-accent: #1a0f0b; --drive: #4ade80; --ride: #f59e0b; --taxi: #9ca3af; --dest: #f87171; --station: #60a5fa; --ok: #4ade80; --ok-soft: #13291b; --warn: #fbbf24; --warn-soft: #33270f; --danger: #f87171; --danger-soft: #3a1715; --info: #93c5fd; --info-soft: #16213a; } }
+  :root[data-theme=dark] { color-scheme: dark; --bg: #161412; --surface: #1f1c19; --surface-2: #28241f; --line: #35302a; --line-strong: #4a443c; --ink: #efe9e1; --ink-2: #bdb4a8; --ink-3: #8f867b; --accent: #e47a5f; --accent-hover: #f08e74; --accent-soft: #3b241d; --on-accent: #1a0f0b; --drive: #4ade80; --ride: #f59e0b; --taxi: #9ca3af; --dest: #f87171; --station: #60a5fa; --ok: #4ade80; --ok-soft: #13291b; --warn: #fbbf24; --warn-soft: #33270f; --danger: #f87171; --danger-soft: #3a1715; --info: #93c5fd; --info-soft: #16213a; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.65 -apple-system, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
   a { color: var(--accent); text-underline-offset: 3px; }
@@ -26,9 +25,8 @@
   .sum { margin: 0 0 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   .draft { margin: -4px 0 12px; font-size: 13px; color: var(--ink-2); }
   .legend { color: var(--ink-2); font-size: 12px; margin: 6px 2px 0; }
-  #map { height: 46vh; min-height: 260px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); }
-  .leaflet-container { background: var(--surface-2); font: inherit; }
-  .leaflet-tile-pane { filter: var(--map-filter); }
+  #map { height: 46vh; min-height: 260px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); overflow: hidden; }
+  #map iframe { display: block; width: 100%; height: 100%; border: 0; }
   .wrap h2 { font-size: 14px; color: var(--ink-2); margin: 28px 0 10px; letter-spacing: .04em; }
   .card { background: var(--surface); border: 1px solid var(--line); border-left: 5px solid var(--drive); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
   .card.rider { border-left-color: var(--ride); }
@@ -50,21 +48,17 @@
   .tips { font-size: 14px; color: var(--ink-2); padding-left: 20px; }
   .wrap > footer { color: var(--ink-3); font-size: 12px; margin-top: 24px; line-height: 1.8; }
   .wrap > footer a { color: var(--ink-2); }
-  .leaflet-tooltip.lbl { font-size: 12px; padding: 1px 6px; background: var(--surface); color: var(--ink); border-color: var(--line-strong); box-shadow: none; }
-  .leaflet-tooltip-top.lbl::before { border-top-color: var(--surface); }
   button.btn { font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
   /* 打印 / 存为 PDF：强制浅色，去掉按钮，地图定高，卡片不跨页；颜色之外用线型和文字区分（开车实线、坐车双线、打车点线），黑白打印也能看 */
   @media print {
     @page { size: A4; margin: 14mm 12mm; }
-    :root:root:root { color-scheme: light; --bg: #f7f4ee; --surface: #ffffff; --surface-2: #f1ebe1; --line: #e5ddd0; --line-strong: #cfc4b3; --ink: #221e1a; --ink-2: #5a5148; --ink-3: #857b70; --accent: #b4442c; --accent-hover: #9a3722; --accent-soft: #f7e8e2; --on-accent: #ffffff; --drive: #15803d; --ride: #c2620a; --taxi: #6b7280; --dest: #dc2626; --station: #2563eb; --ok: #15803d; --ok-soft: #ebf6ee; --warn: #b45309; --warn-soft: #fdf2e1; --danger: #b91c1c; --danger-soft: #fde9e7; --info: #1d4ed8; --info-soft: #e9effc; --map-filter: none; }
+    :root:root:root { color-scheme: light; --bg: #f7f4ee; --surface: #ffffff; --surface-2: #f1ebe1; --line: #e5ddd0; --line-strong: #cfc4b3; --ink: #221e1a; --ink-2: #5a5148; --ink-3: #857b70; --accent: #b4442c; --accent-hover: #9a3722; --accent-soft: #f7e8e2; --on-accent: #ffffff; --drive: #15803d; --ride: #c2620a; --taxi: #6b7280; --dest: #dc2626; --station: #2563eb; --ok: #15803d; --ok-soft: #ebf6ee; --warn: #b45309; --warn-soft: #fdf2e1; --danger: #b91c1c; --danger-soft: #fde9e7; --info: #1d4ed8; --info-soft: #e9effc; }
     html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     body { background: #fff; color: #000; font-size: 13px; line-height: 1.55; }
     .wrap { max-width: none; padding: 0; }
     .wrap > header { padding: 0 0 8px; }
     .navs, .btn, .line a, .note a { display: none !important; }
     #map { height: 330px; min-height: 0; break-inside: avoid; border-color: #888; }
-    .leaflet-tile-pane { filter: none; }
-    .leaflet-control-container { display: none; }
     .wrap h2 { color: #000; break-after: avoid; margin: 16px 0 8px; }
     .card { background: #fff; break-inside: avoid; border-color: #888; border-left-width: 6px; border-left-color: #000; }
     .card.rider { border-left-style: double; border-left-width: 8px; border-left-color: #000; }
@@ -89,7 +83,7 @@
       <button class="btn ghost" id="printBtn" type="button">打印 / 存为 PDF</button>
     </div>
   </header>
-  <div id="map"></div>
+  <div id="map"><iframe id="mapFrame" title="地图" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
   <p class="legend">彩色线：接人后的实际路线；灰色虚线：不接人时的直达路线，两条线分开的那段就是绕的路。</p>
   <h2>开车的</h2><article class="card driver"><h3>老王<span class="tag">空 3 座</span></h3><ol class="line"><li><span class="t">·</span><span>从出发地出发</span></li><li><span class="t">·</span><span>到目的地 <b>目的地</b> <a href="https://uri.amap.com/marker?position=118.000000,30.000000&amp;name=%E7%9B%AE%E7%9A%84%E5%9C%B0&amp;src=wedding-carpool&amp;coordinate=gaode&amp;callnative=1" target="_blank" rel="noopener">目的地位置</a></span></li></ol><p class="meta">直达，约 3小时13分，这次不用接人</p><div class="navs"><a class="btn" href="https://uri.amap.com/navigation?to=118.000000,30.000000,%E7%9B%AE%E7%9A%84%E5%9C%B0&amp;mode=car&amp;src=wedding-carpool&amp;coordinate=gaode&amp;callnative=1" target="_blank" rel="noopener">一键导航</a></div></article><article class="card driver"><h3>老刘</h3><ol class="line"><li><span class="t">·</span><span>从出发地出发</span></li><li><span class="t">·</span><span>到目的地 <b>目的地</b> <a href="https://uri.amap.com/marker?position=118.000000,30.000000&amp;name=%E7%9B%AE%E7%9A%84%E5%9C%B0&amp;src=wedding-carpool&amp;coordinate=gaode&amp;callnative=1" target="_blank" rel="noopener">目的地位置</a></span></li></ol><p class="meta">直达，约 1小时51分，这次不用接人</p><div class="navs"><a class="btn" href="https://uri.amap.com/navigation?to=118.000000,30.000000,%E7%9B%AE%E7%9A%84%E5%9C%B0&amp;mode=car&amp;src=wedding-carpool&amp;coordinate=gaode&amp;callnative=1" target="_blank" rel="noopener">一键导航</a></div></article><h2>坐车的</h2><p class="meta">这个方案里没有需要接的人。</p>
   
@@ -98,63 +92,50 @@
   <footer>生成于 10-09 12:00（北京时间） · 链接会打开高德地图<br>这一页会在 2026-10-23 前后自动删除<br>用 <a href="https://carpool.eigentime.org/" target="_blank" rel="noopener">拼车出行规划</a> 生成，免费，也可以用它安排你们的出行 · <a href="https://carpool.eigentime.org/privacy" target="_blank" rel="noopener">费用与隐私</a><br>按公开的计算规则（第 4 版）排序：先让尽量多的人搭上车，再让总用时最少 · <a href="https://carpool.eigentime.org/guide/method" target="_blank" rel="noopener">怎么算的</a></footer>
 </div>
 <script id="data" type="application/json">{"points": [{"name": "老王 出发", "lat": 30.0, "lng": 116.1, "kind": "car", "notes": []}, {"name": "目的地", "lat": 30.0, "lng": 118.0, "kind": "venue", "notes": []}], "routes": [{"color": "#c2410c", "label": "老王", "path": [[[30.0, 116.1], [30.0, 116.2], [30.0, 116.3], [30.0, 116.4], [30.0, 116.5], [30.0, 116.6], [30.0, 116.7], [30.0, 116.8], [30.0, 116.9], [30.0, 117.0], [30.0, 117.1], [30.0, 117.2], [30.0, 117.3], [30.0, 117.4], [30.0, 117.5], [30.0, 117.6], [30.0, 117.7], [30.0, 117.8], [30.0, 117.9], [30.0, 118.0]]], "direct": null}, {"color": "#1d4ed8", "label": "老刘", "path": [], "direct": null}], "taxis": []}</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
 <script>
 document.getElementById('printBtn').addEventListener('click', function () { window.print(); });
 (function () {
-  if (!window.L) { document.getElementById('map').style.display = 'none'; return; }
+  // 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线和标签，没有底图；图例不画在地图里，只在地图下面写成文字；方案页自己不放行任何外部脚本）。
+  // 这里把 data 变成 scene（格式见 web/map/scene.js），收到 iframe 的 ready 再发；25 秒后还没 ready 就把地图那块藏起来。
+  var box = document.getElementById('map'), frame = document.getElementById('mapFrame');
   var data = JSON.parse(document.getElementById('data').textContent);
-  // 提示框里的文字（含成员名字）一律当纯文本，不当 HTML 解析
-  function text(s) { var el = document.createElement('span'); el.textContent = s; return el; }
-  // 标记颜色取自页面的设计变量，深色模式下自动换成深色的值
-  var css = getComputedStyle(document.documentElement);
-  function v(name) { return css.getPropertyValue(name).trim(); }
-  var colors = { venue: v('--dest'), st: v('--station'), car: v('--drive'), home: v('--ride') };
-  var map = L.map('map', { scrollWheelZoom: false });
-  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-    { subdomains: '1234', maxZoom: 18, attribution: '© 高德地图 GS(2025)5996号' }).addTo(map);
-  var bounds = [];
-  data.routes.forEach(function (r) {
-    (r.direct || []).forEach(function (seg) {
-      L.polyline(seg, { color: v('--taxi'), weight: 4, opacity: 0.8, dashArray: '6 8' }).bindTooltip(text(r.label + ' 不接人的直达路线'), { sticky: true }).addTo(map);
-      bounds = bounds.concat(seg);
-    });
-  });
-  data.routes.forEach(function (r) {
-    r.path.forEach(function (seg) {
-      L.polyline(seg, { color: r.color, weight: 5, opacity: 0.85 }).bindTooltip(text(r.label), { sticky: true }).addTo(map);
-      bounds = bounds.concat(seg);
-    });
-  });
-  data.taxis.forEach(function (t) { L.polyline(t, { color: v('--taxi'), weight: 3, dashArray: '4 6' }).addTo(map); });
-  // 标签互相遮挡时按优先级（目的地 > 车站 > 出发地）只留前面的，点或移到点上再显示
-  var labelled = [];
-  function declutter() {
-    var placed = [];
-    labelled.forEach(function (m) {
-      var el = m.getTooltip().getElement();
-      if (!el) return;
-      el.style.visibility = '';
-      var r = el.getBoundingClientRect();
-      var hit = placed.some(function (p) { return r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top; });
-      if (hit) el.style.visibility = 'hidden'; else placed.push(r);
-    });
+  var dark = window.matchMedia('(prefers-color-scheme: dark)');
+  function theme() {
+    var t = document.documentElement.getAttribute('data-theme');
+    return t === 'dark' || t === 'light' ? t : (dark.matches ? 'dark' : 'light');
   }
-  data.points.forEach(function (p) {
-    var el = document.createElement('span'); el.textContent = p.name;
-    p.notes.forEach(function (n) { var b = document.createElement('b'); b.textContent = n; el.appendChild(document.createElement('br')); el.appendChild(b); });
-    var m = L.circleMarker([p.lat, p.lng], { radius: p.kind === 'venue' ? 9 : 7, color: '#fff', weight: 2, fillColor: colors[p.kind], fillOpacity: 1 })
-      .bindTooltip(el, { permanent: true, direction: 'top', offset: [0, -6], className: 'lbl' }).addTo(map);
-    m.priority = p.kind === 'venue' ? 0 : p.kind === 'st' ? 1 : 2;
-    m.on('mouseover click', function () { var t = m.getTooltip().getElement(); if (t) t.style.visibility = ''; });
-    m.on('mouseout', declutter);
-    labelled.push(m);
-    bounds.push([p.lat, p.lng]);
+  function flip(seg) { return seg.map(function (q) { return [q[1], q[0]]; }); } // data 里是 [lat, lng]，scene 是 [lng, lat]
+  function build(mode) {
+    var lines = [], points = [], fit = [];
+    data.routes.forEach(function (r) {
+      (r.direct || []).forEach(function (seg) {
+        lines.push({ path: flip(seg), color: '--taxi', weight: 4, opacity: 0.8, dash: [6, 8], tooltip: r.label + ' 不接人的直达路线' });
+      });
+    });
+    data.routes.forEach(function (r) {
+      r.path.forEach(function (seg) { lines.push({ path: flip(seg), color: r.color, weight: 5, opacity: 0.85, tooltip: r.label }); });
+    });
+    data.taxis.forEach(function (t) { lines.push({ path: flip(t), color: '--taxi', weight: 3, dash: [4, 6] }); });
+    lines.forEach(function (l) { fit = fit.concat(l.path); });
+    data.points.forEach(function (p) {
+      points.push({ lng: p.lng, lat: p.lat, kind: p.kind, name: p.name, notes: p.notes, priority: p.kind === 'venue' ? 0 : p.kind === 'st' ? 1 : 2, radius: p.kind === 'venue' ? 10 : 7 });
+      fit.push([p.lng, p.lat]);
+    });
+    return { v: 1, theme: mode, points: points, lines: lines, circles: [], fit: { auto: true, points: fit, padding: { top: 56, right: 56, bottom: 56, left: 56 } }, legend: [] };
+  }
+  var ready = false, mode = theme();
+  function send() { if (ready) frame.contentWindow.postMessage({ type: 'scene', scene: build(mode) }, '*'); } // 方案页在沙箱里（来源 null），只能用 '*'；地图页面也只认 parent
+  window.addEventListener('message', function (e) {
+    if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'ready') return;
+    ready = true; clearTimeout(timer); send();
   });
-  labelled.sort(function (a, b) { return a.priority - b.priority; });
-  map.fitBounds(L.latLngBounds(bounds).pad(0.08));
-  map.on('zoomend moveend resize', declutter);
-  setTimeout(declutter, 0);
+  var timer = setTimeout(function () { if (!ready) box.style.display = 'none'; }, 25000);
+  function setMode(m) { if (m !== mode) { mode = m; send(); } }
+  if (dark.addEventListener) dark.addEventListener('change', function () { setMode(theme()); });
+  // 打印一律用浅色
+  window.addEventListener('beforeprint', function () { setMode('light'); });
+  window.addEventListener('afterprint', function () { setMode(theme()); });
+  frame.src = '/map/share';
 })();
 </script>
 </body>

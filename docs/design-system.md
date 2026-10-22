@@ -71,7 +71,7 @@
   - `c-estimate`：估算条；`c-why`（`--info`）：主按钮不能点的原因；`c-callout__list`：提示框里的列表；
   - `c-pick-row`：整行可点的勾选结果行（`is-off` 标灰）；`c-tags`：标签行，配合 `c-tag--best`、`c-tag--over` 两种标签；
   - `c-fold`（`__title`、`__row`）：默认收起、按原因分组的折叠区。
-- 地图：`.leaflet-pane svg` 取消 `max-width`，页面自建的 Leaflet pane 里的 svg 不会被全局的 `svg { max-width: 100% }` 压成 0 宽。
+- 地图：画在单独的页面里（`/map`、`/map/share`），样式在 `web/map/frame.css`，设计系统的组件里没有地图的样式（见「地图」一节）。
 - 数据展示：`c-table-wrap` + `c-table`（窄屏横向滚动）、`c-tabs`、`c-steps`（`--row` 为横排）、`c-progress`（用 `--value`）、`c-empty`、`c-skeleton`。
 - 页面结构：站点页头 `c-site-header`（含手机菜单 `c-nav-toggle`、「场景」下拉 `c-nav__group`；右侧操作区 `c-nav__actions` 放「试玩」次要按钮和「新建行程」主按钮；导航当前页用 `--accent` 下划线标出）、页脚 `c-site-footer`（上半 `__top`：左边 `__intro` 是品牌、介绍和带下划线箭头的引导行 `__cta`，右边 `__cols` 四列链接，栏目标题加粗；`__bottom` 是底部小字；最下面是大字标 `c-wordmark`；页脚和页面同为 `--bg`，只靠细线分开，打印时整个隐藏）、精简页头 `c-bar`、面包屑 `c-breadcrumb`；`c-container`、`c-prose`、`c-section`、`c-hero`、`c-faq`、`c-figure`。
 - 图标：`web/partials/icons.svg` 是 sprite，24 网格、1.75 描边、`currentColor`。模板里写 `{{icon:car}}`，生成 `<svg class="c-icon"><use href="/icons.svg#i-car"/></svg>`。现有：car、train、taxi、pin、station、copy、external、print、menu、close、check、alert、info、plus、trash、map、edit、arrow-right、chevron-down、heart、users、briefcase、github。不用 emoji 当图标。
@@ -141,14 +141,31 @@ v3.10 起，编辑页的脚本在 `web/editor/` 下，按职责分成模块，`u
 - 为什么：第一次要查几十个点，可能一两分钟；有阶段、有计时，用户才知道没卡死。要多久说实话，不编百分比。
 - 静态页面里的进度条是 `c-progress`（用 `--value`，加 `role="progressbar"`）。
 
+### 地图
+
+编辑页、试玩、示例页、方案页的地图都画在单独的页面里（v3.16）：编辑页、试玩、示例页嵌 `/map`（有 Key 时用高德底图），方案页嵌 `/map/share`（只用不带底图的画法，不填 Key、不连高德），外面的页面不碰高德的脚本。
+
+- **scene**：外面的页面把「要画什么」生成一份纯数据（格式、字段、校验见 `web/map/scene.js` 顶部注释），用 `postMessage` 整份发给地图页面，地图页面画完回报。字段：
+  - 点 `points`：`kind`（`venue` 目的地、`st` 车站、`car` 开车的成员、`home` 不开车的成员，决定颜色）、名字、附注、`priority`（标签互相遮挡时数字小的留下）、`highlight`（填充：实心还是半透明）、`label`（`always` 一直显示，`hover` 只在悬停时显示；不写就按 `highlight` 推出）、`radius`；
+  - 线 `lines`：坐标串、颜色、线宽、不透明度、`dash`（虚线）、悬停文字；圈 `circles`：圆心、半径（米）、边线、填充不透明度、虚线；
+  - `fit`：要不要自适应范围、留白（被抽屉遮住的那一截）、要框住的位置、最大缩放；`legend`：图例的行；`theme`：`light` 或 `dark`。
+  - 坐标一律是高德坐标的 `[lng, lat]`（经度在前），后端给的路线是 `[lat, lng]`，生成 scene 时翻过来（`web/editor/map-scene.js`、`share.py` 里的 `flip`）。
+- **颜色写设计变量名**（`--dest`、`--drive`、`--ride`、`--station`、`--taxi`、`--surface` 等），地图页面按 `design.css` 当前主题取值；方案路线的六种色是十六进制（`COLORS`，和方案页里的路线色一致）。不新造变量以外的颜色。
+- **点的约定**：目的地大（半径 10）、实心、标签常显、优先级最高；用到的车站实心、标签常显；没用到的车站半透明；车主出发地和成员半径 7。**找站的候选站**：「列出的、没超过所有车主绕路上限的」实心，其余半透明，名字**都只在悬停时显示**（`highlight` 管填充，`label: 'hover'` 管标签，两者分开）。
+- **图例规则（沿用 3.12）**：只写图上真有的东西。编辑页、试玩保留地图里的图例框：目的地、开车的、不开车的、车站四个点，加「彩色线 = 接人后的实际路线」「灰色虚线 = 不接人时的直达路线」，找站图层显示时再加「点线 = 车主路线」「浅色圈 = 搜过的范围」。图例由地图页面画在地图左下角，随 `theme` 换色；用高德画法时 `frame.js` 在 `<html>` 上设 `data-renderer="amap"`，`frame.css` 把图例抬到 `bottom: 32px`，在高德标识和审图号那一行上面，**不能盖住高德的标识和审图号**；不带底图的画法（`data-renderer="plain"`）没有这一行，仍是 `bottom: 10px`。**方案页和示例页的地图里不画图例框**（scene 的 `legend` 为空，同 3.15），只留地图下面那段文字说明（`<p class="legend">`，解释灰线和彩线分开的那段就是绕的路）。方案页的自适应留白是四边各 56 像素（标签以点为中心，要留出半个标签宽）。
+- **深色**：栅格底图深色时用滤镜调暗（同 3.15）：`web/map/frame.css` 里 `:root[data-theme="dark"]` 下，给高德瓦片 `img[src*="is.autonavi.com/appmaptile"]` 加 `filter: brightness(.82) contrast(1.05)`，只作用于瓦片。**不设高德的深色样式**（`amap://styles/dark`）：线上实测这个 Key 拿到的是栅格底图，深色样式不起作用，而且一设就让高德版权控件里的审图号消失。3.15 以前的 `--map-filter` 变量在 3.16 删除了，`design.css` 和方案页的变量里都没有。点、线、标签、图例的颜色跟着设计变量换。方案页打印一律浅色（`beforeprint` 时发浅色的 scene）。
+- **不带底图的画法**：没有 JS Key、高德脚本加载失败（先回报 `fail`）时用；`/map/share`（方案页）一律用它：不填 Key，不看有没有 Key：墨卡托投影，SVG 画点、线、圈，HTML 叠标签；可以拖动、滚轮缩放；角上写「没有底图」，不画高德的标识和审图号（没有高德的底图，也就不需要）。标签取舍、悬停显示、自适应范围和带底图的画法一致。
+- **高德标识和审图号**由高德 JS API 自己写在地图上，不要藏起来。
+- **标签**：互相遮挡时只留 `label` 为 `always` 的里按优先级排前的（`web/map/declutter.js`）；悬停才显示被藏起来的。
+- **尺寸**：窗口大小变了、手机页签切换后发 `resize`，地图页面重新计算尺寸，再补做「容器 0 尺寸时没能做的」自适应（延续 3.13.1）。
+
 ### 地图上的过程图层
 
 用于「把算法过程摊开给用户看」，比如找站的搜索圈和取样路线。
 
-- **自建 pane，压在方案图层下面**：`map.createPane('sugPane')`，`zIndex` 350：Leaflet 自带的 `overlayPane`（方案路线）是 400，标记在 600，瓦片在 200，所以过程图层在地图上面、结果下面，不会盖住结果。图层里的东西 `interactive: false`，不抢点击。
-- **颜色从语义变量取**：用 `themeVar('--station')`、`themeVar('--drive')` 在画的时候读当前主题的值，不写死色值；系统主题变化时重画（`drawSugLayer()`）。圈用浅色填充加细边，没搜的圈虚线加淡；路线用点线，和方案的实线区分。
-- **svg 要取消最大宽度**：`design.css` 有全局的 `svg { max-width: 100% }`，Leaflet 只给自带的 `overlayPane` 取消了它，自建 pane 里的 svg 会被压成 0 宽。所以 `design.css` 里有 `.leaflet-pane svg { max-width: none }`，新建 pane 不用再处理。
-- **图例**：图层显示时，地图图例多出对应的几行（`.legend-sug`，点线、浅色圈各一行）；图层隐藏时图例也隐藏。
+- **生成 scene，由地图页面画**（v3.16）：编辑页的地图在同源 iframe 里的 `/map`，圈、路线、候选站由 `sugParts()` 生成 scene 的一部分，`setSugLayer()` 交给 `map.js`，和预览或方案一起合成一份 scene 用 `postMessage` 发过去。叠放顺序由地图页面定：圈在最下，线，点，标签在最上；过程图层的圈和线排在 scene 里方案路线的前面，所以压在方案下面，不会盖住结果。过程图层的东西不抢点击（圈没有悬停，路线没有 tooltip）。
+- **颜色写设计变量名**：`--station`、`--drive` 写在 scene 里，地图页面按当前主题取值（深色自动换），不写死色值；系统主题变化时 scene 带的 `theme` 跟着换并重发（`showLayers()`）；找站内容变了用 `drawSugLayer()` 重画。圈用浅色填充加细边，没搜的圈虚线加淡；路线用点线，和方案的实线区分。
+- **图例**：图层显示时，scene 的 `legend` 多出对应的两行（`SUG_LEGEND`：点线、浅色圈各一行），由地图页面画；图层隐藏时这两行也不在。
 - **开关**：抽屉里有一个 `c-switch`「在地图上显示找站过程」，默认开；`sug.layerOn` 记着，关了就从地图上拿掉。
 - **什么时候显示，什么时候清**：`syncSugLayer()` 统一决定，规则是「开关开着，并且抽屉开在这个面板上（或手机上点了『去地图上看』）」。关抽屉就隐藏；重新计算方案时 `clearSugLayer()` 清掉，免得和方案的路线混在一起。
 - **手机上**：抽屉盖住整个屏幕，地图看不到。抽屉里多一个「去地图上看」（`data-sg-map`，宽屏用 CSS 隐藏），点了收起抽屉、切到地图页签、保留图层，并用 `toast()` 说怎么回来。

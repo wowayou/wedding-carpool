@@ -2,6 +2,7 @@
 // 把网页版要用的静态文件收集到 dist/：界面、计算线程、Python 代码（和本地版是同一份）。
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { bundleMap } from './map/bundle.mjs';
 import { buildSite } from './site.mjs';
 import { vendor } from './vendor.mjs';
 
@@ -10,6 +11,12 @@ mkdirSync('dist/py', { recursive: true });
 cpSync('ui.html', 'dist/edit.html'); // 行程编辑页，Worker 把 /t/<行程> 指到这里
 cpSync('web/editor', 'dist/editor', { recursive: true }); // 编辑页的脚本模块（ES 模块，同源加载；ui.html 里是 <script type="module" src="/editor/main.js">）
 cpSync('web/pyworker.js', 'dist/pyworker.js');
+// 地图页面（v3.16）：/map 和 /map/share 由 Worker 返回（/map 填 Key，两者各加自己的安全策略，见 worker.js），所以 map.html 不在下面的 PAGES 里生成 CSP（/map 要 unsafe-eval，策略只放在响应头里）。
+// 脚本并成一个普通脚本 dist/map/frame.js（方案页沙箱里的页面来源是 null，模块脚本加载不了），样式 dist/map/frame.css
+cpSync('web/map.html', 'dist/map.html');
+mkdirSync('dist/map', { recursive: true });
+cpSync('web/map/frame.css', 'dist/map/frame.css');
+writeFileSync('dist/map/frame.js', bundleMap());
 cpSync('web/stations12306.json', 'dist/stations12306.json');
 // 图标和首屏示例：站点根目录；/demo 是静态的示例方案页（虚构行程，由 demo 流程生成，不经过 Worker）
 for (const name of ['favicon.svg', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'demo-shot.webp']) cpSync(`web/${name}`, `dist/${name}`);
@@ -36,22 +43,23 @@ cpSync('web/try-trip.json', 'dist/try-trip.json'); // 试玩的示例行程（�
 // 内嵌脚本按内容的 sha256 放行（不用 'unsafe-inline'），改了脚本重新构建即可，不用手工更新哈希。
 // 只改 dist/ 里的产物，源文件不动。CSP 放在 <meta> 里，紧跟 <meta charset>、在任何脚本之前。
 // frame-ancestors 在 meta 里无效，由响应头负责（见 web/_headers 和 worker.js）。
-const CDNJS = 'https://cdnjs.cloudflare.com';
 const BASE = {
   'default-src': ["'self'"], 'base-uri': ["'none'"], 'object-src': ["'none'"], 'form-action': ["'self'"],
   'img-src': ["'self'", 'data:'], 'style-src': ["'self'", "'unsafe-inline'"], 'connect-src': ["'self'"],
   'font-src': ["'self'"], 'manifest-src': ["'self'"],
 };
-const LEAFLET = { 'script-src': [CDNJS], 'style-src': [CDNJS], 'img-src': [CDNJS, 'https://*.is.autonavi.com'] };
-// 静态页面按 web/site-data.mjs 的清单逐个放行：示例页（demo）要 Leaflet（cdnjs），其余页面只有内嵌脚本（页头菜单、样式指南的演示）
-const PAGES = Object.fromEntries(Object.entries(site.csp).map(([out, kind]) => [out, kind === 'leaflet' ? LEAFLET : {}]));
-// 编辑页：Leaflet、marked、Pyodide 都是自己托管的同源文件（见 web/vendor.mjs），不放行任何 CDN，只放行高德瓦片图片。
+// 静态页面按 web/site-data.mjs 的清单逐个放行：示例页（demo）的地图在同源 iframe 里的 /map（v3.16），只多一条 frame-src 'self'；
+// 其余页面只有内嵌脚本（页头菜单、样式指南的演示）。任何静态页面都不放行 CDN、高德的脚本和瓦片
+const FRAME = { 'frame-src': ["'self'"] };
+const PAGES = Object.fromEntries(Object.entries(site.csp).map(([out, kind]) => [out, kind === 'frame' ? FRAME : {}]));
+// 编辑页：marked、Pyodide 都是自己托管的同源文件（见 web/vendor.mjs），不放行任何 CDN。地图在同源 iframe 里的 /map（v3.16），所以只多一条 frame-src 'self'：
+// 高德的脚本、unsafe-eval、瓦片图片都只在地图页面自己的策略里（worker.js 的 MAP_CSP），编辑页不放行。
 // 计算线程是同源的模块 Worker：Worker 里 import 的脚本由 worker-src 管（Chromium 实测），wasm 编译要 script-src 里的 'wasm-unsafe-eval'
 // 自己的高德 Key 的行程由用户的浏览器直接请求高德（v3.15）：编辑页（含计算线程）要放行 restapi.amap.com；试玩页同一份策略，但试玩从不发这个请求。
 // 首页在浏览器里验证 Key 也要放行；其余页面（方案页、示例页、管理页、静态页）一律不放行
 const AMAP_API = 'https://restapi.amap.com';
 const EDIT_CSP = {
-  'worker-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'img-src': ['https://*.is.autonavi.com'], 'connect-src': [AMAP_API],
+  'worker-src': ["'self'"], 'frame-src': ["'self'"], 'script-src': ["'self'", "'wasm-unsafe-eval'"], 'connect-src': [AMAP_API],
 };
 Object.assign(PAGES, { 'edit.html': EDIT_CSP, 'try.html': EDIT_CSP, 'index.html': { 'connect-src': [AMAP_API] } }); // 试玩页和编辑页同一份策略
 
@@ -81,10 +89,10 @@ for (const [name, opts] of Object.entries(PAGES)) {
   const html = readFileSync(file, 'utf8');
   const csp = buildCsp(html, opts);
   if (/'unsafe-(inline|eval)'/.test(csp.split('; ').find((d) => d.startsWith('script-src ')))) throw new Error(`${name}：script-src 不能放开 unsafe-inline/eval`);
-  // 隐私页说本站不用统计脚本、Cloudflare 自动注入的统计脚本会被拦下：脚本只能来自本站、cdnjs 和内嵌脚本的哈希
+  // 隐私页说本站不用统计脚本、Cloudflare 自动注入的统计脚本会被拦下：脚本只能来自本站和内嵌脚本的哈希
   const scriptSrc = csp.split('; ').find((d) => d.startsWith('script-src ')).split(' ').slice(1);
-  const other = scriptSrc.filter((s) => !["'self'", "'wasm-unsafe-eval'", "'none'", CDNJS].includes(s) && !s.startsWith("'sha256-"));
-  if (other.length) throw new Error(`${name}：script-src 只能放行本站、cdnjs 和内嵌脚本的哈希，多了 ${other.join(' ')}`);
+  const other = scriptSrc.filter((s) => !["'self'", "'wasm-unsafe-eval'", "'none'"].includes(s) && !s.startsWith("'sha256-"));
+  if (other.length) throw new Error(`${name}：script-src 只能放行本站和内嵌脚本的哈希，多了 ${other.join(' ')}`);
   const charset = /<meta\s+charset=[^>]*>/i.exec(html);
   if (!charset) throw new Error(`${name} 缺少 <meta charset>`);
   const at = charset.index + charset[0].length;

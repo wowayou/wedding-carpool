@@ -1,166 +1,128 @@
 // ---------- 地图：没算方案时实时显示已定位的地点；算出方案后画路线 ----------
+// 地图画在同源 iframe 里的地图页面（/map，见 web/map/）。这里只负责：根据 state 生成 scene（map-scene.js），
+// 用 postMessage 发给它；收它的 ready / drawn / fail；容器尺寸变了发 resize。编辑页自己的安全策略因此不用放宽。
 
-import { emit } from './events.js';
 import { isStale, state } from './state.js';
-import { fmtMin } from './time.js';
-import { $, esc, parseLoc, themeVar } from './util.js';
+import { $ } from './util.js';
+import { composeScene, planParts, previewParts } from './map-scene.js';
 
-// 地图（Leaflet）和三个图层。地图没加载出来时 map 是 null，画图的函数都先看一眼
-export const view = { map: null, planLayer: null, previewLayer: null };
+export { COLORS } from './map-scene.js';
 
-export const COLORS = ['#c2410c', '#1d4ed8', '#7c3aed', '#0f766e', '#be185d', '#4d7c0f'];
-// 地图标记的颜色取自设计变量（深色模式自动换成深色的值）
-export const POINT_VARS = { venue: '--dest', st: '--station', car: '--drive', home: '--ride' };
+// 地图的 iframe 和状态。frame 是 null 表示还没建；ready 表示地图页面已经能接收 scene
+export const view = { frame: null, ready: false };
 
-export const pointColor = (kind) => themeVar(POINT_VARS[kind]);
+const READY_TIMEOUT_MS = 10_000; // 地图页面这么久没报 ready：当作没加载出来（显示「重试」）
+const DRAWN_TIMEOUT_MS = 20_000; // 地图页面报了 fail（高德没加载出来）以后，这么久还没画出来（plain）：同上
+
+// 要画的内容：预览和方案各存一份，showLayers 决定显示哪个；找站图层由 sug-layer.js 通过 setSugLayer 放进来
+const layers = { preview: null, plan: null, sug: null, show: 'preview' };
+let pendingFit = null; // 还没发出去的自适应请求（地图页面没 ready 时留着，发出去就清掉）
+let dirty = false; // 有还没发出去的改动
+let scheduled = false;
+
+// 测试用：回到刚启动的样子
+export function resetMap() {
+  Object.assign(layers, { preview: null, plan: null, sug: null, show: 'preview' });
+  pendingFit = null; dirty = false; scheduled = false;
+  view.frame = null; view.ready = false;
+}
+
+const theme = () => document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+const post = (msg) => view.frame?.contentWindow?.postMessage(msg, location.origin);
+
+// 把最新的 scene 发给地图页面（没 ready 就等 ready 以后再发）
+export function sendScene() {
+  scheduled = false;
+  if (!view.frame || !view.ready || !dirty) return;
+  const base = layers[layers.show] || layers.preview;
+  post({ type: 'scene', scene: composeScene({ base, sug: layers.sug, theme: theme(), fit: pendingFit }) });
+  pendingFit = null;
+  dirty = false;
+}
+// 一次操作里常常连着改几处（画方案、显示图层、请求缩放），合并成一条消息
+function schedule() {
+  dirty = true;
+  if (scheduled) return;
+  scheduled = true;
+  queueMicrotask(sendScene);
+}
 
 export function showLayers() {
-  if (!view.map) return;
-  const plan = state.result && !isStale();
-  if (plan) { view.map.removeLayer(view.previewLayer); view.planLayer.addTo(view.map); }
-  else { view.map.removeLayer(view.planLayer); view.previewLayer.addTo(view.map); }
+  layers.show = state.result && !isStale() ? 'plan' : 'preview';
+  schedule();
 }
-
-// 标签互相遮挡时，按优先级（目的地 > 用到的车站 > 开车的 > 不开车的 > 其他车站）只留前面的，鼠标移上去再显示
-export function declutter() {
-  if (!view.map) return;
-  const layer = view.map.hasLayer(view.planLayer) ? view.planLayer : view.previewLayer;
-  const items = [];
-  layer.eachLayer((m) => {
-    const tip = m.getTooltip && m.getTooltip();
-    const el = tip && tip.options.permanent && tip.getElement();
-    if (el) items.push([m.options.priority ?? 5, el]);
-  });
-  items.sort((a, b) => a[0] - b[0]);
-  const placed = [];
-  for (const [, el] of items) {
-    el.style.visibility = '';
-    const r = el.getBoundingClientRect();
-    if (placed.some((p) => r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top)) el.style.visibility = 'hidden';
-    else placed.push(r);
-  }
+// 找站图层：parts 是 sugParts 的结果；null 表示不显示
+export function setSugLayer(parts) {
+  layers.sug = parts;
+  schedule();
 }
-export function labelled(marker, priority) {
-  marker.options.priority = priority;
-  marker.on('mouseover', () => { const el = marker.getTooltip()?.getElement(); if (el) el.style.visibility = ''; });
-  marker.on('mouseout', declutter);
-  return marker;
+// 请求缩放到指定位置。地图在隐藏的页签里（0 尺寸）时，地图页面会记下来，等 resize 了再补做
+export function requestFit(fit) {
+  pendingFit = fit;
+  schedule();
 }
-
-// 缩放到指定范围。地图在隐藏的页签里（容器 0×0）时 Leaflet 会算出最小一级，所以只记下来，等地图可见了再补做（后来的覆盖先前的）。
-// 返回这次是不是真的缩放了。看容器的实际尺寸，getSize() 有缓存
-let pendingFit = null;
-export function fitMap(bounds, opts) {
-  if (!view.map) return false;
-  const box = view.map.getContainer();
-  if (!box.clientWidth || !box.clientHeight) { pendingFit = [bounds, opts]; return false; }
-  pendingFit = null;
-  view.map.invalidateSize(); // Leaflet 缓存的尺寸可能还是隐藏时的 0，不更新会缩到最小一级
-  view.map.fitBounds(bounds, opts);
-  return true;
-}
-// 地图变得可见、尺寸变了以后调用：先重算尺寸，再补做待缩放
+// 地图变得可见、尺寸变了以后调用（手机页签切到「地图」、窄宽屏切换）：地图页面重算尺寸，再补做没做完的缩放
 export function refreshMap() {
-  if (!view.map) return;
-  view.map.invalidateSize();
-  if (pendingFit) fitMap(...pendingFit);
+  post({ type: 'resize' });
 }
 
 let previewTimer = null;
 export function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(drawPreview, 250); }
 
 export function drawPreview() {
-  if (!view.map || !state.cfg) return;
-  view.previewLayer.clearLayers();
-  const pts = [];
-  const priority = { venue: 0, car: 2, home: 3, st: 4 };
-  const add = (loc, kind, label, r = 7) => {
-    const ll = parseLoc(loc);
-    if (!ll) return;
-    pts.push(ll);
-    labelled(L.circleMarker(ll, { radius: r, color: '#fff', weight: 2, fillColor: pointColor(kind), fillOpacity: kind === 'st' ? 0.75 : 1 })
-      .bindTooltip(esc(label), { permanent: kind !== 'st', direction: 'top', offset: [0, -6], className: 'lbl' }), priority[kind]).addTo(view.previewLayer);
-  };
-  add(state.cfg.venue?.location, 'venue', state.cfg.venue?.name || '目的地', 10);
-  (state.cfg.stations || []).forEach((s) => add(s.location, 'st', s.name || '车站', 6));
-  (state.cfg.people || []).forEach((p) => add(p.location, p.car_seats !== undefined ? 'car' : 'home', `${p.name || '成员'}${p.car_seats !== undefined ? '（开车）' : ''}`));
-  if (!state.fitted && pts.length) {
-    fitMap(L.latLngBounds(pts).pad(0.15), { maxZoom: 11 });
+  if (!view.frame || !state.cfg) return;
+  layers.preview = previewParts(state.cfg);
+  if (!state.fitted && layers.preview.points.length) {
+    requestFit(layers.preview.fit);
     state.fitted = true;
   }
   showLayers();
-  setTimeout(declutter, 0);
 }
 
 export function drawPlan(fit) {
-  if (!view.map) return;
-  view.planLayer.clearLayers();
-  const pts = state.result.points;
-  const back = state.viewLeg === 'back' && state.result.back;
-  const plan = back ? state.result.back.plans[state.activeBack] : state.result.plans[state.active];
-  const seq = (r) => (back ? ['venue', ...r.stops, `car:${r.driver}`] : [`car:${r.driver}`, ...r.stops, 'venue']);
-  const used = new Set();
-  const stopNotes = {};
-  const ll = (id) => [pts[id].lat, pts[id].lng];
-  (plan?.routes || []).forEach((r) => {
-    // 先画不接人时的直达路线（灰色虚线），接人的彩色路线盖在上面，分岔的那段就是绕的路
-    if (!r.stops.length) return;
-    L.polyline(r.direct_path || [seq({ driver: r.driver, stops: [] })].flat().map(ll), { color: themeVar('--taxi'), weight: 4, opacity: 0.8, dashArray: '6 8' })
-      .bindTooltip(`${esc(r.driver)} ${back ? '不送人直接回家' : '不接人'}的直达路线`, { sticky: true }).addTo(view.planLayer);
-    (stopNotes[r.stops[0]] ??= []).push(`${r.driver} 多绕 ${fmtMin(r.detour)}`);
-  });
-  (plan?.routes || []).forEach((r, i) => {
-    r.stops.forEach((s) => used.add(s));
-    const line = r.path || seq(r).map(ll);
-    L.polyline(line, { color: COLORS[i % COLORS.length], weight: 5, opacity: 0.85, dashArray: r.path ? null : '8 8' })
-      .bindTooltip(`${esc(r.driver)}：${r.stops.length ? '多绕 ' + fmtMin(r.detour) : '直达'}，全程约 ${fmtMin(r.minutes)}`, { sticky: true })
-      .addTo(view.planLayer);
-  });
-  Object.entries(plan?.taxi || {}).forEach(([who, s]) => {
-    used.add(s);
-    L.polyline([ll(s), ll('venue')], { color: themeVar('--taxi'), weight: 3, dashArray: '4 6' }).bindTooltip(`${esc(who)} 打车`, { sticky: true }).addTo(view.planLayer);
-  });
-  for (const [id, p] of Object.entries(pts)) {
-    const kind = id === 'venue' ? 'venue' : id.split(':')[0];
-    const highlighted = kind !== 'st' || used.has(id);
-    const priority = kind === 'venue' ? 0 : kind === 'st' ? (used.has(id) ? 1 : 4) : kind === 'car' ? 2 : 3;
-    labelled(L.circleMarker([p.lat, p.lng], {
-      radius: kind === 'venue' ? 10 : kind === 'st' ? (used.has(id) ? 9 : 5) : 7,
-      color: '#fff', weight: 2, fillColor: pointColor(kind), fillOpacity: highlighted ? 1 : 0.5,
-    }).bindTooltip(esc(p.name) + (stopNotes[id] ? `<br><b>${stopNotes[id].map(esc).join('<br>')}</b>` : ''),
-      { permanent: highlighted, direction: 'top', offset: [0, -6], className: 'lbl' }), priority).addTo(view.planLayer);
-  }
-  if (fit) {
-    const focus = [ll('venue'), ...[...used].map(ll),
-      ...(plan?.routes || []).flatMap((r) => [...(r.path || [ll(`car:${r.driver}`)]), ...(r.direct_path || [])])];
-    fitMap(L.latLngBounds(focus).pad(0.1));
-  }
+  if (!view.frame) return;
+  layers.plan = planParts(state.result, state);
+  if (fit) requestFit(layers.plan.fit);
   showLayers();
-  setTimeout(declutter, 0);
 }
 
-// 地图组件（Leaflet）没加载出来也不影响填写和计算：地图区显示说明和「重试」
+// ---------- 地图页面（iframe）的加载和消息 ----------
+
+const mapFailBox = () => $('#mapFail');
+let readyTimer = null, drawnTimer = null;
+const failed = () => { mapFailBox().hidden = false; };
+
+function onMessage(e) {
+  if (!view.frame || e.source !== view.frame.contentWindow || e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'ready') {
+    clearTimeout(readyTimer);
+    view.ready = true;
+    mapFailBox().hidden = true;
+    if (layers.preview || layers.plan) schedule(); // 把已经有的内容发过去（重试时是新的 iframe，要重发）
+  } else if (e.data.type === 'drawn') {
+    clearTimeout(drawnTimer);
+    mapFailBox().hidden = true;
+  } else if (e.data.type === 'fail' && !String(e.data.reason).startsWith('bad-scene')) {
+    // 高德 JS API 没加载出来：地图页面会改用不带底图的画法并回报 drawn；到点还没画出来才算失败
+    clearTimeout(drawnTimer);
+    drawnTimer = setTimeout(failed, DRAWN_TIMEOUT_MS);
+  }
+}
+
+let listening = false;
+// 地图页面没加载出来也不影响填写和计算：地图区显示说明和「重试」（再调一次就是重试：重新加载 iframe）
 export function initMap() {
-  if (typeof L === 'undefined') { $('#mapFail').hidden = false; return false; }
-  $('#mapFail').hidden = true;
-  view.map = L.map('map').setView([34.5, 112], 5);
-  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
-    subdomains: '1234', maxZoom: 18, attribution: '© 高德地图 GS(2025)5996号',
-  }).addTo(view.map);
-  view.planLayer = L.layerGroup();
-  view.previewLayer = L.layerGroup().addTo(view.map);
-  view.map.on('zoomend moveend resize', declutter);
-  emit('map', view.map);
-  const legend = L.control({ position: 'bottomleft' });
-  legend.onAdd = () => {
-    const d = L.DomUtil.create('div', 'legend');
-    d.innerHTML = `<div><i style="background:var(--dest)"></i>目的地</div><div><i style="background:var(--drive)"></i>开车的成员</div>
-      <div><i style="background:var(--ride)"></i>不开车的成员</div><div><i style="background:var(--station)"></i>车站</div>
-      <div>彩色线 = 接人后的实际路线</div><div>灰色虚线 = 不接人时的直达路线</div>
-      <div class="legend-sug" hidden><div><i class="lg-route"></i>点线 = 车主路线（找站用）</div><div><i class="lg-circle"></i>浅色圈 = 搜过的范围</div></div>`;
-    return d;
-  };
-  legend.addTo(view.map);
+  if (!listening) { window.addEventListener('message', onMessage); listening = true; }
+  clearTimeout(readyTimer);
+  clearTimeout(drawnTimer);
+  mapFailBox().hidden = true;
+  const frame = document.createElement('iframe');
+  frame.className = 'ed-mapframe';
+  frame.title = '地图';
+  frame.src = '/map';
+  view.frame = frame;
+  view.ready = false;
+  $('#map').replaceChildren(frame);
+  readyTimer = setTimeout(failed, READY_TIMEOUT_MS);
   return true;
 }
-

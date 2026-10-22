@@ -15,6 +15,7 @@ import { chromium } from 'playwright';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const FAKE_KEY = '0123456789abcdef0123456789abcdef'; // 假的高德 Key
+export const FAKE_JS_KEY = 'fedcba9876543210fedcba9876543210'; // 假的高德 JS API Key（地图页面用）
 export const ACCESS_CODE = 'e2e-test-code'; // 测试用站长口令
 export const SLOW = 90_000; // Pyodide 第一次加载要十几秒，给够
 
@@ -89,9 +90,9 @@ async function waitHttp(url, log, what, timeout = 60_000) {
 
 // 子进程的环境：去掉可能带真 Key 的变量，本机回环地址不走代理
 function cleanEnv(extra = {}) {
-  const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NO_COLOR: '1', ...extra };
-  for (const k of ['AMAP_KEY', 'ACCESS_CODE', 'IP_SALT']) delete env[k];
-  return env;
+  const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', NO_COLOR: '1' };
+  for (const k of ['AMAP_KEY', 'AMAP_JS_KEY', 'ACCESS_CODE', 'IP_SALT']) delete env[k];
+  return { ...env, ...extra }; // 要给的变量（比如本地版的假 JS Key）在去掉之后再加
 }
 
 // ---------- 在线和试玩：wrangler dev ----------
@@ -103,11 +104,12 @@ export function ensureBuilt() {
   built = true;
 }
 
-export async function startWrangler() {
+// jsKey：地图页面（/map）用的高德 JS API Key（假的）；传 null 表示不设，地图页面走不带底图的画法
+export async function startWrangler({ jsKey = null } = {}) {
   ensureBuilt();
   const dir = makeTmp();
   const envFile = join(dir, 'e2e.env');
-  writeFileSync(envFile, `AMAP_KEY=${FAKE_KEY}\nACCESS_CODE=${ACCESS_CODE}\n`);
+  writeFileSync(envFile, `AMAP_KEY=${FAKE_KEY}\nACCESS_CODE=${ACCESS_CODE}\n${jsKey ? `AMAP_JS_KEY=${jsKey}\n` : ''}`);
   const port = await freePort(), inspector = await freePort();
   const { log } = start('wrangler', process.execPath, [
     join(ROOT, 'node_modules/wrangler/bin/wrangler.js'), 'dev',
@@ -127,8 +129,8 @@ export async function startWrangler() {
 }
 
 // ---------- 本地：ui.py ----------
-export async function startLocal() {
-  ensureBuilt(); // 本地版的页面从 CDN 取 Leaflet 和 marked，测试里用 dist/vendor/ 里校验过的同一份文件代替（见 newGuardedPage）
+export async function startLocal({ jsKey } = {}) {
+  ensureBuilt(); // 本地版的页面从 CDN 取 marked，测试里用 dist/vendor/ 里校验过的同一份文件代替（见 newGuardedPage）
   const dir = makeTmp();
   const config = join(dir, 'trip.toml');
   // 配置：试玩示例行程的 config，用 carpool.dump_toml 写成 toml
@@ -145,7 +147,7 @@ export async function startLocal() {
   const { log } = start('ui.py', 'python3', [join(ROOT, 'ui.py'), config, '--port', String(port), '--key', FAKE_KEY], {
     cwd: dir, detached: true,
     // 假 Key 真要出站也到不了高德：出站请求走一个没人听的代理，立刻连接失败
-    env: cleanEnv({ HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', http_proxy: 'http://127.0.0.1:9', https_proxy: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', PYTHONDONTWRITEBYTECODE: '1' }),
+    env: cleanEnv({ HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', http_proxy: 'http://127.0.0.1:9', https_proxy: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', PYTHONDONTWRITEBYTECODE: '1', ...(jsKey ? { AMAP_JS_KEY: jsKey } : {}) }),
   });
   const base = `http://127.0.0.1:${port}`;
   await waitHttp(`${base}/api/env`, log, 'ui.py');
@@ -155,7 +157,7 @@ export async function startLocal() {
 // ---------- 浏览器 ----------
 let browser = null;
 export async function launchBrowser() {
-  browser ??= await chromium.launch({ args: ['--force-color-profile=srgb', '--disable-lcd-text', '--disable-gpu', '--disable-gpu-rasterization', '--num-raster-threads=1', '--disable-partial-raster', '--disable-skia-runtime-opts'] });
+  browser ??= await chromium.launch({ args: ['--force-color-profile=srgb', '--disable-lcd-text', '--disable-gpu', '--disable-gpu-rasterization', '--num-raster-threads=1', '--disable-partial-raster', '--disable-skia-runtime-opts', '--disable-features=LocalNetworkAccessChecks'] });
   return browser;
 }
 export async function closeBrowser() { await browser?.close().catch(() => {}); browser = null; }
@@ -164,9 +166,7 @@ export async function closeBrowser() { await browser?.close().catch(() => {}); b
 const BLANK_TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 const CDN_FILES = {
-  'leaflet/1.9.4/leaflet.min.js': 'leaflet/leaflet.js', 'leaflet/1.9.4/leaflet.min.css': 'leaflet/leaflet.css',
   'marked/12.0.2/marked.min.js': 'marked/marked.min.js',
-  ...Object.fromEntries(['layers.png', 'layers-2x.png', 'marker-icon.png', 'marker-icon-2x.png', 'marker-shadow.png'].map((f) => [`leaflet/1.9.4/images/${f}`, `leaflet/images/${f}`])),
 };
 
 // 假的高德返回：按路径给够一次「计算方案」用的数据（测距、驾车路线），别的接口给空结果。一律不连真高德
@@ -198,10 +198,13 @@ function fakeAmapBody(u) {
 //   guard.fakeAmapError：设为 true 时，高德代理请求不放行，直接回一个假的错误，并记在 guard.fakedAmap 里（不算违规）
 //   fakeDirectAmap：传 true 时，允许并伪造发往 https://restapi.amap.com 的请求（自己的高德 Key 模式，浏览器直连），
 //     每个请求记在 guard.directAmap 里（{ path, key, url }），不算违规；默认（不传）仍把它们当违规
-export async function newGuardedPage(base, { viewport = { width: 1280, height: 800 }, colorScheme = 'light', fakeDirectAmap = false, ...rest } = {}) {
+//   fakeJsApi：传 true 时，https://webapi.amap.com/maps?… 换成 web/e2e/fake-amap.js 的替身（高德 JS API），其余 *.amap.com 的请求返回空，
+//     都记在 guard.jsApi 里，不算违规；默认（不传）仍把它们当违规。传 'fail' 时脚本请求直接失败（模拟 JS API 加载不出来）
+//   stubs：{ '/路径': { body, contentType?, status?, headers? } }，本站这些路径直接用给定内容回答（测试专用的页面，不进正式构建）
+export async function newGuardedPage(base, { viewport = { width: 1280, height: 800 }, colorScheme = 'light', fakeDirectAmap = false, fakeJsApi = false, stubs = {}, ...rest } = {}) {
   const b = await launchBrowser();
   const context = await b.newContext({ viewport, colorScheme, reducedMotion: 'reduce', serviceWorkers: 'block', ...rest });
-  const guard = { amapHits: [], fakedAmap: [], directAmap: [], external: [], errors: [], fakeAmapError: false, allowErrors: [] };
+  const guard = { amapHits: [], fakedAmap: [], directAmap: [], jsApi: [], external: [], errors: [], fakeAmapError: false, allowErrors: [] };
   // allowErrors：这一页上预期会有的浏览器报错（比如管理页登录前的 401），写正则；其余控制台报错一律算失败
   const origin = new URL(base).origin;
   const isAmap = (u) => /\/amap(-batch)?([/?]|$)/.test(u.pathname) || u.pathname === '/api/amap' || /(^|\.)amap\.com$/.test(u.hostname);
@@ -218,6 +221,14 @@ export async function newGuardedPage(base, { viewport = { width: 1280, height: 8
       guard.directAmap.push({ path: u.pathname, key: u.searchParams.get('key'), url: u.href });
       return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json', body: JSON.stringify(fakeAmapBody(u)) });
     }
+    if (fakeJsApi && u.protocol === 'https:' && /(^|\.)amap\.com$/.test(u.hostname) && !/^\/api\//.test(u.pathname)) {
+      guard.jsApi.push(u.href);
+      if (u.hostname === 'webapi.amap.com' && u.pathname === '/maps') {
+        if (fakeJsApi === 'fail') return route.abort('failed');
+        return route.fulfill({ status: 200, contentType: 'text/javascript', body: readFileSync(join(ROOT, 'web/e2e/fake-amap.js')) });
+      }
+      return route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'application/json', body: '{}' });
+    }
     if (isAmap(u)) {
       if (guard.fakeAmapError) {
         guard.fakedAmap.push(`${req.method()} ${u.pathname}`);
@@ -226,12 +237,16 @@ export async function newGuardedPage(base, { viewport = { width: 1280, height: 8
       guard.amapHits.push(`${req.method()} ${u.href}`);
       return route.abort('blockedbyclient');
     }
+    if (u.origin === origin && stubs[u.pathname]) {
+      const { body, contentType = 'text/html; charset=utf-8', status = 200, headers = {} } = stubs[u.pathname];
+      return route.fulfill({ status, contentType, headers, body });
+    }
     if (u.origin !== origin) { guard.external.push(u.href); return route.abort('blockedbyclient'); }
     return route.continue();
   });
   const page = await context.newPage();
   page.on('console', (m) => { if (m.type() === 'error' && !guard.allowErrors.some((re) => re.test(`${m.text()} ${m.location().url}`))) guard.errors.push(`console.error: ${m.text()} (${m.location().url})`); });
-  page.on('pageerror', (e) => guard.errors.push(`pageerror: ${e.message}`));
+  page.on('pageerror', (e) => { if (!guard.allowErrors.some((re) => re.test(e.message))) guard.errors.push(`pageerror: ${e.message}`); });
   guard.assertClean = () => {
     const bad = { 高德请求: guard.amapHits, 站外请求: guard.external, 控制台报错: guard.errors };
     for (const [what, list] of Object.entries(bad)) if (list.length) throw new Error(`${what}：\n${list.join('\n')}`);
@@ -248,9 +263,46 @@ export async function waitFormReady(page) {
   await bind(page, 'venue.name').waitFor({ timeout: 30_000 });
 }
 
-// 等 Leaflet 地图建好
+// 编辑页里的地图：iframe 嵌的 /map。mapFrame 是 Playwright 的 FrameLocator，里面的元素用 locator 取
+export const mapFrame = (page) => page.frameLocator('#map iframe');
+// 等地图页面加载好（iframe 里的容器出现了）
 export async function waitMapReady(page) {
-  await page.locator('#map .leaflet-pane').first().waitFor({ state: 'attached', timeout: 30_000 });
+  await mapFrame(page).locator('#map').waitFor({ state: 'attached', timeout: 30_000 });
+}
+// 地图页面里已经画出来的东西（假 JS API 或不带底图的画法两种都能数）：点、线、圈、标签的个数，和图例的文字
+export async function mapLayers(page) {
+  return mapFrame(page).locator('body').evaluate((body) => {
+    const q = (a, b) => document.querySelectorAll(`[data-fake="${a}"], ${b}`).length;
+    return {
+      points: q('circlemarker', '[data-layer=point]'), lines: q('polyline', 'polyline[data-layer=line]'), circles: q('circle', 'circle[data-layer=circle]'),
+      legend: [...document.querySelectorAll('#legend div')].map((d) => d.textContent), renderer: document.querySelector('[data-fake=map]') ? 'amap' : 'plain',
+    };
+  });
+}
+
+// 等地图页面里画出的东西满足条件（pred 拿到 mapLayers 的结果）
+export async function waitMapLayers(page, pred, what, timeout = 15_000) {
+  let last;
+  for (const end = Date.now() + timeout; Date.now() < end; await page.waitForTimeout(100)) {
+    last = await mapLayers(page).catch(() => null);
+    if (last && pred(last)) return last;
+  }
+  throw new Error(`地图页面里等不到「${what}」，最后看到 ${JSON.stringify(last)}`);
+}
+// 地图页面里（假 JS API 画的）点和线合起来的外框，和容器的大小、是不是都在容器里。n 是点和线的个数。
+// 方案画好后只缩放到目的地、用到的车站和路线上（成员的出发地不在内，可能很远），所以 onlyUsed 时点只算目的地和用到的车站（半径 9 以上，见 map-scene.js 的 planParts）
+export async function mapView(page, { onlyUsed = false } = {}) {
+  return mapFrame(page).locator('body').evaluate((_, onlyUsed) => {
+    const c = document.getElementById('map'), W = c.clientWidth, H = c.clientHeight;
+    const xs = [], ys = [];
+    for (const el of document.querySelectorAll('[data-fake=polyline],[data-fake=circlemarker]')) {
+      if (onlyUsed && el.dataset.fake === 'circlemarker' && Number(el.dataset.radius) < 9) continue;
+      xs.push(...el.dataset.xs.split(',').map(Number)); ys.push(...el.dataset.ys.split(',').map(Number));
+    }
+    if (!xs.length) return { n: 0, cw: W, ch: H };
+    const l = Math.min(...xs), t = Math.min(...ys), r = Math.max(...xs), b = Math.max(...ys);
+    return { n: xs.length, w: r - l, h: b - t, cw: W, ch: H, inside: l >= -1 && t >= -1 && r <= W + 1 && b <= H + 1 };
+  }, onlyUsed);
 }
 
 // 设置抽屉：打开「推荐车站」

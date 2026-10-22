@@ -17,7 +17,6 @@
   --info: #1d4ed8; --info-soft: #e9effc;
   --shadow-pop: 0 12px 32px rgba(40, 28, 16, .18), 0 2px 6px rgba(40, 28, 16, .1);
   --scrim: rgba(34, 30, 26, .45);
-  --map-filter: none;
 
   --font: -apple-system, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -41,7 +40,6 @@
     --info: #93c5fd; --info-soft: #16213a;
     --shadow-pop: 0 12px 32px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .4);
     --scrim: rgba(0, 0, 0, .6);
-    --map-filter: brightness(.82) contrast(1.05);
   }
 }
 :root[data-theme=dark] {
@@ -57,7 +55,6 @@
   --info: #93c5fd; --info-soft: #16213a;
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .4);
   --scrim: rgba(0, 0, 0, .6);
-  --map-filter: brightness(.82) contrast(1.05);
 }
 
 /* ---------- 2. 基础 ---------- */
@@ -430,9 +427,8 @@ dialog.c-drawer { position: fixed; inset: 0 0 0 auto; width: min(420px, 100vw); 
 .c-fold__row > span:first-child { min-width: 0; }
 .c-fold__row small { display: block; color: var(--ink-2); }
 
-/* ---------- 13. 地图（Leaflet） ---------- */
-/* 页面自己用 map.createPane 建的图层：Leaflet 只给自带的 overlayPane 取消了 svg 的最大宽度，上面的 svg { max-width: 100% } 会把它们压成 0 宽 */
-.leaflet-pane svg { max-width: none !important; max-height: none !important; }
+/* ---------- 13. 地图 ---------- */
+/* 地图画在单独的页面里（/map、/map/share，样式见 web/map/frame.css），这里不需要样式 */
 
 /* ---------- 14. 打印：隐藏站点页头页脚，强制浅色 ---------- */
 @media print {

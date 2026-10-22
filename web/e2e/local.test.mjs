@@ -2,9 +2,10 @@
 // 本地模式（ui.py）的端到端检查：读写配置文件、校验、推荐车站的设置面板。
 // 不点「计算方案」和「开始找」；ui.py 用的是假 Key，出站请求也走了不存在的代理。
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { after, afterEach, before, test } from 'node:test';
-import { bind, cleanup, closeBrowser, newGuardedPage, openSuggest, startLocal, waitFormReady, waitMapReady } from './lib.mjs';
+import { bind, cleanup, closeBrowser, FAKE_JS_KEY, mapLayers, newGuardedPage, openSuggest, ROOT, startLocal, waitFormReady, waitMapLayers, waitMapReady } from './lib.mjs';
 
 let srv, page, guard;
 
@@ -26,6 +27,51 @@ test('本地：加载配置', async () => {
   assert.equal(await page.locator('#historyBtn').isHidden(), true, '本地没有历史');
   assert.equal(await page.locator('#tryBanner').count(), 0);
   assert.equal(await page.locator('#save').innerText(), '保存');
+  // 地图：本地版自己提供 /map；没配 JS Key（AMAP_JS_KEY 或 .amap_js_key）就是不带底图的画法，点照样画出来
+  const layers = await waitMapLayers(page, (l) => l.points > 0, '本地版预览的点');
+  assert.equal(layers.renderer, 'plain');
+  assert.equal(await page.locator('#mapFail').isHidden(), true);
+});
+
+test('本地：配了 JS Key（环境变量）时地图页面用高德 JS API（假的），带的是这个 Key', async () => {
+  const keyed = await startLocal({ jsKey: FAKE_JS_KEY });
+  const P = await newGuardedPage(keyed.base, { fakeJsApi: true });
+  try {
+    await P.page.goto(keyed.base);
+    await waitFormReady(P.page);
+    await waitMapReady(P.page);
+    const layers = await waitMapLayers(P.page, (l) => l.points > 0, '预览的点');
+    assert.equal(layers.renderer, 'amap');
+    const loads = P.guard.jsApi.filter((u) => new URL(u).pathname === '/maps');
+    assert.equal(loads.length, 1);
+    assert.equal(new URL(loads[0]).searchParams.get('key'), FAKE_JS_KEY);
+    P.guard.assertClean();
+    assert.equal((await mapLayers(P.page)).points, layers.points);
+  } finally { await P.context.close(); }
+});
+
+// 方案页预览（/share）：本地版把「生成方案页」写成的 <配置名>-plan.html 原样返回；里面的地图 iframe 嵌 /map/share（本地版自己提供，不填 Key，和发布出去的一致）。
+// 这里不真的算方案（假 Key 到不了高德），直接把 share.py 生成的金标准方案页放到 ui.py 读的位置
+test('本地：方案页预览里有地图（嵌 /map/share，配不配 JS Key 都是不带底图的画法，不请求高德）', async () => {
+  const golden = join(ROOT, 'tests/golden/two_cars/share-o1-b1.html');
+  for (const jsKey of [undefined, FAKE_JS_KEY]) {
+    const s = jsKey ? await startLocal({ jsKey }) : srv;
+    copyFileSync(golden, join(s.dir, 'trip-plan.html'));
+    const P = await newGuardedPage(s.base, { fakeJsApi: !!jsKey });
+    try {
+      await P.page.goto(`${s.base}/share`);
+      await P.page.waitForFunction(() => document.querySelector('iframe#mapFrame'));
+      const pts = JSON.parse(/<script id="data" type="application\/json">([\s\S]*?)<\/script>/.exec(readFileSync(golden, 'utf8'))[1]).points.length;
+      const sel = '[data-layer=point]';
+      const frame = () => P.page.frames().find((f) => new URL(f.url()).pathname === '/map/share');
+      await P.page.waitForFunction(([n, q]) => { const f = [...document.querySelectorAll('iframe')][0]?.contentDocument; return f && f.querySelectorAll(q).length >= n; }, [pts, sel], { timeout: 15_000 });
+      assert.equal(await frame().locator(sel).count(), pts);
+      assert.equal(await P.page.locator('#map').isVisible(), true);
+      assert.equal(await frame().locator('.plain-note').count(), 1, jsKey ? '配了 Key，方案页预览也不用：和发布出去的一致' : '没配 Key：不带底图的画法');
+      assert.deepEqual(P.guard.jsApi, [], '没有请求高德');
+      P.guard.assertClean();
+    } finally { await P.context.close(); }
+  }
 });
 
 test('本地：改字段并保存，配置文件真的变了，第一次保存生成 .bak', async () => {

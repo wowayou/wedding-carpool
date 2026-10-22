@@ -75,11 +75,14 @@ test('页眉操作区有「试玩」(/try) 和「新建行程」(/#create)，页
   } finally { rmSync(b.dir, { recursive: true, force: true }); }
 });
 
-// 静态页面的 CSP 在构建时（web/build.mjs）检查：script-src 只能是本站、cdnjs 和内嵌脚本的哈希
+// 静态页面的 CSP 在构建时（web/build.mjs）检查：script-src 只能是本站和内嵌脚本的哈希
 test('方案页的 CSP 不放行第三方统计脚本（隐私页写了 Cloudflare 自动注入的会被拦下）', () => {
   const worker = readFileSync('web/worker.js', 'utf8');
-  const share = worker.slice(worker.indexOf('const SHARE_CSP'), worker.indexOf('];', worker.indexOf('const SHARE_CSP')));
-  assert.match(share, /"script-src 'unsafe-inline' https:\/\/cdnjs\.cloudflare\.com"/);
+  const share = worker.slice(worker.indexOf('const SHARE_CSP'), worker.indexOf("].join('; ')", worker.indexOf('const SHARE_CSP')));
+  assert.match(share, /"script-src 'unsafe-inline'"/); // 没有 cdnjs（v3.16 起方案页不加载 Leaflet）
+  assert.match(share, /"style-src 'unsafe-inline'"/);
+  assert.match(share, /"frame-src 'self'"/); // 地图在 /map/share 的 iframe 里
+  assert.doesNotMatch(share, /cdnjs|autonavi|amap\.com|unsafe-eval/, '方案页的策略不放行 cdnjs、高德，更不放开 unsafe-eval');
   assert.doesNotMatch(worker, /cloudflareinsights/);
 });
 
@@ -141,6 +144,22 @@ test('构建产物里有试玩页 try.html 和 try-trip.json，CSP 与编辑页�
   assert.equal(readFileSync('dist/editor/main.js', 'utf8'), readFileSync('web/editor/main.js', 'utf8'));
   assert.match(edit, /<script type="module" src="\/editor\/main\.js"><\/script>/);
   assert.equal(csp(edit).match(/'sha256-/g).length, 1);
+  // v3.16：地图在同源 iframe 里的 /map，编辑页只多一条 frame-src 'self'；高德的瓦片、Leaflet 和 cdnjs 都不放行，也不再随站点分发 Leaflet
+  const directives = Object.fromEntries(csp(edit).split('; ').map((d) => [d.split(' ')[0], d.split(' ').slice(1)]));
+  assert.deepEqual(directives['frame-src'], ["'self'"]);
+  assert.deepEqual(directives['img-src'], ["'self'", 'data:'], '没有高德瓦片');
+  assert.doesNotMatch(csp(edit), /autonavi|cdnjs|leaflet/i);
+  assert.ok(!existsSync('dist/vendor/leaflet'));
+  assert.doesNotMatch(edit, /leaflet/i);
+  assert.ok(existsSync('dist/vendor/marked/marked.min.js') && existsSync('dist/vendor/pyodide/pyodide.mjs'));
+  const demo = readFileSync('dist/demo.html', 'utf8');
+  // 示例页（切片 3）：地图是同源 iframe 里的 /map，只多一条 frame-src 'self'；不放行 cdnjs、高德，更没有 unsafe-eval
+  const demoCsp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(demo)[1];
+  assert.match(demoCsp, /frame-src 'self'(;|$)/);
+  assert.doesNotMatch(demoCsp, /cdnjs|autonavi|amap|unsafe-eval/);
+  assert.doesNotMatch(demo, /leaflet|cdnjs|autonavi/i);
+  assert.match(demo, /<iframe id="mapFrame"/);
+  assert.match(demo, /frame\.src = '\/map'/);
 });
 
 // config-fields.json：网页版 Python 在 py/ 下读，编辑页从站点根目录取；Pyodide 要把它和 .py 一起加载
@@ -165,7 +184,7 @@ test('CSP：只有首页、编辑页和试玩页的 connect-src 放行 restapi.a
   const AMAP = 'https://restapi.amap.com';
   const connectOf = (html) => /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1].split('; ').find((d) => d.startsWith('connect-src '));
   const allowed = new Set(['index.html', 'edit.html', 'try.html']);
-  const files = htmlFiles('dist');
+  const files = htmlFiles('dist').filter((f) => f !== 'map.html'); // map.html 由 Worker 返回、策略在响应头里，单独在下一个用例里检查
   for (const f of allowed) assert.ok(files.includes(f), `dist 里没有 ${f}`);
   for (const f of files) {
     const connect = connectOf(readFileSync(join('dist', f), 'utf8'));
@@ -177,4 +196,20 @@ test('CSP：只有首页、编辑页和试玩页的 connect-src 放行 restapi.a
   assert.match(readFileSync('web/worker.js', 'utf8'), /"connect-src 'none'"/);
   // 计算线程是同源的模块 Worker，没有单独的 CSP 响应头：它的请求受创建它的编辑页和试玩页的策略约束，两页都放行了
   assert.ok(!existsSync('dist/_headers') || !/restapi\.amap\.com/.test(readFileSync('dist/_headers', 'utf8')));
+});
+
+// v3.16：地图页面 map.html 要 unsafe-eval（高德 JS API），策略只放在 Worker 的响应头里；其余页面的 meta CSP 一个都不能放宽
+test('地图页面：map.html 没有 meta CSP（响应头负责）、脚本是单个普通脚本；其余页面的 CSP 都没有 unsafe-eval 和高德域名', { skip: !existsSync('.cache/vendor') && '没有依赖缓存，先 npm run build 一次' }, () => {
+  const child = spawnSync(process.execPath, ['web/build.mjs'], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const map = readFileSync('dist/map.html', 'utf8');
+  assert.doesNotMatch(map, /Content-Security-Policy/i);
+  assert.match(map, /<meta name="amap-js-key" content="">/);
+  assert.ok(existsSync('dist/map/frame.js') && existsSync('dist/map/frame.css'));
+  assert.doesNotMatch(readFileSync('dist/map/frame.js', 'utf8'), /^\s*(import|export)\b/m);
+  for (const f of htmlFiles('dist').filter((n) => n !== 'map.html')) {
+    const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(readFileSync(join('dist', f), 'utf8'))?.[1];
+    assert.ok(csp, `${f} 没有 CSP`);
+    assert.doesNotMatch(csp, /'unsafe-eval'|webapi\.amap\.com|\*\.amap\.com/, `${f} 的 CSP 不该放宽`);
+  }
 });

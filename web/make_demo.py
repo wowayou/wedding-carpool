@@ -8,6 +8,7 @@
 老张从南京开车，小李（同行 2 人）从上海、小陈从武汉坐高铁，开返程，最大绕路 60/45 分钟。
 这里只做文字处理，不联网：加上「这是示例」说明、canonical，去掉页脚的自动删除日期，套上站点的页头页脚和样式，
 并把页面图标换成站点上的文件（示例页不在方案页沙箱里，可以直接引用）。
+地图（v3.16）：方案页的地图是 iframe 嵌 /map/share（不带底图）；示例页是同源页面、不在沙箱里，改嵌 /map（有底图），消息也只发给本站。
 """
 
 from __future__ import annotations
@@ -17,6 +18,21 @@ import sys
 from pathlib import Path
 
 OUT = Path(__file__).with_name("demo.html")
+
+
+def demo_map(h: str) -> str:
+    """方案页的地图 iframe 改成示例页的：嵌 /map（同源，有底图）、postMessage 只发给本站。"""
+    for old, new in (
+        (' referrerpolicy="no-referrer-when-downgrade"', ""),
+        ("frame.src = '/map/share'", "frame.src = '/map'"),
+        ("// 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线和标签，没有底图；图例不画在地图里，只在地图下面写成文字；方案页自己不放行任何外部脚本）。",
+         "// 地图画在 /map 的 iframe 里（高德 JS API 在那个页面里加载，有底图；示例页自己不放行任何外部脚本）。"),
+        ("}, '*'); } // 方案页在沙箱里（来源 null），只能用 '*'；地图页面也只认 parent", "}, location.origin); } // 示例页和 /map 同源，不在沙箱里"),
+    ):
+        if old not in h:
+            raise SystemExit(f"方案页里找不到要改的位置：{old}")
+        h = h.replace(old, new, 1)
+    return h
 
 
 def convert(h: str) -> str:
@@ -36,7 +52,7 @@ def convert(h: str) -> str:
     h = once(r"<!doctype html>", "<!doctype html>\n<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->", h)
     h = once(r'<body>\n<div class="wrap">', '<body>\n<!-- include:header -->\n<main class="wrap" id="main">', h)
     h = once(r'</div>\n<script id="data"', '</main>\n<!-- include:footer -->\n<script id="data"', h)
-    return h
+    return demo_map(h)
 
 
 if __name__ == "__main__":

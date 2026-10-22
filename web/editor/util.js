@@ -6,9 +6,5 @@ export const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const isPlain = (x) => x && typeof x === 'object' && !Array.isArray(x);
 export const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 隐私模式 */ } } };
 
-export const themeVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-export const parseLoc = (loc) => { const [lng, lat] = String(loc || '').split(',').map(Number); return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null; };
-
 export const isQuotaError = (msg) => /额度|配额|上限/.test(String(msg));
 

@@ -464,13 +464,17 @@ function codePage(id, message, status) {
 }
 
 // 方案页的 HTML 是编辑者的浏览器生成后上传的，不能当作本站的可信代码：放进沙箱（独立的匿名来源），
-// 读不到本站的 localStorage（里面有编辑链接）和 Cookie；只放行地图要用的脚本、样式和瓦片，不能发请求、不能提交表单
+// 读不到本站的 localStorage（里面有编辑链接）和 Cookie；只放行内嵌的脚本和样式，不能发请求、不能提交表单。
+// 地图（v3.16 起）画在 iframe 里：frame-src 只放本站，嵌的是 /map/share（只用不带底图的画法，不加载高德；方案页自己不放行任何外部脚本）。
+// 旧方案页（3.15 以前发布的）HTML 里还是 Leaflet：脚本、样式、瓦片都被这套策略拦下，页面里「Leaflet 没加载就把地图那块藏起来」的老逻辑生效，
+// 所以旧方案页不显示地图，其余照常；重新发布一次就有新地图。
 const SHARE_CSP = [
   'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-top-navigation-by-user-activation',
   "default-src 'none'",
-  "script-src 'unsafe-inline' https://cdnjs.cloudflare.com",
-  "style-src 'unsafe-inline' https://cdnjs.cloudflare.com",
-  'img-src data: https://cdnjs.cloudflare.com https://*.is.autonavi.com https://carpool.eigentime.org', // 最后一个是站点图标
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  'img-src data: https://carpool.eigentime.org', // 后一个是站点图标
+  "frame-src 'self'",
   "connect-src 'none'", "form-action 'none'", "base-uri 'none'", "frame-ancestors 'none'",
 ].join('; ');
 
@@ -502,6 +506,46 @@ async function sharePage(request, env, url, id, ctx) {
       'content-security-policy': SHARE_CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin',
     },
   });
+}
+
+// ---------- 地图页面（v3.16）----------
+
+// /map 用高德 JS API，要放开 unsafe-eval（实测不放开地图加载不完），所以单独成一个页面，只有它用这套宽松的策略；
+// 编辑页、示例页、方案页自己的策略不放宽，用 iframe 嵌它。取值依据：docs/v3.16-plan.md 第四节
+const MAP_CSP = [
+  "default-src 'none'",
+  "script-src 'self' https://webapi.amap.com https://jsapi-service.amap.com https://restapi.amap.com https://vdata.amap.com 'wasm-unsafe-eval' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https://*.amap.com https://*.is.autonavi.com",
+  "connect-src 'self' https://*.amap.com",
+  "base-uri 'none'", "form-action 'none'",
+].join('; ');
+
+// /map/share：方案页嵌的，只用不带底图的画法（只画点、线、标签、图例，自己的脚本和样式），不加载高德，所以什么都不放行：
+// 没有高德的域名、没有 unsafe-eval，也没有图片和网络请求。取值依据：docs/v3.16-plan.md 切片 4
+const MAP_SHARE_CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "base-uri 'none'", "form-action 'none'",
+].join('; ');
+
+// /map：编辑页、试玩、示例页嵌，加 frame-ancestors 'self'（别的网站嵌不了）。页面里的 Key 是 env.AMAP_JS_KEY（不是秘密，
+// 靠高德控制台的域名白名单限制），没设就填空，地图页面改用不带底图的画法。
+// /map/share：方案页嵌。方案页在 CSP 沙箱里，来源是 null，加不了 frame-ancestors（写 'self' 也不匹配），也不带 X-Frame-Options，
+// 任何人都能直接打开或嵌入。不填 Key（env.AMAP_JS_KEY 设了也不填），没有东西可借，所以不检查 Referer
+async function mapPage(request, env, url, share) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'method not allowed' }, 405);
+  const res = await env.ASSETS.fetch(new Request(new URL('/map', url)));
+  if (res.status !== 200) return res;
+  const key = !share && /^[0-9A-Za-z]{16,64}$/.test(env.AMAP_JS_KEY || '') ? env.AMAP_JS_KEY : ''; // 只放行字母数字，免得变量里的怪字符破坏页面
+  const html = (await res.text()).replace(/<meta name="amap-js-key" content="[^"]*">/, `<meta name="amap-js-key" content="${key}">`);
+  const headers = {
+    'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex',
+    'content-security-policy': share ? MAP_SHARE_CSP : `${MAP_CSP}; frame-ancestors 'self'`,
+  };
+  if (!share) headers['x-frame-options'] = 'SAMEORIGIN';
+  return new Response(request.method === 'HEAD' ? null : html, { headers });
 }
 
 // ---------- 高德代理 ----------
@@ -1439,7 +1483,9 @@ export class Usage {
 // ---------- 入口 ----------
 
 // Worker 生成的响应（JSON、方案页、口令页、编辑页、404）也要带安全头；静态文件的同一组头在 web/_headers。
-// 两处要保持一致。X-Frame-Options 和 frame-ancestors 只能放在响应头里，meta 标签里无效
+// 两处要保持一致。X-Frame-Options 和 frame-ancestors 只能放在响应头里，meta 标签里无效。
+// 例外（只有这两个）：/map 的 X-Frame-Options 是 SAMEORIGIN（地图页面要被本站页面嵌）；/map/share 不带 X-Frame-Options
+// （嵌它的方案页在沙箱里，来源是 null，SAMEORIGIN 也会挡住；它不填 Key，没有要保护的，见 mapPage）。静态文件里的 /map.html 没有走这两个入口，不会被直接访问
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
@@ -1452,7 +1498,7 @@ function withSecurityHeaders(res, extra = {}) {
   if (res.status === 101 || res.webSocket) return res; // WebSocket 升级响应不能改
   const out = new Response(res.body, res); // 复制一份，ASSETS 等来源的响应头是只读的
   // 方案页自带的 referrer-policy 等更严格的设置保留，其余补齐
-  for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...extra })) if (!out.headers.has(k)) out.headers.set(k, v);
+  for (const [k, v] of Object.entries({ ...SECURITY_HEADERS, ...extra })) if (v !== null && !out.headers.has(k)) out.headers.set(k, v); // extra 里写 null：这一项不加
   return out;
 }
 
@@ -1468,7 +1514,8 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const isEditPage = /^\/t\/[a-z2-9]{10}\/?$/.test(url.pathname) || /^\/try(?:\.html)?\/?$/.test(url.pathname); // 试玩页就是编辑页的静态副本
-    return withSecurityHeaders(await route(request, env, url, ctx), isEditPage ? { 'content-security-policy': "frame-ancestors 'none'" } : {});
+    const extra = isEditPage ? { 'content-security-policy': "frame-ancestors 'none'" } : url.pathname === '/map/share' ? { 'x-frame-options': null } : {};
+    return withSecurityHeaders(await route(request, env, url, ctx), extra);
   },
 };
 
@@ -1477,6 +1524,7 @@ async function route(request, env, url, ctx) {
   try {
     if (crossSiteMutation(request, url)) return json({ error: '只接受本站发起的请求' }, 403);
     if (pathname === '/api/env') return json({ mode: 'online', ownerKey: Boolean(env.ACCESS_CODE && env.AMAP_KEY), version: pkg.version });
+    if (pathname === '/map' || pathname === '/map/share') return await mapPage(request, env, url, pathname === '/map/share');
     if (pathname === '/api/status' && request.method === 'GET') return await publicStatus(env, url);
     if (pathname === '/api/trips' && request.method === 'POST') return await createTrip(request, env, ctx);
     if (pathname.startsWith('/api/admin/')) return await adminApi(request, env, url, ctx);

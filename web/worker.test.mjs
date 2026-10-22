@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Worker 的离线测试：内存版 KV / Durable Object + 假的 fetch，不连 Cloudflare 和高德。运行：npm test
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { beforeEach, test } from 'node:test';
 import pkg from '../package.json' with { type: 'json' };
 import worker, { ConfigRoom, Usage } from './worker.js';
@@ -1244,6 +1245,15 @@ test('SHARE_CSP 允许沙箱里的方案页加载站点图标', async () => {
   assert.match((await call(share.url)).headers.get('content-security-policy'), /img-src [^;]*https:\/\/carpool\.eigentime\.org/);
 });
 
+test('SHARE_CSP：地图改用 iframe 嵌本站的 /map/share，去掉 cdnjs 和高德瓦片', async () => {
+  const t = await newTrip();
+  const share = (await publish(t, '<!doctype html><p>hi</p>')).share;
+  const csp = (await call(share.url)).headers.get('content-security-policy');
+  assert.match(csp, /frame-src 'self'(;|$)/);
+  assert.match(csp, /script-src 'unsafe-inline'(;|$)/);
+  assert.doesNotMatch(csp, /cdnjs|autonavi|amap|unsafe-eval/);
+});
+
 test('改动状态的请求：跨站 Origin 被拒，同源和不带 Origin 的放行', async () => {
   const evil = 'https://evil.example';
   const same = 'https://carpool.test';
@@ -1433,4 +1443,128 @@ test('/api/env 返回版本号（取自 package.json）', async () => {
   const res = await (await call('/api/env')).json();
   assert.match(res.version, /^\d+\.\d+\.\d+$/);
   assert.equal(res.version, pkg.version);
+});
+
+// ---------- v3.16 地图页面：/map 和 /map/share ----------
+const MAP_HTML = '<!doctype html><html><head><meta charset="utf-8"><meta name="amap-js-key" content=""><title>地图</title></head><body><div id="map"></div></body></html>';
+const mapAssets = () => { env.ASSETS = { fetch: async (req) => (new URL(req.url).pathname === '/map' ? new Response(MAP_HTML, { headers: { 'content-type': 'text/html', 'x-frame-options': 'DENY' } }) : new Response('asset')) }; };
+const JS_KEY = '0123456789abcdef0123456789abcdef';
+const metaKey = (html) => /<meta name="amap-js-key" content="([^"]*)">/.exec(html)[1];
+const cspOf = (res) => Object.fromEntries(res.headers.get('content-security-policy').split('; ').map((d) => [d.split(' ')[0], d.split(' ').slice(1)]));
+
+test('/map：填入 AMAP_JS_KEY；CSP 放开 unsafe-eval 并加 frame-ancestors 本站；只允许本站嵌入', async () => {
+  mapAssets();
+  env.AMAP_JS_KEY = JS_KEY;
+  const res = await call('/map');
+  assert.equal(res.status, 200);
+  assert.equal(metaKey(await res.text()), JS_KEY);
+  const csp = cspOf(res);
+  assert.ok(csp['script-src'].includes("'unsafe-eval'") && csp['script-src'].includes('https://webapi.amap.com'));
+  assert.deepEqual(csp['frame-ancestors'], ["'self'"]);
+  assert.deepEqual(csp['default-src'], ["'none'"]);
+  assert.ok(csp['connect-src'].includes('https://*.amap.com') && csp['img-src'].includes('https://*.is.autonavi.com'));
+  assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN'); // 不是 DENY：本站的页面要嵌它
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('strict-transport-security'), 'max-age=15552000');
+  assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin'); // 高德的域名白名单要看到来源
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.match(res.headers.get('content-type'), /^text\/html/);
+});
+
+test('/map：没设 AMAP_JS_KEY 时 meta 是空的；Key 里有怪字符也不填（不破坏页面）', async () => {
+  mapAssets();
+  assert.equal(metaKey(await (await call('/map')).text()), '');
+  env.AMAP_JS_KEY = '';
+  assert.equal(metaKey(await (await call('/map')).text()), '');
+  env.AMAP_JS_KEY = 'abc"><script>alert(1)</script>';
+  const html = await (await call('/map')).text();
+  assert.equal(metaKey(html), '');
+  assert.doesNotMatch(html, /alert/);
+});
+
+test('/map：只接受 GET 和 HEAD', async () => {
+  mapAssets();
+  assert.equal((await call('/map', { method: 'HEAD' })).status, 200);
+  assert.equal((await call('/map', { method: 'POST', body: {} })).status, 405);
+});
+
+// /map/share 只给方案页嵌，只用不带底图的画法：不填 Key，不放行高德，任何来源都返回页面
+test('/map/share：设了 AMAP_JS_KEY 也不往页面里填 Key；安全策略没有高德的域名、unsafe-eval、wasm-unsafe-eval', async () => {
+  mapAssets();
+  env.AMAP_JS_KEY = JS_KEY;
+  const res = await call('/map/share');
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.equal(metaKey(html), '');
+  assert.doesNotMatch(html, new RegExp(JS_KEY));
+  const header = res.headers.get('content-security-policy');
+  assert.doesNotMatch(header, /amap|autonavi|unsafe-eval/); // 同时覆盖 'unsafe-eval' 和 'wasm-unsafe-eval'
+  const csp = cspOf(res);
+  assert.deepEqual(csp['default-src'], ["'none'"]);
+  assert.deepEqual(csp['script-src'], ["'self'"]);
+  assert.deepEqual(csp['base-uri'], ["'none'"]);
+  assert.deepEqual(csp['form-action'], ["'none'"]);
+  assert.equal(csp['connect-src'], undefined, 'default-src none 已经挡住，不需要 connect-src');
+  for (const [name, hosts] of Object.entries(csp)) assert.ok(!hosts.some((h) => /^https?:/.test(h)), `${name} 里没有外部地址`);
+});
+
+test('/map 的安全策略不变：仍放行高德和 unsafe-eval（只有 /map 需要）', async () => {
+  mapAssets();
+  const csp = cspOf(await call('/map'));
+  assert.ok(csp['script-src'].includes("'unsafe-eval'") && csp['script-src'].includes("'wasm-unsafe-eval'"));
+});
+
+test('/map/share：不看 Referer 和 Fetch Metadata，直接打开、别的网站、没有 Referer 都返回页面（页面里没有 Key，没有可借的东西）', async () => {
+  mapAssets();
+  env.AMAP_JS_KEY = JS_KEY;
+  for (const [name, headers] of [
+    ['没有任何头', {}],
+    ['本站 /p/… 的 Referer', { referer: 'https://carpool.test/p/abcdefghjk' }],
+    ['别的网站的 Referer', { referer: 'https://evil.example/p/abcdefghjk' }],
+    ['只有来源的 Referer', { referer: 'https://carpool.test/' }],
+    ['直接打开（Dest 是 document）', { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' }],
+    ['沙箱里的方案页嵌入（iframe + cross-site）', { 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'cross-site' }],
+    ['同源 iframe', { 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'same-origin' }],
+  ]) {
+    const res = await call('/map/share', { headers });
+    assert.equal(res.status, 200, name);
+    assert.equal(metaKey(await res.text()), '', name);
+    assert.equal(res.headers.get('vary'), null, `${name}：响应不随请求头变，不需要 Vary`);
+  }
+});
+
+test('/map/share：只接受 GET 和 HEAD', async () => {
+  mapAssets();
+  assert.equal((await call('/map/share', { method: 'HEAD' })).status, 200);
+  assert.equal((await call('/map/share', { method: 'POST', body: {} })).status, 405);
+});
+
+test('/map/share：不加 frame-ancestors，也不带 X-Frame-Options（沙箱里的方案页来源是 null，嵌得进来）；其余安全头照旧', async () => {
+  mapAssets();
+  const res = await call('/map/share');
+  assert.equal(res.headers.get('x-frame-options'), null);
+  assert.equal(cspOf(res)['frame-ancestors'], undefined);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('strict-transport-security'), 'max-age=15552000');
+  assert.equal(res.headers.get('x-robots-tag'), 'noindex');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+});
+
+test('/map 和 /map/share 之外的页面没有放宽：没有 unsafe-eval，X-Frame-Options 仍是 DENY', async () => {
+  const t = await newTrip();
+  const share = (await publish(t, '<!doctype html><p>hi</p>')).share;
+  const page = await call(share.url);
+  assert.doesNotMatch(page.headers.get('content-security-policy'), /'unsafe-eval'|amap\.com/);
+  assert.equal(page.headers.get('x-frame-options'), 'DENY');
+  const edit = await call(`/t/${t.id}`);
+  assert.equal(edit.headers.get('x-frame-options'), 'DENY');
+  assert.doesNotMatch(edit.headers.get('content-security-policy'), /'unsafe-eval'/);
+  assert.equal((await call('/api/env')).headers.get('x-frame-options'), 'DENY');
+});
+
+test('wrangler.jsonc：/map 和 /map/share 先走 Worker', () => {
+  const cfg = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  const first = /"run_worker_first":\s*\[([^\]]*)\]/.exec(cfg)[1];
+  assert.match(first, /"\/map"/);
+  assert.match(first, /"\/map\/share"/);
 });

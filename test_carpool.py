@@ -462,9 +462,10 @@ class BrowserBridgeTest(unittest.TestCase):
         self.assertEqual(amap.cache, {})
 
     def test_share_tooltips_are_plain_text(self):
-        # 地图提示框里的成员名字不能当 HTML 解析（审计 S-13）
-        self.assertNotIn(".bindTooltip(r.label", share.TEMPLATE)
-        self.assertIn("function text(s)", share.TEMPLATE)
+        # 地图提示框里的成员名字不能当 HTML 解析（审计 S-13）：v3.16 起方案页只把名字当数据放进 scene，不拼 HTML；画的是地图页面（web/map/frame.js 用 textContent）
+        self.assertNotIn("innerHTML", share.TEMPLATE)
+        self.assertNotIn("insertAdjacentHTML", share.TEMPLATE)
+        self.assertIn("tooltip: r.label", share.TEMPLATE)
 
     def test_browser_single_request_posts_query_in_body(self):
         # 单个请求也走 POST 批量接口：地点文字不出现在网址上（审计 S-12/D-14）
@@ -2389,11 +2390,18 @@ class ShareStyleTest(unittest.TestCase):
     def test_rendered_page_is_self_contained_dark_and_print_light(self):
         cfg = config([person("老王", WANG, car_seats=3), person("小陈", "114.0,34.0")])
         html = share.render_share(service.compute(cfg, FakeAmap()), 0)
-        self.assertNotIn('href="/design.css"', html)  # 沙箱里只放行 cdnjs 和高德瓦片
+        self.assertNotIn('href="/design.css"', html)  # 沙箱里只放行内嵌的脚本、样式和本站的地图 iframe
         self.assertNotIn("@@", html)  # 占位都换掉了
         self.assertIn("prefers-color-scheme: dark", html)
         self.assertIn(f"--bg: {share.DARK['--bg']};", html)
-        self.assertIn("var(--map-filter)", html)  # 深色下降低瓦片亮度，只作用在瓦片层
+        # 地图（v3.16）：iframe 嵌 /map/share，没有 Leaflet、cdnjs、高德瓦片；深色由 scene 的 theme 交给地图页面，页面里没有瓦片滤镜
+        self.assertIn('<iframe id="mapFrame"', html)
+        self.assertIn("frame.src = '/map/share'", html)
+        self.assertIn('referrerpolicy="no-referrer-when-downgrade"', html)
+        self.assertIn("postMessage({ type: 'scene'", html)
+        for gone in ("leaflet", "Leaflet", "cdnjs", "autonavi", "L.map"):
+            self.assertNotIn(gone, html)
+        self.assertIn("beforeprint", html)  # 打印一律用浅色
         print_css = html[html.index("@media print"):html.index("</style>")]
         self.assertIn(f"--bg: {share.LIGHT['--bg']};", print_css)  # 打印时强制回到浅色
         for text in ("border-left-style: double", "border-left-style: dotted"):  # 黑白打印靠线型区分开车、坐车、打车
@@ -2436,6 +2444,50 @@ class UiServerTest(unittest.TestCase):
             with urllib.request.urlopen(self.base + path) as resp:
                 self.assertEqual(resp.status, 200)
                 self.assertIn(marker, resp.read())
+
+    def get(self, path):
+        with urllib.request.urlopen(self.base + path) as resp:
+            return resp.status, resp.headers.get("Content-Type"), resp.read().decode()
+
+    def test_map_page_and_scripts_are_served(self):
+        # 地图页面（v3.16）：没配 JS Key 时 meta 是空的；脚本以 ES 模块加载，每个 web/map/*.js 都能取到
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(ui, "JS_KEY_FILE", Path(self.dir.name) / "none"):
+            os.environ.pop("AMAP_JS_KEY", None)
+            status, ctype, html = self.get("/map")
+        self.assertEqual((status, ctype), (200, "text/html; charset=utf-8"))
+        self.assertIn('<meta name="amap-js-key" content="">', html)
+        self.assertIn('<script type="module" src="/map/frame.js"></script>', html)
+        for path, kind in (("/map/frame.js", "text/javascript"), ("/map/scene.js", "text/javascript"), ("/map/frame.css", "text/css")):
+            status, ctype, body = self.get(path)
+            self.assertEqual(status, 200)
+            self.assertTrue(ctype.startswith(kind), path)
+            self.assertGreater(len(body), 100)
+        self.assertEqual(self.call("/map/..%2Fui.py")[0], 404)
+
+    def test_map_share_never_gets_the_key(self):
+        # 本地版的方案页预览（/share）嵌 /map/share：和发布出去的一致，只用不带底图的画法，配了 JS Key 也不填；/map 照旧填
+        with mock.patch.object(ui, "JS_KEY_FILE", Path(self.dir.name) / "none"), mock.patch.dict(os.environ, {"AMAP_JS_KEY": "b" * 20}):
+            share = self.get("/map/share")
+            page = self.get("/map")
+        self.assertEqual(share[0], 200)
+        self.assertIn('<meta name="amap-js-key" content="">', share[2])
+        self.assertNotIn("b" * 20, share[2])
+        self.assertIn(f'content="{"b" * 20}"', page[2])
+
+    def test_js_key_from_env_or_file(self):
+        good = "0123456789abcdef0123456789abcdef"
+        keyfile = Path(self.dir.name) / ".amap_js_key"
+        with mock.patch.object(ui, "JS_KEY_FILE", keyfile), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AMAP_JS_KEY", None)
+            self.assertEqual(ui.js_key(), "")
+            keyfile.write_text(good + "\n", encoding="utf-8")
+            self.assertEqual(ui.js_key(), good)
+            self.assertIn(f'content="{good}"', self.get("/map")[2])
+            os.environ["AMAP_JS_KEY"] = "a" * 20  # 环境变量优先
+            self.assertEqual(ui.js_key(), "a" * 20)
+            os.environ["AMAP_JS_KEY"] = 'abc"><script>x</script>'  # 怪字符不填
+            self.assertEqual(ui.js_key(), "")
+            self.assertNotIn("<script>x", self.get("/map")[2])
 
     def test_page_and_config(self):
         with urllib.request.urlopen(self.base + "/") as resp:

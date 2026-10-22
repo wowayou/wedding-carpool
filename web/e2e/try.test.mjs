@@ -2,19 +2,22 @@
 // 试玩模式（/try）的端到端检查：不保存、不调用高德，计算在浏览器里的 Pyodide 中完成。
 import assert from 'node:assert/strict';
 import { after, afterEach, before, test } from 'node:test';
-import { bind, cleanup, closeBrowser, newGuardedPage, openSuggest, SLOW, startWrangler, waitFormReady, waitMapReady } from './lib.mjs';
+import { readFileSync } from 'node:fs';
+import { bind, cleanup, closeBrowser, FAKE_JS_KEY, mapFrame, mapLayers, mapView, newGuardedPage, openSuggest, SLOW, startWrangler, waitFormReady, waitMapLayers, waitMapReady } from './lib.mjs';
 
 let base, page, context, guard;
+const cfg = JSON.parse(readFileSync('web/try-trip.json', 'utf8')).config;
+const located = [cfg.venue, ...cfg.stations, ...cfg.people].filter((x) => x.location).length; // 试玩示例里已定位的点
 
 before(async () => {
-  ({ base } = await startWrangler());
+  ({ base } = await startWrangler({ jsKey: FAKE_JS_KEY })); // 设了假的 JS Key：地图页面走（假的）高德 JS API
 }, { timeout: 120_000 });
 after(async () => { await closeBrowser(); await cleanup(); });
 afterEach(() => guard?.assertClean());
 
 // 桌面页面：整个文件里共用一个，Pyodide 只加载一次
 test('试玩：加载', { timeout: SLOW }, async () => {
-  ({ page, context, guard } = await newGuardedPage(`${base}`));
+  ({ page, context, guard } = await newGuardedPage(`${base}`, { fakeJsApi: true }));
   await page.goto(`${base}/try`);
   await waitFormReady(page);
   await waitMapReady(page);
@@ -26,6 +29,17 @@ test('试玩：加载', { timeout: SLOW }, async () => {
   // 候选站和成员都画出来了
   assert.ok(await page.locator('#form [data-station-name]').count() >= 4);
   assert.equal(await page.locator('#tabs .tab').count(), 0, '还没算，没有方案卡片');
+  // 地图（iframe 里的 /map，假 JS API）：试玩示例里已定位的目的地、车站、成员都画成点，没有线和圈；图例在地图页面里
+  const L0 = await waitMapLayers(page, (l) => l.points === located, `预览的 ${located} 个点`);
+  assert.deepEqual({ lines: L0.lines, circles: L0.circles, renderer: L0.renderer }, { lines: 0, circles: 0, renderer: 'amap' });
+  assert.deepEqual(L0.legend, ['目的地', '开车的成员', '不开车的成员', '车站', '彩色线 = 接人后的实际路线', '灰色虚线 = 不接人时的直达路线']);
+  // 标签取舍：目的地的标签一定显示；不高亮的候选站只在悬停时显示
+  const texts = await mapFrame(page).locator('[data-fake=text]').evaluateAll((els) => els.map((e) => ({ text: e.textContent, hidden: e.dataset.hidden === 'true' })));
+  assert.equal(texts.length, located);
+  assert.equal(texts.find((t) => t.text === cfg.venue.name).hidden, false);
+  assert.ok(texts.some((t) => t.hidden), '候选站的标签没有悬停，不显示');
+  const v = await mapView(page);
+  assert.ok(v.inside, `预览的点都在地图容器里：${JSON.stringify(v)}`);
 });
 
 test('试玩：计算方案，方案卡片和地图图层都出来', { timeout: SLOW }, async () => {
@@ -36,9 +50,12 @@ test('试玩：计算方案，方案卡片和地图图层都出来', { timeout: 
   assert.ok((await page.locator('#report').innerText()).length > 50, '报告有内容');
   assert.equal(await page.locator('#stale').isHidden(), true, '刚算完不过期');
   assert.equal(await page.locator('#plan').innerText(), '计算方案', '按钮恢复');
-  // 地图：方案路线画在 overlayPane 里
-  await page.waitForFunction(() => document.querySelectorAll('#map .leaflet-overlay-pane path').length > 0);
-  assert.ok(await page.locator('#map .leaflet-overlay-pane path').count() > 0);
+  // 地图：方案路线画在地图页面（iframe）里，视野在容器内
+  const plan = await waitMapLayers(page, (l) => l.lines > 0, '方案的路线');
+  assert.ok(plan.lines > 0 && plan.points > 0);
+  assert.ok(plan.legend.length === 6, '图例没有找站的行');
+  const view = await mapView(page, { onlyUsed: true });
+  assert.ok(view.inside, `方案的点和线都在地图容器里：${JSON.stringify(view)}`);
   assert.match(await page.locator('#planDot').textContent(), /^\d+$/, '「方案」页签上有方案数');
 });
 
@@ -115,9 +132,10 @@ test('试玩：推荐车站的设置、估算、「开始找」不能点、地�
   // 「开始找」不能点，并写明原因
   assert.equal(await page.locator('#sgGo').isDisabled(), true);
   assert.match(await page.locator('#sgWhy').innerText(), /试玩不能实际搜索/);
-  // 地图上有找站过程图层（自建 pane 里的圈和路线）
-  await page.waitForFunction(() => document.querySelectorAll('#map .leaflet-sug-pane path').length > 0);
-  assert.equal(await page.locator('.legend-sug').isVisible(), true, '图例多出找站过程的几行');
+  // 地图上有找站过程图层（圈和路线）：方案和预览里没有圈，圈出现了就是找站图层；图例多出找站过程的两行
+  const sugOn = await waitMapLayers(page, (l) => l.circles > 0, '找站过程的圈');
+  assert.ok(sugOn.legend.includes('点线 = 车主路线（找站用）') && sugOn.legend.includes('浅色圈 = 搜过的范围'), '图例多出找站过程的几行');
+  assert.ok(await mapFrame(page).locator('[data-fake=polyline][data-dash="2 7"]').count() > 0, '车主路线是点线');
   // 展开设置：焦点到第一个输入框，改一项后摘要出现「改了 1 项」，估算重新算
   await toggle.click();
   assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
@@ -138,8 +156,9 @@ test('试玩：推荐车站的设置、估算、「开始找」不能点、地�
   // 关抽屉：找站过程从地图上拿掉，Esc 也能关
   await page.keyboard.press('Escape');
   await page.locator('#drawer').waitFor({ state: 'hidden' });
-  await page.waitForFunction(() => document.querySelectorAll('#map .leaflet-sug-pane path').length === 0);
-  assert.equal(await page.locator('.legend-sug').isHidden(), true);
+  const sugOff = await waitMapLayers(page, (l) => l.circles === 0, '找站过程的圈拿掉');
+  assert.deepEqual(sugOff.legend.filter((t) => /找站用|搜过的范围/.test(t)), [], '图例里找站过程的行拿掉');
+  assert.equal(await mapFrame(page).locator('[data-fake=polyline][data-dash="2 7"]').count(), 0);
 });
 
 test('试玩：勾选几个候选站一起删除，车次跟着清掉；出发日期下面写火车票哪天开售', async () => {
@@ -179,25 +198,32 @@ test('试玩：恢复示例', async () => {
   assert.equal(await page.locator('#tryBanner').isVisible(), true);
 });
 
+test('试玩：系统切换深色和浅色，scene 带的 theme 跟着变，瓦片调暗、底图样式不变、点数不变', async () => {
+  const before = await waitMapLayers(page, (l) => l.points === located, '恢复示例后预览的点（重画有 250 毫秒的延迟）');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await mapFrame(page).locator('html[data-theme=dark]').waitFor();
+  // 不设高德的深色样式（设了审图号会消失），深色只靠瓦片滤镜
+  assert.equal(await mapFrame(page).locator('[data-fake=map]').getAttribute('data-style'), 'amap://styles/normal');
+  assert.equal(await mapFrame(page).locator('img[src*="appmaptile"]').first().evaluate((e) => getComputedStyle(e).filter), 'brightness(0.82) contrast(1.05)');
+  assert.deepEqual((await mapLayers(page)).points, before.points);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await mapFrame(page).locator('html[data-theme=light]').waitFor();
+  await mapFrame(page).locator('[data-fake=map][data-style="amap://styles/normal"]').waitFor();
+  assert.equal(await mapFrame(page).locator('[data-fake=map]').count(), 1, '换主题不重建地图');
+});
+
 test('试玩：手机宽度的三个页签、深色模式、没有横向滚动', { timeout: SLOW }, async () => {
   await context.close();
-  ({ page, context, guard } = await newGuardedPage(base, { viewport: { width: 390, height: 844 }, colorScheme: 'dark' }));
+  ({ page, context, guard } = await newGuardedPage(base, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', fakeJsApi: true }));
   await page.goto(`${base}/try`);
   await waitFormReady(page);
   const noHScroll = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth);
   const tab = (name) => page.locator(`#tab${name}`);
-  // 地图视野：点和路线合起来的外框，宽或高至少占地图容器的四成，并且都在容器里（瓦片是空白图，看矢量图层）
-  const mapView = () => page.evaluate(() => {
-    const c = document.querySelector('#map').getBoundingClientRect();
-    const rs = [...document.querySelectorAll('#map .leaflet-overlay-pane path')].map((p) => p.getBoundingClientRect()).filter((r) => r.width || r.height);
-    if (!rs.length) return { n: 0, cw: c.width, ch: c.height };
-    const l = Math.min(...rs.map((r) => r.left)), t = Math.min(...rs.map((r) => r.top)), r = Math.max(...rs.map((x) => x.right)), b = Math.max(...rs.map((x) => x.bottom));
-    return { n: rs.length, w: r - l, h: b - t, cw: c.width, ch: c.height, inside: l >= c.left - 1 && t >= c.top - 1 && r <= c.right + 1 && b <= c.bottom + 1 };
-  });
-  const mapFitted = async (what) => {
+  // 地图视野：点和路线合起来的外框（在地图页面里量，假 JS API 画的矢量），宽或高至少占地图容器的四成，并且都在容器里
+  const mapFitted = async (what, onlyUsed = false) => {
     const ok = (v) => v.n > 0 && v.inside && (v.w >= v.cw * 0.4 || v.h >= v.ch * 0.4);
     let v;
-    for (let i = 0; i < 30; i++) { v = await mapView(); if (ok(v)) return; await page.waitForTimeout(100); }
+    for (let i = 0; i < 30; i++) { v = await mapView(page, { onlyUsed }); if (ok(v)) return; await page.waitForTimeout(100); }
     assert.fail(`${what}：地图视野没缩放到地点和路线上，实际 ${JSON.stringify(v)}`);
   };
   const visible = async () => ({
@@ -211,6 +237,9 @@ test('试玩：手机宽度的三个页签、深色模式、没有横向滚动',
   assert.equal(await tab('Map').getAttribute('aria-selected'), 'true');
   assert.equal(await noHScroll(), true);
   await mapFitted('载入后点「地图」');
+  // 深色：scene 带 theme，设计变量的颜色跟着换；底图样式仍是普通样式（深色靠瓦片滤镜）
+  const dark = await mapFrame(page).locator('body').evaluate(() => ({ theme: document.documentElement.dataset.theme, style: document.querySelector('[data-fake=map]').dataset.style }));
+  assert.deepEqual(dark, { theme: 'dark', style: 'amap://styles/normal' });
   await tab('Plan').click();
   assert.deepEqual(await visible(), { fill: false, map: false, plan: true });
   assert.equal(await noHScroll(), true);
@@ -227,7 +256,7 @@ test('试玩：手机宽度的三个页签、深色模式、没有横向滚动',
   assert.equal(await page.locator('#app').getAttribute('data-tab'), 'plan');
   assert.equal(await noHScroll(), true);
   await tab('Map').click();
-  await mapFitted('算完方案后点「地图」');
+  await mapFitted('算完方案后点「地图」', true);
   await tab('Plan').click();
   // 推荐车站在手机上盖住整个屏幕，有「去地图上看」出口
   await tab('Fill').click();
