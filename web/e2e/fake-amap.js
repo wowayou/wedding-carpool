@@ -62,6 +62,12 @@
       this.root.dataset.fake = 'map';
       this.root.dataset.style = opts?.mapStyle || '';
       Object.assign(this.root.style, { position: 'absolute', inset: '0', overflow: 'hidden' });
+      // 真的高德在这个 Key 下给的是栅格底图：容器里一张张 <img> 瓦片（线上实测），地址形如 webrd0x.is.autonavi.com/appmaptile?…
+      const tile = document.createElement('img');
+      tile.dataset.fake = 'tile';
+      tile.src = 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=1&y=1&z=3';
+      Object.assign(tile.style, { position: 'absolute', left: '0', top: '0', width: '256px', height: '256px' });
+      this.root.append(tile);
       this.container.append(this.root);
       this.overlays = new Set();
       this.view = { center: ll(opts?.center || [112, 34.5]), zoom: opts?.zoom ?? 5 };

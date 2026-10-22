@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 高德 JS API 2.0 的画法：AMap.Map 画底图，CircleMarker 画点，Text 画标签，Polyline 画线，Circle 画圈。
-// 只显示地图，不配安全密钥（securityJsCode）。深色用高德自带的深色样式。
+// 只显示地图，不配安全密钥（securityJsCode）。深色先设高德自带的深色样式（拿到矢量底图才生效）；栅格底图靠 frame.css 的滤镜调暗。
 import { declutter } from './declutter.js';
 import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets, labelAlways } from './scene.js';
 

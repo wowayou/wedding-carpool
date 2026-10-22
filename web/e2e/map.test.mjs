@@ -307,6 +307,25 @@ test('/map 标签：名字里的 HTML 标签不生成元素，原样显示成文
   assert.deepEqual(text, { text: `${name}\n<i id="inj2">斜</i>`, kids: 0 }, '标签里是原样的文字');
 });
 
+test('/map 深色：栅格底图瓦片用滤镜调暗（同 3.15），浅色没有；点、标签、图例不受影响', async () => {
+  const { page } = await open(withKey, '/map');
+  const filters = () => mapFrame(page).evaluate(() => {
+    const f = (el) => getComputedStyle(el).filter;
+    return { tile: f(document.querySelector('img[data-fake=tile]')), tiles: document.querySelectorAll('img[src*="is.autonavi.com/appmaptile"]').length,
+      marker: f(document.querySelector('[data-fake=circlemarker]')), text: f(document.querySelector('[data-fake=text]')), legend: f(document.getElementById('legend')), map: f(document.getElementById('map')) };
+  });
+  await send(page, SCENE());
+  const light = await filters();
+  assert.equal(light.tiles, 1);
+  assert.equal(light.tile, 'none');
+  await send(page, SCENE({ theme: 'dark' }));
+  const dark = await filters();
+  assert.equal(dark.tile, 'brightness(0.82) contrast(1.05)');
+  for (const k of ['marker', 'text', 'legend', 'map']) assert.equal(dark[k], 'none', `${k} 没有滤镜`);
+  await send(page, SCENE());
+  assert.equal((await filters()).tile, 'none', '换回浅色就没有');
+});
+
 const LABEL_SCENE = () => SCENE({
   points: [
     { lng: 117.98, lat: 30.0, kind: 'venue', name: '宏村示例酒店', priority: 0 },

@@ -2,6 +2,8 @@
 html, body { height: 100%; margin: 0; overflow: hidden; background: var(--surface-2); }
 svg { max-width: none; }
 #map { position: absolute; inset: 0; background: var(--surface-2); }
+/* 深色：高德给的是栅格底图（img 瓦片），套不上高德的深色样式，用滤镜调暗（同 3.15）。只作用于瓦片，不碰点、线、标签、图例；矢量底图不是 img，不受影响 */
+:root[data-theme="dark"] #map img[src*="is.autonavi.com/appmaptile"] { filter: brightness(.82) contrast(1.05); }
 .plain-svg { position: absolute; left: 0; top: 0; display: block; }
 .plain-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .plain { touch-action: none; cursor: grab; }
