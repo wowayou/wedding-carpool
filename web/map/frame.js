@@ -88,28 +88,43 @@ function drawLegend(scene) {
 
 function doFit(scene) { pendingFit = renderer.fit(scene) ? null : scene.fit; }
 
+const hasSize = () => box.clientWidth > 0 && box.clientHeight > 0;
+
 function show(scene) {
   current = scene;
   document.documentElement.dataset.theme = scene.theme; // 设计变量跟着换成深色或浅色的值
+  // 高德画法：容器还是 0 尺寸（手机上隐藏的页签）时先不建地图。高德的版权文字只在建地图时算一次，
+  // 那时没尺寸就一直是空的，审图号出不来（线上实测，之后 resize、缩放都补不上）。等 onResize 有尺寸了再建
+  if (!renderer && amapOk && !hasSize()) {
+    if (scene.fit?.auto) pendingFit = scene.fit;
+    return;
+  }
+  const fresh = !renderer;
   renderer ??= makeRenderer();
   document.documentElement.dataset.renderer = renderer.kind; // CSS 据此把图例抬到高德标识和审图号上面
   renderer.setTheme(scene.theme);
   drawLegend(scene);
   const counts = renderer.draw(scene);
   if (scene.fit?.auto) doFit(scene); // 没要求自适应的 scene 不动视野，也不取消还没做完的自适应（编辑页算完方案后紧接着还会重发 scene）
+  else if (fresh && pendingFit) doFit({ ...scene, fit: pendingFit }); // 刚建的地图：补做隐藏时或排队时记下的自适应
   send({ type: MSG.DRAWN, renderer: renderer.kind, ...counts });
 }
 
 function onScene(scene) {
   const errs = validateScene(scene);
   if (errs.length) return send({ type: MSG.FAIL, reason: `bad-scene: ${errs.slice(0, 5).join('；')}` });
-  if (!settled) queued = scene;
-  else show(scene);
+  if (!settled) {
+    if (scene.fit?.auto) pendingFit = scene.fit; // 排队时后来的 scene 会覆盖先来的，先来的自适应要求不能跟着丢
+    queued = scene;
+  } else show(scene);
 }
 
 // 容器尺寸变了（手机页签切换）：重算尺寸，再补做没能做的自适应
 function onResize() {
-  if (!renderer) return;
+  if (!renderer) {
+    if (settled && current && hasSize()) show(current); // 高德画法推迟建的地图，有尺寸了再建
+    return;
+  }
   renderer.resize();
   if (pendingFit) doFit({ ...current, fit: pendingFit }); // 用最近的内容，加上当时要求的 fit（没写 points 就框住现在的全部）
 }

@@ -213,6 +213,29 @@ test('/map 尺寸：隐藏时没做完的自适应，不会被后来没要求自
   assert.ok(insideAll(st));
 });
 
+// 高德的版权文字（审图号）只在建地图时算一次，0 尺寸时建就一直是空的（线上实测），所以隐藏时先不建
+test('/map 尺寸：一开始就隐藏（手机上隐藏的页签），高德画法先不建地图、不回报 drawn；显示后再建，并按隐藏时要求的 fit 自适应', async () => {
+  const { page } = await open(withKey, '/map');
+  await page.evaluate(() => { document.getElementById('f').style.display = 'none'; });
+  await page.waitForFunction(() => window.__msgs.some((m) => m.type === 'ready'));
+  await page.evaluate((s) => window.__send(s), SCENE()); // 要自适应
+  await page.evaluate((s) => window.__send(s), SCENE({ fit: { auto: false } })); // 后来的没要求自适应：待办留着
+  await page.waitForTimeout(500);
+  const frame = mapFrame(page);
+  await frame.waitForFunction(() => !!window.__fakeAmap);
+  assert.equal(await page.evaluate(() => window.__msgs.filter((m) => m.type === 'drawn').length), 0, '没尺寸时不画');
+  assert.equal(await frame.evaluate(() => window.__fakeAmap.calls.filter((c) => c.fn === 'Map').length), 0, '没尺寸时不建高德地图');
+  await page.evaluate(() => { document.getElementById('f').style.display = ''; });
+  await page.evaluate(() => window.__post({ type: 'resize' }));
+  await page.waitForFunction(() => window.__msgs.some((m) => m.type === 'drawn'));
+  const st = await fakeState(frame);
+  assert.equal(st.calls.filter((c) => c === 'Map').length, 1, '显示后建了一次');
+  assert.equal(st.fit.length, 1);
+  assert.deepEqual(st.fit[0].avoid, [16, 16, 16, 200], '用的是隐藏时要求自适应的那份 fit');
+  assert.ok(insideAll(st));
+  assert.equal(st.markers.length, 3);
+});
+
 test('/map 消息来源：只认同源的父窗口，别的窗口发来的 scene 不理；不合法的 scene 回报 fail', async () => {
   const stub = `${parentHtml('/map')}<iframe id="g" src="/__test/blank" style="display:none"></iframe>`;
   const P = await newGuardedPage(withKey, { fakeJsApi: true, stubs: { '/__test/parent': { body: stub }, '/__test/blank': { body: '<!doctype html><meta charset="utf-8">' } } });
