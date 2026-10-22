@@ -159,15 +159,15 @@ test('/map 标签：只留不互相遮挡的（按优先级），不高亮的悬
   assert.equal(await frame.locator('#tip').isVisible(), false);
 });
 
-test('/map 深色：用高德自带的深色样式，页面颜色变量跟着换；再换回浅色', async () => {
+test('/map 深色：不设高德的深色样式（设了审图号会消失），页面颜色变量跟着换；再换回浅色', async () => {
   const { page } = await open(withKey, '/map');
   await send(page, SCENE());
   const light = (await fakeState(mapFrame(page)));
   await send(page, SCENE({ theme: 'dark' }));
   const dark = await fakeState(mapFrame(page));
-  assert.equal(dark.style, 'amap://styles/dark');
+  assert.equal(dark.style, 'amap://styles/normal');
   assert.equal(dark.theme, 'dark');
-  assert.ok(dark.calls.includes('setMapStyle'));
+  assert.ok(!dark.calls.includes('setMapStyle'), '换主题不调 setMapStyle');
   assert.equal(dark.calls.filter((c) => c === 'Map').length, 1, '换主题不重建地图');
   assert.notEqual(dark.markers[0].fill, light.markers[0].fill, '深色用深色版的设计变量');
   await send(page, SCENE());

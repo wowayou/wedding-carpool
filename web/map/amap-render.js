@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // 高德 JS API 2.0 的画法：AMap.Map 画底图，CircleMarker 画点，Text 画标签，Polyline 画线，Circle 画圈。
-// 只显示地图，不配安全密钥（securityJsCode）。深色先设高德自带的深色样式（拿到矢量底图才生效）；栅格底图靠 frame.css 的滤镜调暗。
+// 只显示地图，不配安全密钥（securityJsCode）。不设高德的深色样式：设了它，高德就把审图号从版权里去掉（线上实测），对栅格底图也不起作用；深色靠 frame.css 的瓦片滤镜调暗。
 import { declutter } from './declutter.js';
 import { DEFAULT_MAX_ZOOM, DEFAULT_PRIORITY, DEFAULT_RADIUS, POINT_VARS, fitPadding, fitTargets, labelAlways } from './scene.js';
 
 // AMap.Text 把 text 当 HTML 解析（线上实测），名字是用户填的，要先转义；换行靠样式 white-space: pre
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const styleOf = (theme) => (theme === 'dark' ? 'amap://styles/dark' : 'amap://styles/normal');
 
-export function createAmapRenderer(host, theme) {
+export function createAmapRenderer(host) {
   const AMap = window.AMap;
-  const map = new AMap.Map(host.container, { zoom: 5, center: [112, 34.5], resizeEnable: true, mapStyle: styleOf(theme), viewMode: '2D' });
+  const map = new AMap.Map(host.container, { zoom: 5, center: [112, 34.5], resizeEnable: true, mapStyle: 'amap://styles/normal', viewMode: '2D' }); // 一律普通样式，原因见文件开头
   let overlays = [];
   let labels = []; // { priority, hi, text, rect(), hovered }
   let hovered = null;
-  let currentTheme = theme;
 
   const px = (lng, lat) => {
     const p = map.lngLatToContainer(new AMap.LngLat(lng, lat));
@@ -34,7 +32,6 @@ export function createAmapRenderer(host, theme) {
   return {
     kind: 'amap',
     draw(scene) {
-      if (scene.theme !== currentTheme) { currentTheme = scene.theme; map.setMapStyle(styleOf(scene.theme)); }
       if (overlays.length) map.remove(overlays);
       overlays = [];
       labels = [];
@@ -94,6 +91,6 @@ export function createAmapRenderer(host, theme) {
       return true;
     },
     resize() { map.resize?.(); layoutLabels(); },
-    setTheme(t) { if (t !== currentTheme) { currentTheme = t; map.setMapStyle(styleOf(t)); } },
+    setTheme() {}, // 底图不换样式；点线标签的颜色在 draw 里按当前主题取，瓦片滤镜由 frame.css 按 data-theme 管
   };
 }

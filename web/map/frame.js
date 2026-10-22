@@ -58,9 +58,9 @@ let renderer = null;
 let current = null; // 最近一份 scene
 let pendingFit = null; // 容器 0 尺寸时没能做的自适应（只记 fit 的要求；后来要求自适应的覆盖先前的，没要求自适应的 scene 不取消它），有尺寸了补做
 
-function makeRenderer(theme) {
+function makeRenderer() {
   if (amapOk) {
-    try { return createAmapRenderer(host, theme); } catch (err) {
+    try { return createAmapRenderer(host); } catch (err) {
       amapOk = false;
       box.replaceChildren(); // 半路建失败的地图容器清掉
       send({ type: MSG.FAIL, reason: `amap-init: ${err?.message || err}` });
@@ -91,7 +91,7 @@ function doFit(scene) { pendingFit = renderer.fit(scene) ? null : scene.fit; }
 function show(scene) {
   current = scene;
   document.documentElement.dataset.theme = scene.theme; // 设计变量跟着换成深色或浅色的值
-  renderer ??= makeRenderer(scene.theme);
+  renderer ??= makeRenderer();
   document.documentElement.dataset.renderer = renderer.kind; // CSS 据此把图例抬到高德标识和审图号上面
   renderer.setTheme(scene.theme);
   drawLegend(scene);

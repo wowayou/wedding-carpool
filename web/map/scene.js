@@ -7,7 +7,7 @@
 //
 // scene = {
 //   v: 1,
-//   theme: 'light' | 'dark',                       // 深色用高德自带的深色样式；颜色变量跟着换
+//   theme: 'light' | 'dark',                       // 深色：颜色变量跟着换，高德的栅格瓦片用滤镜调暗（不设高德的深色样式）
 //   points: [{
 //     lng, lat,                                    // 位置
 //     kind: 'venue' | 'st' | 'car' | 'home',       // 目的地 / 车站 / 开车的成员 / 不开车的成员，决定颜色（--dest/--station/--drive/--ride）

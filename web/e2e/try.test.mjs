@@ -198,11 +198,13 @@ test('试玩：恢复示例', async () => {
   assert.equal(await page.locator('#tryBanner').isVisible(), true);
 });
 
-test('试玩：系统切换深色和浅色，scene 带的 theme 跟着变，地图页面换样式、点数不变', async () => {
+test('试玩：系统切换深色和浅色，scene 带的 theme 跟着变，瓦片调暗、底图样式不变、点数不变', async () => {
   const before = await waitMapLayers(page, (l) => l.points === located, '恢复示例后预览的点（重画有 250 毫秒的延迟）');
   await page.emulateMedia({ colorScheme: 'dark' });
   await mapFrame(page).locator('html[data-theme=dark]').waitFor();
-  await mapFrame(page).locator('[data-fake=map][data-style="amap://styles/dark"]').waitFor();
+  // 不设高德的深色样式（设了审图号会消失），深色只靠瓦片滤镜
+  assert.equal(await mapFrame(page).locator('[data-fake=map]').getAttribute('data-style'), 'amap://styles/normal');
+  assert.equal(await mapFrame(page).locator('img[src*="appmaptile"]').first().evaluate((e) => getComputedStyle(e).filter), 'brightness(0.82) contrast(1.05)');
   assert.deepEqual((await mapLayers(page)).points, before.points);
   await page.emulateMedia({ colorScheme: 'light' });
   await mapFrame(page).locator('html[data-theme=light]').waitFor();
@@ -235,9 +237,9 @@ test('试玩：手机宽度的三个页签、深色模式、没有横向滚动',
   assert.equal(await tab('Map').getAttribute('aria-selected'), 'true');
   assert.equal(await noHScroll(), true);
   await mapFitted('载入后点「地图」');
-  // 深色：scene 带 theme，地图页面换成高德的深色样式，设计变量的颜色也跟着换
+  // 深色：scene 带 theme，设计变量的颜色跟着换；底图样式仍是普通样式（深色靠瓦片滤镜）
   const dark = await mapFrame(page).locator('body').evaluate(() => ({ theme: document.documentElement.dataset.theme, style: document.querySelector('[data-fake=map]').dataset.style }));
-  assert.deepEqual(dark, { theme: 'dark', style: 'amap://styles/dark' });
+  assert.deepEqual(dark, { theme: 'dark', style: 'amap://styles/normal' });
   await tab('Plan').click();
   assert.deepEqual(await visible(), { fill: false, map: false, plan: true });
   assert.equal(await noHScroll(), true);
