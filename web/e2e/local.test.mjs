@@ -50,9 +50,9 @@ test('本地：配了 JS Key（环境变量）时地图页面用高德 JS API（
   } finally { await P.context.close(); }
 });
 
-// 方案页预览（/share）：本地版把「生成方案页」写成的 <配置名>-plan.html 原样返回；里面的地图 iframe 嵌 /map/share（本地版自己提供，同一份页面）。
+// 方案页预览（/share）：本地版把「生成方案页」写成的 <配置名>-plan.html 原样返回；里面的地图 iframe 嵌 /map/share（本地版自己提供，不填 Key，和发布出去的一致）。
 // 这里不真的算方案（假 Key 到不了高德），直接把 share.py 生成的金标准方案页放到 ui.py 读的位置
-test('本地：方案页预览里有地图（嵌 /map/share，不带 Key 是不带底图的画法，配了 Key 用假的 JS API）', async () => {
+test('本地：方案页预览里有地图（嵌 /map/share，配不配 JS Key 都是不带底图的画法，不请求高德）', async () => {
   const golden = join(ROOT, 'tests/golden/two_cars/share-o1-b1.html');
   for (const jsKey of [undefined, FAKE_JS_KEY]) {
     const s = jsKey ? await startLocal({ jsKey }) : srv;
@@ -62,12 +62,13 @@ test('本地：方案页预览里有地图（嵌 /map/share，不带 Key 是不�
       await P.page.goto(`${s.base}/share`);
       await P.page.waitForFunction(() => document.querySelector('iframe#mapFrame'));
       const pts = JSON.parse(/<script id="data" type="application\/json">([\s\S]*?)<\/script>/.exec(readFileSync(golden, 'utf8'))[1]).points.length;
-      const sel = jsKey ? '[data-fake="circlemarker"]' : '[data-layer=point]';
+      const sel = '[data-layer=point]';
       const frame = () => P.page.frames().find((f) => new URL(f.url()).pathname === '/map/share');
       await P.page.waitForFunction(([n, q]) => { const f = [...document.querySelectorAll('iframe')][0]?.contentDocument; return f && f.querySelectorAll(q).length >= n; }, [pts, sel], { timeout: 15_000 });
       assert.equal(await frame().locator(sel).count(), pts);
       assert.equal(await P.page.locator('#map').isVisible(), true);
-      assert.equal(await frame().locator('.plain-note').count(), jsKey ? 0 : 1, jsKey ? '配了 Key：高德画法，没有「没有底图」' : '没配 Key：不带底图的画法');
+      assert.equal(await frame().locator('.plain-note').count(), 1, jsKey ? '配了 Key，方案页预览也不用：和发布出去的一致' : '没配 Key：不带底图的画法');
+      assert.deepEqual(P.guard.jsApi, [], '没有请求高德');
       P.guard.assertClean();
     } finally { await P.context.close(); }
   }

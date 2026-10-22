@@ -358,105 +358,78 @@ test('点的 highlight 管填充、label 管标签：不带底图的画法', asy
 });
 
 // ---------- /map/share：方案页嵌它 ----------
-// 方案页在 CSP 沙箱里（来源是 null）。实测（Chromium）：沙箱页面发出的 iframe 请求不带 Referer，不管 referrerpolicy 写什么，
-// 所以 Worker 的规则是（方案 A）：有 Referer 就必须是本站 /p/…；没有 Referer 时看 Fetch Metadata（iframe + cross-site）放行。这里测：
-//   1) 真实的沙箱页面（不带 Referer）能画；消息机制（来源 null、脚本加载、按 e.source 认父窗口）
-//   2) 非沙箱的 /p/… 页面（真 Referer）能画；别的来源、别的页面、只有来源的、直接打开都是 403
+// 方案页在 CSP 沙箱里（来源是 null）。/map/share 只用不带底图的画法：不填 Key、不加载高德、安全策略严格，
+// 没有东西要保护，所以不检查 Referer，任何来源都能打开或嵌入（切片 1 的 Referer 和 Fetch Metadata 规则在切片 4 去掉了）。这里测：
+//   1) 真实的沙箱页面能画（消息机制：来源 null、脚本加载、按 e.source 认父窗口），站点设了 Key 也是不带底图的画法
+//   2) 任何 referrerpolicy、沙箱或非沙箱、任何嵌入页面、直接打开，都返回页面并能画
 const SANDBOX = 'sandbox allow-scripts allow-popups allow-modals';
 const page_ = (html, { sandbox = true, policy } = {}) => ({ body: html, headers: { ...(sandbox ? { 'content-security-policy': SANDBOX } : {}), ...(policy ? { 'referrer-policy': policy } : {}) } });
 const SHARE_PATH = '/p/abcdefghjk';
-const IGNORED = [/Failed to load resource/, /serviceWorker.*sandboxed/]; // 403 的资源报错；Playwright 在沙箱页面里读 serviceWorker 的报错
+const IGNORED = [/serviceWorker.*sandboxed/]; // Playwright 在沙箱页面里读 serviceWorker 的报错
 
-async function openShare(base, stub, { path = SHARE_PATH, referer } = {}) {
+async function openShare(base, stub, { path = SHARE_PATH } = {}) {
   const P = await newGuardedPage(base, { fakeJsApi: true, stubs: { [path]: stub } });
   guards.push(P.guard);
   P.guard.allowErrors.push(...IGNORED);
   P.seen = [];
-  // 模拟 Referer：浏览器的请求头改不了（Playwright 的 continue/fallback 改了 Referer 也不会真发出去），改成测试进程带着这个 Referer 去问 wrangler，再把整个响应交给浏览器
-  if (referer) {
-    await P.context.route('**/map/share', async (r) => {
-      const res = await fetch(r.request().url(), { headers: { referer } });
-      await r.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
-    });
-  }
   P.page.on('response', (r) => { if (new URL(r.url()).pathname === '/map/share') P.seen.push({ status: r.status(), referer: r.request().headers().referer ?? null, xfo: r.headers()['x-frame-options'] ?? null, csp: r.headers()['content-security-policy'] ?? '' }); });
   await P.page.goto(`${base}${path}`);
   return P;
 }
-const settle403 = (P) => P.page.waitForTimeout(600); // 403 没有消息可等，给 iframe 一点时间加载完
+const plainSummary = (frame) => frame.evaluate(() => ({
+  note: document.querySelector('.plain-note')?.textContent, points: document.querySelectorAll('[data-layer=point]').length, lines: document.querySelectorAll('[data-layer=line]').length,
+  metaKey: document.querySelector('meta[name="amap-js-key"]').content, amap: typeof window.AMap,
+}));
 
-test('/map/share：真实的沙箱页面（来源 null，iframe 请求没有 Referer）嵌它，按 e.source 认父窗口、目标来源用 *，能画出来', async () => {
+test('/map/share：真实的沙箱页面（来源 null）嵌它，站点设了 Key 也用不带底图的画法，不请求高德；按 e.source 认父窗口、目标来源用 *', async () => {
   const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'" }), { policy: 'strict-origin' }));
   assert.equal(await P.page.evaluate(() => self.origin), 'null', '父页面是沙箱里的匿名来源（location.origin 在沙箱里仍是地址的来源，要看 self.origin）');
   const drawn = await send(P.page, SCENE());
-  assert.deepEqual(drawn, { type: 'drawn', renderer: 'amap', points: 3, lines: 2, circles: 1 });
+  assert.deepEqual(drawn, { type: 'drawn', renderer: 'plain', points: 3, lines: 2, circles: 1 });
+  assert.deepEqual(await P.page.evaluate(() => window.__msgs.map((m) => m.type)), ['ready', 'drawn'], '没有 fail');
   assert.equal(P.seen.length, 1);
   assert.equal(P.seen[0].status, 200);
-  assert.equal(P.seen[0].referer, null, '真实的沙箱页面不带 Referer，靠 Fetch Metadata 放行');
   assert.equal(P.seen[0].xfo, null, '/map/share 不带 X-Frame-Options，沙箱页面才嵌得进来');
-  assert.doesNotMatch(P.seen[0].csp, /frame-ancestors/);
-  const st = await fakeState(mapFrame(P.page));
-  assert.equal(st.markers.length, 3);
-  assert.ok(insideAll(st));
+  assert.doesNotMatch(P.seen[0].csp, /frame-ancestors|amap|autonavi|unsafe-eval/);
+  assert.deepEqual(P.guard.jsApi, [], '设了 Key 也不请求高德');
+  assert.deepEqual(await plainSummary(mapFrame(P.page)), { note: '没有底图', points: 3, lines: 2, metaKey: '', amap: 'undefined' }, '页面里没有 Key');
   assert.equal(await mapFrame(P.page).evaluate(() => self.origin), 'null', '地图页面也在沙箱里（继承）');
-  // resize 同样是父窗口发的，被接受
+  // resize 同样是父窗口发的，被接受；之后还能再画
   await P.page.evaluate(() => window.__post({ type: 'resize' }));
-  await P.page.waitForTimeout(200);
-  assert.ok((await fakeState(mapFrame(P.page))).calls.includes('resize'));
+  assert.equal((await send(P.page, SCENE({ theme: 'dark' }))).renderer, 'plain');
+  assert.equal(await mapFrame(P.page).evaluate(() => document.documentElement.dataset.theme), 'dark');
 });
 
-test('/map/share：非沙箱的 /p/… 页面发的是真 Referer（iframe 要写 no-referrer-when-downgrade），能画；没写时只剩来源，403', async () => {
-  const ok = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'", attrs: 'referrerpolicy="no-referrer-when-downgrade"' }), { sandbox: false, policy: 'strict-origin' }));
-  assert.equal((await send(ok.page, SCENE())).renderer, 'amap');
-  assert.equal(ok.seen[0].referer, `${withKey}${SHARE_PATH}`, 'iframe 的 Referer 带着完整的 /p/… 路径（页面自己是 strict-origin，靠 iframe 的属性放宽）');
-  const trimmed = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'" }), { sandbox: false, policy: 'strict-origin' }));
-  await settle403(trimmed);
-  assert.equal(trimmed.seen[0].status, 403);
-  assert.equal(trimmed.seen[0].referer, `${withKey}/`, '只带来源');
-  assert.deepEqual(await trimmed.page.evaluate(() => window.__msgs), []);
-  assert.deepEqual(trimmed.guard.jsApi, [], '没有借到 Key（没有请求高德）');
-});
-
-test('/map/share：别的网站、本站别的页面、不带 Referer 都是 403，页面里没有 Key', async () => {
-  const frameOpts = { target: "'*'", attrs: 'referrerpolicy="no-referrer-when-downgrade"' };
-  for (const [name, path, stub, referer] of [
-    ['别的网站的 /p/… 路径（模拟）', SHARE_PATH, page_(parentHtml('/map/share', frameOpts), { sandbox: false }), 'https://evil.example/p/abcdefghjk'],
-    ['本站的 /t/ 页面', '/t/abcdefghjk', page_(parentHtml('/map/share', frameOpts), { sandbox: false })],
-    ['本站首页', '/', page_(parentHtml('/map/share', frameOpts), { sandbox: false })],
-    ['iframe 明确不发 Referer', SHARE_PATH, page_(parentHtml('/map/share', { target: "'*'", attrs: 'referrerpolicy="no-referrer"' }), { sandbox: false })],
+test('/map/share：不检查 Referer —— 沙箱或非沙箱、referrerpolicy 怎么写、从哪个页面嵌，都能画（旧的 403 用例改成了这条）', async () => {
+  for (const [name, path, sandbox, attrs] of [
+    ['沙箱页面，默认', SHARE_PATH, true, ''],
+    ['沙箱页面，no-referrer', SHARE_PATH, true, 'referrerpolicy="no-referrer"'],
+    ['沙箱页面，unsafe-url', SHARE_PATH, true, 'referrerpolicy="unsafe-url"'],
+    ['非沙箱 /p/… 页面，完整 Referer', SHARE_PATH, false, 'referrerpolicy="no-referrer-when-downgrade"'],
+    ['非沙箱 /p/… 页面，只有来源', SHARE_PATH, false, ''],
+    ['非沙箱页面，明确不发 Referer', SHARE_PATH, false, 'referrerpolicy="no-referrer"'],
+    ['本站的 /t/ 页面（旧规则下 403）', '/t/abcdefghjk', false, 'referrerpolicy="no-referrer-when-downgrade"'],
+    ['本站首页（旧规则下 403）', '/', false, 'referrerpolicy="no-referrer-when-downgrade"'],
   ]) {
-    const P = await openShare(withKey, stub, { path, referer });
-    await settle403(P);
-    assert.equal(P.seen[0].status, 403, name);
-    assert.deepEqual(await P.page.evaluate(() => window.__msgs), [], `${name}：地图页面没有加载`);
-    assert.deepEqual(P.guard.jsApi, [], `${name}：没有借到 Key`);
-    await P.context.close();
-  }
-  const direct = await fetch(`${withKey}/map/share`);
-  assert.equal(direct.status, 403);
-  assert.doesNotMatch(await direct.text(), /amap-js-key/);
-});
-
-// 沙箱页面的 iframe 请求不带 Referer（Chromium），不管 referrerpolicy 怎么写：都靠 Fetch Metadata（iframe + cross-site）放行
-test('/map/share：沙箱页面不管 referrerpolicy 怎么写都没有 Referer，都能画（方案 A）', async () => {
-  for (const attrs of ['', 'referrerpolicy="no-referrer-when-downgrade"', 'referrerpolicy="unsafe-url"', 'referrerpolicy="no-referrer"']) {
-    const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'", attrs }), { policy: 'strict-origin' }));
-    assert.equal((await send(P.page, SCENE())).renderer, 'amap', attrs || '默认');
-    assert.equal(P.seen[0].referer, null, `iframe ${attrs || '默认'}`);
-    assert.equal(P.seen[0].status, 200);
+    const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'", attrs }), { sandbox, policy: 'strict-origin' }), { path });
+    assert.equal((await send(P.page, SCENE())).renderer, 'plain', name);
+    assert.equal(P.seen[0].status, 200, name);
+    assert.deepEqual(P.guard.jsApi, [], name);
     await P.context.close();
   }
 });
 
-// 剩下的风险（见 worker.js 的 mayEmbedShareMap 和计划文件）：没有 Referer 的跨站 iframe 都放行；这里只确认直接打开（document）、本站同源 iframe 没有 Referer 时仍是 403
-test('/map/share：直接打开、没有 Referer 的本站同源 iframe 仍是 403', async () => {
+test('/map/share：直接打开也是页面（没有 Key 可借，不再是 403），安全策略严格，页面里没有 Key', async () => {
   const direct = await fetch(`${withKey}/map/share`, { headers: { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' } });
-  assert.equal(direct.status, 403);
-  const P = await openShare(withKey, page_(parentHtml('/map/share', { target: "'*'", attrs: 'referrerpolicy="no-referrer"' }), { sandbox: false }));
-  await settle403(P);
-  assert.equal(P.seen[0].referer, null);
-  assert.equal(P.seen[0].status, 403);
-  assert.deepEqual(P.guard.jsApi, [], '没有借到 Key');
+  assert.equal(direct.status, 200);
+  assert.doesNotMatch(direct.headers.get('content-security-policy'), /amap|autonavi|unsafe-eval/);
+  assert.match(await direct.text(), /<meta name="amap-js-key" content="">/);
+  const P = await newGuardedPage(withKey, { fakeJsApi: true }); // 顶层直接打开：没有父窗口，不会收到 scene；只看页面能加载、没有请求高德、没有安全策略报错
+  guards.push(P.guard);
+  await P.page.goto(`${withKey}/map/share`);
+  await P.page.waitForTimeout(500);
+  assert.deepEqual(P.guard.jsApi, []);
+  assert.deepEqual(await mapFrame(P.page).evaluate(() => typeof window.AMap), 'undefined');
 });
 
 // ---------- 编辑页（试玩）里的地图 ----------
