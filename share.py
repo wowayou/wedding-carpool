@@ -29,7 +29,6 @@ LIGHT = {
     "--drive": "#15803d", "--ride": "#c2620a", "--taxi": "#6b7280", "--dest": "#dc2626", "--station": "#2563eb",
     "--ok": "#15803d", "--ok-soft": "#ebf6ee", "--warn": "#b45309", "--warn-soft": "#fdf2e1",
     "--danger": "#b91c1c", "--danger-soft": "#fde9e7", "--info": "#1d4ed8", "--info-soft": "#e9effc",
-    "--map-filter": "none",
 }
 DARK = {
     "--bg": "#161412", "--surface": "#1f1c19", "--surface-2": "#28241f", "--line": "#35302a", "--line-strong": "#4a443c",
@@ -38,7 +37,6 @@ DARK = {
     "--drive": "#4ade80", "--ride": "#f59e0b", "--taxi": "#9ca3af", "--dest": "#f87171", "--station": "#60a5fa",
     "--ok": "#4ade80", "--ok-soft": "#13291b", "--warn": "#fbbf24", "--warn-soft": "#33270f",
     "--danger": "#f87171", "--danger-soft": "#3a1715", "--info": "#93c5fd", "--info-soft": "#16213a",
-    "--map-filter": "brightness(.82) contrast(1.05)",
 }
 
 

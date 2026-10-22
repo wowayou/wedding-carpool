@@ -30,7 +30,7 @@ def demo_map(h: str) -> str:
     ):
         if old not in h:
             raise SystemExit(f"方案页里找不到要改的位置：{old}")
-        h = h.replace(old, old if False else new, 1)
+        h = h.replace(old, new, 1)
     return h
 
 

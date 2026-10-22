@@ -682,7 +682,8 @@ test('设计规范的「交互规范」里点名的函数、类名、属性在�
   const spec = doc.slice(start, doc.indexOf('\n## ', start + 5));
   assert.match(doc, /定稿的界面改动，先改这份规范，再改页面/);
   // 规范点名的东西现在在 ui.html（页面）和 web/editor/*.js（脚本模块）里找
-  const sources = [page, cssFile, readFileSync('web/admin.html', 'utf8'), readFileSync('web/pages/design.html', 'utf8'), readFileSync('config-fields.json', 'utf8')].join('\n');
+  const sources = [page, cssFile, readFileSync('web/admin.html', 'utf8'), readFileSync('web/pages/design.html', 'utf8'), readFileSync('config-fields.json', 'utf8'),
+    readFileSync('web/map/scene.js', 'utf8'), readFileSync('share.py', 'utf8')].join('\n');
   const named = [...new Set([...spec.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]).filter((t) => /^\.?[A-Za-z_][\w-]*(\(\))?$/.test(t)))];
   assert.ok(named.length > 60, `只找到 ${named.length} 个点名的名字，提取可能坏了`);
   const missing = named.filter((t) => !sources.includes(t.replace(/^\./, '').replace(/\(\)$/, '')));
