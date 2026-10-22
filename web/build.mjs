@@ -11,7 +11,7 @@ mkdirSync('dist/py', { recursive: true });
 cpSync('ui.html', 'dist/edit.html'); // 行程编辑页，Worker 把 /t/<行程> 指到这里
 cpSync('web/editor', 'dist/editor', { recursive: true }); // 编辑页的脚本模块（ES 模块，同源加载；ui.html 里是 <script type="module" src="/editor/main.js">）
 cpSync('web/pyworker.js', 'dist/pyworker.js');
-// 地图页面（v3.16）：/map 和 /map/share 由 Worker 返回（填 Key、加安全策略，见 worker.js），所以 map.html 不在下面的 PAGES 里生成 CSP（它要 unsafe-eval，策略只放在响应头里）。
+// 地图页面（v3.16）：/map 和 /map/share 由 Worker 返回（/map 填 Key，两者各加自己的安全策略，见 worker.js），所以 map.html 不在下面的 PAGES 里生成 CSP（/map 要 unsafe-eval，策略只放在响应头里）。
 // 脚本并成一个普通脚本 dist/map/frame.js（方案页沙箱里的页面来源是 null，模块脚本加载不了），样式 dist/map/frame.css
 cpSync('web/map.html', 'dist/map.html');
 mkdirSync('dist/map', { recursive: true });

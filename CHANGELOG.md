@@ -24,7 +24,7 @@
   - 构建不再下载 Leaflet。
   - 本地版的 Key 读环境变量 `AMAP_JS_KEY` 或同目录的 `.amap_js_key`。
 - 给开发者：
-  - `web/map/`：`scene.js`（格式与校验）、`frame.js`（入口）、`amap-render.js`、`plain-render.js`、`mercator.js`、`declutter.js`，`bundle.mjs` 构建成 `dist/map/frame.js`；`web/editor/map-scene.js`（state 到 scene 的纯函数）；`share.py` 里的内联脚本把数据转成 scene；`web/make_demo.py` 的 `demo_map`；Worker 的 `MAP_CSP`、`mayEmbedShareMap`。
+  - `web/map/`：`scene.js`（格式与校验）、`frame.js`（入口）、`amap-render.js`、`plain-render.js`、`mercator.js`、`declutter.js`，`bundle.mjs` 构建成 `dist/map/frame.js`；`web/editor/map-scene.js`（state 到 scene 的纯函数）；`share.py` 里的内联脚本把数据转成 scene；`web/make_demo.py` 的 `demo_map`；Worker 的 `MAP_CSP`、`MAP_SHARE_CSP`。
   - e2e 用假 JS API `web/e2e/fake-amap.js`，新增 `share.test.mjs`。
   - scene 的点里 `highlight`（填充）和 `label`（`always` 或 `hover`）分开。
 
