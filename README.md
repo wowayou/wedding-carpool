@@ -44,7 +44,8 @@
 - **方案页**：链接形如 `/p/<方案页 id>`，和行程 id 无关，只能看不能改。v3 之前发布过的行程沿用原来的 `/p/<行程 id>`，重新发布还是更新这个链接；想分开可以在「更多」里换链接。
   - 车主的路线从出发地约 2 公里外开始画，「到家附近接」的地点不标位置，导航链接不带出发地。
   - 可以设**访问口令**（每个方案页每小时最多试 20 次）、**换一个链接**（旧链接失效）或**停止分享**。
-  - 页面上有「打印 / 存为 PDF」按钮，打印时隐藏按钮、地图固定高度、卡片不跨页，黑白打印也能看清。
+  - 页面上有「打印 / 存为 PDF」按钮，打印时隐藏按钮、地图固定高度（并改用浅色）、卡片不跨页，黑白打印也能看清。
+  - 地图画在页面里的 iframe（`/map/share`）里，底图由高德 JS API 加载，浏览器会连高德的多个域名（隐私页有写）。**3.16 以前发布的方案页**HTML 里还是 Leaflet，新的安全策略会拦掉它，所以那些旧页面不显示地图、其余照常；在编辑页重新发布一次就有新地图。
 - **多人实时编辑**：
   - 改动停顿约 0.8 秒后自动保存；
   - 顶部显示谁在线，正在被别人编辑的格子会标出名字；
@@ -102,6 +103,7 @@ npx wrangler secret delete FORCE_PUBLIC_PAUSED  # 恢复（另一个同理）
 ```bash
 python3 ui.py            # 编辑 trip.toml，打开 http://127.0.0.1:8765
                          # 地图底图要高德 JS API 的 Key（和上面的 Web 服务 Key 不是同一个）：环境变量 AMAP_JS_KEY 或同目录 .amap_js_key（已加入 .gitignore）；不配就不画底图，只画点和线
+                         # 本地版的方案页预览（/share）也嵌地图（本地版自己提供 /map/share）。注意：生成的 <配置名>-plan.html 文件里的地图要从站点（本机的 ui.py 或线上）加载，单独当文件发给别人、离开 ui.py 打开就没有地图
 python3 carpool.py trip.toml   # 只用命令行：报告打印到终端，并写到 trip-report.md
 ```
 
@@ -123,6 +125,8 @@ Worker（web/worker.js，用 placement.region 固定在香港附近运行，离�
    ├─ 高德代理（只服务站点公共额度的行程）：只放行用到的接口；先查 Cloudflare 节点缓存，再按每秒 3 个批量请求。
    │                                         自己的高德 Key 的行程不经代理：Key 在浏览器里，计算线程直连 restapi.amap.com
    ├─ 管理页接口：/api/admin/*，站长口令登录，之后凭会话令牌
+   ├─ 地图页面 /map、/map/share（v3.16）：填上 AMAP_JS_KEY，加单独的安全策略（只有它放行高德的脚本和 unsafe-eval）；
+   │                                         /map 给编辑页、试玩、示例页嵌，/map/share 给方案页嵌并检查 Referer 和 Fetch Metadata
    └─ KV：方案页（带访问口令和过期时间）、按 Key 和接口类别记的配额标记
 ```
 
@@ -150,7 +154,7 @@ Worker（web/worker.js，用 placement.region 固定在香港附近运行，离�
 
 计算内核以「一段行程」（leg）为单位求解：去程是车主从家出发接人去目的地，返程是从目的地出发送人。两段互不影响，可以只算其中一段。座位按同行人数算，一组人不拆开。没搭上车的人怎么打车由 `TaxiPool` 安排，结果按「哪些人没搭上车」缓存。方案页由 `share.py` 生成。编辑器是 `ui.html`（本地版、在线版、试玩共用），页面只有结构和样式，脚本是 `web/editor/` 下的 ES 模块：入口 `main.js` 判断是哪种模式；`backend.js` 是三种模式的后端实现，接口相同，并按模式生成一张能力表（`caps`：能不能保存、能不能实际搜索、有没有历史、能不能实时同步……）。其他模块只看能力表，不判断模式，测试会检查这一点。模块之间单向依赖，没有环，也由测试守着。求解之后，每个方案里「谁几点出发、几点到哪、等多久、打车几点汇合」只在行程表（`carpool.timelines`）里算一次，报告、方案页和界面数据都只读它，不再各自推算。`tests/golden/` 里的金标准测试逐字节固定这三样输出：有意改了输出，用 `GOLDEN_UPDATE=1 python3 -m unittest test_carpool.GoldenTest` 重新生成，再看一遍 `git diff`。
 
-需要 Node.js、Cloudflare 账号，以及一个高德 Web 服务 Key。免费套餐就够用，超出免费额度只会报错，不会扣费。
+需要 Node.js、Cloudflare 账号，以及一个高德 Web 服务 Key；地图底图另要一个高德 JS API 的 Key（见下面的 `AMAP_JS_KEY`）。免费套餐就够用，超出免费额度只会报错，不会扣费。
 
 ```bash
 npm install
@@ -158,10 +162,18 @@ npx wrangler login
 npx wrangler kv namespace create DATA      # 把输出的 id 填进 wrangler.jsonc
 npx wrangler secret put AMAP_KEY           # 站长的高德 Web 服务 Key
 npx wrangler secret put ACCESS_CODE        # 站长口令：只用来登录管理页 /admin
+npx wrangler secret put AMAP_JS_KEY        # 高德「Web端（JS API）」的 Key，地图底图用；不设就是不带底图的画法
 npm run deploy                             # 构建 dist/ 并部署
 ```
 
-构建时（`web/vendor.mjs`）会下载编辑页用的 Pyodide、marked（约 13 MB），逐个校验 sha256，缓存在 `.cache/vendor/`，拷到 `dist/vendor/`；第一次构建要能访问 jsDelivr 和 cdnjs，下载失败或校验不对会让构建报错，不会回退到 CDN。网络要走代理的话，设好 `HTTPS_PROXY`（下载用 curl）。许可证文件随依赖一起放在 `dist/vendor/` 下。
+构建时（`web/vendor.mjs`）会下载编辑页用的 Pyodide、marked（约 13 MB；3.16 起不再下载 Leaflet，地图改用高德 JS API，它由高德的服务器实时提供，不放进构建产物），逐个校验 sha256，缓存在 `.cache/vendor/`，拷到 `dist/vendor/`；第一次构建要能访问 jsDelivr 和 cdnjs，下载失败或校验不对会让构建报错，不会回退到 CDN。网络要走代理的话，设好 `HTTPS_PROXY`（下载用 curl）。许可证文件随依赖一起放在 `dist/vendor/` 下。
+
+地图底图（`AMAP_JS_KEY`，3.16 起）：
+
+- 在[高德开放平台控制台](https://console.amap.com/)新建一个「Web端（JS API）」类型的 Key（不是上面的「Web服务」Key），并给它设**域名白名单**，只填你自己的域名。这个 Key 会出现在 `/map`、`/map/share` 的页面源码里（不是秘密），白名单是防止别人拿去用的唯一办法；不要把它写进仓库。
+- 用 `npx wrangler secret put AMAP_JS_KEY` 设（也可以放在 `.dev.vars` 里本地调试；本机的域名多半不在白名单里，高德会拒绝，本机只能看到不带底图的画法）。只显示地图不需要「安全密钥」（`securityJsCode`），页面里不放安全密钥。
+- 不设，或者 Key 无效、高德脚本加载失败，地图页面就改用不带底图的画法：只画点、线、圈和标签，角上写「没有底图」。
+- 从 3.15 升级：除了设这个 Key，`wrangler.jsonc` 的 `assets.run_worker_first` 要有 `/map` 和 `/map/share`（仓库里的已经写了，自己改过这个列表的要补上），否则地图页面不会加载。
 
 可选设置：
 
@@ -196,7 +208,9 @@ npm run deploy                             # 构建 dist/ 并部署
 
 ## 安全措施
 
-- 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；编辑页的 Pyodide、marked 都是自己托管的同源文件，不放行任何 CDN，也不放行高德的脚本和瓦片（地图在同源 iframe 里的 `/map`，编辑页只多一条 `frame-src 'self'`）；示例页和方案页仍用 cdnjs，带 SRI 完整性校验。
+- 构建时（`web/build.mjs`）给每个页面生成内容安全策略（CSP）：内嵌脚本按哈希放行，不允许 `unsafe-inline` 和 `unsafe-eval`；编辑页的 Pyodide、marked 都是自己托管的同源文件，不放行任何 CDN，也不放行高德的脚本和瓦片。
+- **地图隔离在 `/map` 页面里**（3.16）：高德 JS API 要用 `unsafe-eval`，所以只有地图页面（`/map`、`/map/share`）放行它和高德的几个域名（脚本、连接、图片），由 Worker 的响应头给出，页面里没有 meta CSP；编辑页、试玩页、示例页、方案页都不放宽（没有 `unsafe-eval`、不放行高德和 CDN），只各多一条 `frame-src 'self'`，用 iframe 嵌地图页面，靠 `postMessage` 交「要画什么」（点、线、圈、标签和图例，格式见 `web/map/scene.js`），地图页面只认自己的父窗口。`/map` 加 `frame-ancestors 'self'`，别的网站嵌不了。
+- **方案页通过 `/map/share` 嵌地图**：方案页在沙箱里（来源是 null），`frame-ancestors` 对它不起作用，所以 Worker 在 `/map/share` 上看请求：有 Referer 就必须是本站的 `/p/<id>`；没有 Referer 时，要 `Sec-Fetch-Dest: iframe` 且 `Sec-Fetch-Site: cross-site`（实测沙箱页面发出的 iframe 请求就是不带 Referer 的跨站 iframe）；直接打开、别的网站带 Referer 嵌入、不支持 Fetch Metadata 的旧浏览器都是 403。**剩下的风险**：别的网站把 iframe 的 Referer 关掉（`referrerpolicy="no-referrer"`）也能通过，用你的 JS Key 画它自己的地图；后果只是消耗高德「JS 地图图面初始化」的额度（个人认证每月 150 万次，用完就停，不扣费），拿不到任何数据。以后发现被滥用，再加签名令牌或按 IP 限流；Key 的域名白名单也限制了它只能在你的域名下使用。
 - 所有响应都带安全头（`nosniff`、`X-Frame-Options`、`Referrer-Policy`、HSTS、`Permissions-Policy`）：静态文件在 `web/_headers`，Worker 生成的响应在 `web/worker.js`，两处要保持一致。
 - 方案页的 HTML 由编辑者的浏览器上传，所以放进 CSP 沙箱（独立的匿名来源）：读不到本站的存储和 Cookie，也不能发请求。
 - 改动状态的请求（`/api/*` 的 POST 和 DELETE、方案页口令表单）校验 Origin，跨站来源会被拒；WebSocket 也校验 Origin；500 错误不返回内部错误原文。
@@ -204,7 +218,7 @@ npm run deploy                             # 构建 dist/ 并部署
 - 行程实例（Durable Object）的内部接口只接受 Worker 自己发起的请求；客户端请求只有白名单里的路径（配置、同步、历史、恢复、改名）会转给行程实例。用公共额度的行程一律经过全部护栏；自带 Key 的行程请求高德代理会被拒绝（`OWN_KEY_IN_BROWSER`），服务端不保存也不经手它们的 Key。
 - 限次：管理登录（检查和记录是一次原子操作）、编辑口令（最近一小时）、方案页口令（按来源和按页各有上限）、新建行程（按来源和全站）；来源 IP 只存加盐、按天轮换的哈希。每个行程的保存、发布和实时连接也有频率或数量上限。
 - 免费套餐的额度（Workers 请求、Durable Object、KV 写入）在代码里没法完全防住恶意刷量；用完时当天报错、不扣费（前提是 Workers Free 套餐）。需要的话在 Cloudflare 后台给站点加一条速率限制规则。
-- Cloudflare 的 Web Analytics 开了自动注入时，会往页面里加统计脚本标签。CSP 不放行它，浏览器会直接拦下，不下载、不运行（构建时 `web/build.mjs` 检查每个页面的 `script-src` 只放行本站、cdnjs 和内嵌脚本的哈希）。官方站因为同一域名下的博客在用，保持开启，隐私页写明了这一点。自己部署时不需要的话，在 Cloudflare 后台关掉即可。
+- Cloudflare 的 Web Analytics 开了自动注入时，会往页面里加统计脚本标签。CSP 不放行它，浏览器会直接拦下，不下载、不运行（构建时 `web/build.mjs` 检查每个页面的 `script-src` 只放行本站和内嵌脚本的哈希）。官方站因为同一域名下的博客在用，保持开启，隐私页写明了这一点。自己部署时不需要的话，在 Cloudflare 后台关掉即可。
 - 发现安全问题请按 [`SECURITY.md`](SECURITY.md) 私下报告，不要公开提 issue。
 
 ## 已知限制
@@ -242,11 +256,11 @@ npm run e2e  # 试玩、本地、在线三种模式的 18 个场景，约 2 分�
 
 ### 地图审图号
 
-地图角标写着高德的审图号 `GS(2025)5996号`，在三处各写了一份：`web/editor/map.js`、`share.py`、`web/demo.html` 的 `attribution`（`web/ui.test.mjs` 会检查三处一样）。高德更新审图号时，三处都要改。
+3.16 起三处地图都由高德 JS API 画，高德标识和审图号由它自己写在地图上，页面不再自己写角标。不要用样式或参数把它们藏起来（`web/ui.test.mjs` 会检查）。不带底图的画法没有底图，也就没有审图号，角上写「没有底图」。
 
 ### 重新生成示例页 `/demo`
 
-示例页是用虚构数据算一次方案、发布，再把生成的方案页改成站点页面：在编辑页导入虚构配置（宏村示例酒店，老王从杭州开车、老张从南京开车，小李同行 2 人从上海、小陈从武汉坐高铁，开返程）、计算方案、发布方案页，把得到的 HTML 存下来，运行 `python3 web/make_demo.py 存下的文件.html` 生成 `web/demo.html`。计算一次会消耗一次高德额度，方案页模板（`share.py`）改了才需要重新生成。
+示例页是用虚构数据算一次方案、发布，再把生成的方案页改成站点页面：在编辑页导入虚构配置（宏村示例酒店，老王从杭州开车、老张从南京开车，小李同行 2 人从上海、小陈从武汉坐高铁，开返程）、计算方案、发布方案页，把得到的 HTML 存下来，运行 `python3 web/make_demo.py 存下的文件.html` 生成 `web/demo.html`。计算一次会消耗一次高德额度，方案页模板（`share.py`）改了才需要重新生成。只改地图那一段（比如 3.16 把 Leaflet 换成 iframe）不用重新算：`web/make_demo.py` 的 `demo_map` 负责把方案页的地图 iframe 改成示例页的（嵌 `/map`、消息只发给本站）。
 
 v2（多行程、并发、通用化）的计划和验收标准见 `docs/v2-plan.md`，v3（开源授权、隐私、邀请码、返程和同行人数）见 `docs/v3-plan.md`。
 

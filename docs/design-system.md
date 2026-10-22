@@ -71,7 +71,7 @@
   - `c-estimate`：估算条；`c-why`（`--info`）：主按钮不能点的原因；`c-callout__list`：提示框里的列表；
   - `c-pick-row`：整行可点的勾选结果行（`is-off` 标灰）；`c-tags`：标签行，配合 `c-tag--best`、`c-tag--over` 两种标签；
   - `c-fold`（`__title`、`__row`）：默认收起、按原因分组的折叠区。
-- 地图：`.leaflet-pane svg` 取消 `max-width`，页面自建的 Leaflet pane 里的 svg 不会被全局的 `svg { max-width: 100% }` 压成 0 宽。
+- 地图：画在单独的页面里（`/map`、`/map/share`），样式在 `web/map/frame.css`，设计系统的组件里没有地图的样式（见「地图」一节）。
 - 数据展示：`c-table-wrap` + `c-table`（窄屏横向滚动）、`c-tabs`、`c-steps`（`--row` 为横排）、`c-progress`（用 `--value`）、`c-empty`、`c-skeleton`。
 - 页面结构：站点页头 `c-site-header`（含手机菜单 `c-nav-toggle`、「场景」下拉 `c-nav__group`；右侧操作区 `c-nav__actions` 放「试玩」次要按钮和「新建行程」主按钮；导航当前页用 `--accent` 下划线标出）、页脚 `c-site-footer`（上半 `__top`：左边 `__intro` 是品牌、介绍和带下划线箭头的引导行 `__cta`，右边 `__cols` 四列链接，栏目标题加粗；`__bottom` 是底部小字；最下面是大字标 `c-wordmark`；页脚和页面同为 `--bg`，只靠细线分开，打印时整个隐藏）、精简页头 `c-bar`、面包屑 `c-breadcrumb`；`c-container`、`c-prose`、`c-section`、`c-hero`、`c-faq`、`c-figure`。
 - 图标：`web/partials/icons.svg` 是 sprite，24 网格、1.75 描边、`currentColor`。模板里写 `{{icon:car}}`，生成 `<svg class="c-icon"><use href="/icons.svg#i-car"/></svg>`。现有：car、train、taxi、pin、station、copy、external、print、menu、close、check、alert、info、plus、trash、map、edit、arrow-right、chevron-down、heart、users、briefcase、github。不用 emoji 当图标。
@@ -140,6 +140,24 @@ v3.10 起，编辑页的脚本在 `web/editor/` 下，按职责分成模块，`u
 - 页面顶部的条显示「标题：阶段 N/M · 已用 X 秒」；知道总数时画比例，不知道时画来回走的 `indeterminate` 条。抽屉里的操作，同样的文字也写进抽屉里的 `#drawerProgress`，用户盯着抽屉时也看得到。
 - 为什么：第一次要查几十个点，可能一两分钟；有阶段、有计时，用户才知道没卡死。要多久说实话，不编百分比。
 - 静态页面里的进度条是 `c-progress`（用 `--value`，加 `role="progressbar"`）。
+
+### 地图
+
+编辑页、试玩、示例页、方案页的地图都画在单独的页面里（v3.16）：编辑页、试玩、示例页嵌 `/map`，方案页嵌 `/map/share`，外面的页面不碰高德的脚本。
+
+- **scene**：外面的页面把「要画什么」生成一份纯数据（格式、字段、校验见 `web/map/scene.js` 顶部注释），用 `postMessage` 整份发给地图页面，地图页面画完回报。字段：
+  - 点 `points`：`kind`（`venue` 目的地、`st` 车站、`car` 开车的成员、`home` 不开车的成员，决定颜色）、名字、附注、`priority`（标签互相遮挡时数字小的留下）、`highlight`（填充：实心还是半透明）、`label`（`always` 一直显示，`hover` 只在悬停时显示；不写就按 `highlight` 推出）、`radius`；
+  - 线 `lines`：坐标串、颜色、线宽、不透明度、`dash`（虚线）、悬停文字；圈 `circles`：圆心、半径（米）、边线、填充不透明度、虚线；
+  - `fit`：要不要自适应范围、留白（被抽屉遮住的那一截）、要框住的位置、最大缩放；`legend`：图例的行；`theme`：`light` 或 `dark`。
+  - 坐标一律是高德坐标的 `[lng, lat]`（经度在前），后端给的路线是 `[lat, lng]`，生成 scene 时翻过来（`web/editor/map-scene.js`、`share.py` 里的 `flip`）。
+- **颜色写设计变量名**（`--dest`、`--drive`、`--ride`、`--station`、`--taxi`、`--surface` 等），地图页面按 `design.css` 当前主题取值；方案路线的六种色是十六进制（`COLORS`，和方案页里的路线色一致）。不新造变量以外的颜色。
+- **点的约定**：目的地大（半径 10）、实心、标签常显、优先级最高；用到的车站实心、标签常显；没用到的车站半透明；车主出发地和成员半径 7。**找站的候选站**：「列出的、没超过所有车主绕路上限的」实心，其余半透明，名字**都只在悬停时显示**（`highlight` 管填充，`label: 'hover'` 管标签，两者分开）。
+- **图例规则（沿用 3.12）**：只写图上真有的东西。编辑页：目的地、开车的、不开车的、车站四个点，加「彩色线 = 接人后的实际路线」「灰色虚线 = 不接人时的直达路线」，找站图层显示时再加「点线 = 车主路线」「浅色圈 = 搜过的范围」。方案页：目的地、车主出发地，用到了车站才写车站；彩色线、灰色虚线（直达路线）、细灰色虚线（打车）各自只在图上真有这类线时才写；原来页面上那段文字图例（`<p class="legend">`，解释灰线和彩线分开的那段就是绕的路）照旧。图例由地图页面画在地图里，随 `theme` 换色。
+- **深色**：scene 的 `theme` 是 `dark` 时，高德画法用高德自带的深色样式（`amap://styles/dark`），不用 CSS 滤镜（3.15 以前的 `--map-filter` 变量在 3.16 删除了，`design.css` 和方案页的变量里都没有了）；点、线、图例的颜色跟着设计变量换。方案页打印一律浅色（`beforeprint` 时发浅色的 scene）。
+- **不带底图的画法**：没有 JS Key、高德脚本加载失败（先回报 `fail`）时用：墨卡托投影，SVG 画点、线、圈，HTML 叠标签；可以拖动、滚轮缩放；角上写「没有底图」，不画高德的标识和审图号（没有高德的底图，也就不需要）。标签取舍、悬停显示、自适应范围和带底图的画法一致。
+- **高德标识和审图号**由高德 JS API 自己写在地图上，不要藏起来。
+- **标签**：互相遮挡时只留 `label` 为 `always` 的里按优先级排前的（`web/map/declutter.js`）；悬停才显示被藏起来的。
+- **尺寸**：窗口大小变了、手机页签切换后发 `resize`，地图页面重新计算尺寸，再补做「容器 0 尺寸时没能做的」自适应（延续 3.13.1）。
 
 ### 地图上的过程图层
 
