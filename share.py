@@ -504,7 +504,7 @@ TEMPLATE = """<!doctype html>
 <script>
 document.getElementById('printBtn').addEventListener('click', function () { window.print(); });
 (function () {
-  // 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线、标签和图例，没有底图；方案页自己不放行任何外部脚本）。
+  // 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线和标签，没有底图；图例不画在地图里，只在地图下面写成文字；方案页自己不放行任何外部脚本）。
   // 这里把 data 变成 scene（格式见 web/map/scene.js），收到 iframe 的 ready 再发；25 秒后还没 ready 就把地图那块藏起来。
   var box = document.getElementById('map'), frame = document.getElementById('mapFrame');
   var data = JSON.parse(document.getElementById('data').textContent);
@@ -515,7 +515,7 @@ document.getElementById('printBtn').addEventListener('click', function () { wind
   }
   function flip(seg) { return seg.map(function (q) { return [q[1], q[0]]; }); } // data 里是 [lat, lng]，scene 是 [lng, lat]
   function build(mode) {
-    var lines = [], points = [], fit = [], legend = [];
+    var lines = [], points = [], fit = [];
     data.routes.forEach(function (r) {
       (r.direct || []).forEach(function (seg) {
         lines.push({ path: flip(seg), color: '--taxi', weight: 4, opacity: 0.8, dash: [6, 8], tooltip: r.label + ' 不接人的直达路线' });
@@ -526,20 +526,11 @@ document.getElementById('printBtn').addEventListener('click', function () { wind
     });
     data.taxis.forEach(function (t) { lines.push({ path: flip(t), color: '--taxi', weight: 3, dash: [4, 6] }); });
     lines.forEach(function (l) { fit = fit.concat(l.path); });
-    var kinds = {};
     data.points.forEach(function (p) {
-      kinds[p.kind] = true;
       points.push({ lng: p.lng, lat: p.lat, kind: p.kind, name: p.name, notes: p.notes, priority: p.kind === 'venue' ? 0 : p.kind === 'st' ? 1 : 2, radius: p.kind === 'venue' ? 10 : 7 });
       fit.push([p.lng, p.lat]);
     });
-    // 图例只写图上真有的东西（颜色用设计变量名，深浅色由地图页面取值）
-    if (kinds.venue) legend.push({ type: 'dot', color: '--dest', text: '目的地' });
-    if (kinds.car) legend.push({ type: 'dot', color: '--drive', text: '车主出发地' });
-    if (kinds.st) legend.push({ type: 'dot', color: '--station', text: '车站' });
-    if (data.routes.some(function (r) { return r.path.length; })) legend.push({ type: 'line', color: data.routes[0].color, text: '彩色线 = 实际路线' });
-    if (data.routes.some(function (r) { return (r.direct || []).length; })) legend.push({ type: 'line', color: '--taxi', dash: [6, 8], text: '灰色虚线 = 直达路线' });
-    if (data.taxis.length) legend.push({ type: 'line', color: '--taxi', dash: [4, 6], text: '细灰色虚线 = 打车（示意）' });
-    return { v: 1, theme: mode, points: points, lines: lines, circles: [], fit: { auto: true, points: fit, padding: { top: 40, right: 40, bottom: 40, left: 40 } }, legend: legend };
+    return { v: 1, theme: mode, points: points, lines: lines, circles: [], fit: { auto: true, points: fit, padding: { top: 56, right: 56, bottom: 56, left: 56 } }, legend: [] };
   }
   var ready = false, mode = theme();
   function send() { if (ready) frame.contentWindow.postMessage({ type: 'scene', scene: build(mode) }, '*'); } // 方案页在沙箱里（来源 null），只能用 '*'；地图页面也只认 parent

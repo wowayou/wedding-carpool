@@ -80,7 +80,7 @@ async function openShare(base, url, { allow = [], ...opts } = {}) {
   return P;
 }
 
-test('方案页（真实发布，CSP 沙箱，站点设了 JS Key）：地图在 /map/share 的 iframe 里用不带底图的画法，点、线、图例对得上 data，不请求高德', async () => {
+test('方案页（真实发布，CSP 沙箱，站点设了 JS Key）：地图在 /map/share 的 iframe 里用不带底图的画法，点、线对得上 data，地图里没有图例框，不请求高德', async () => {
   const url = await publish(withKey, GOLDEN);
   const data = dataOf(GOLDEN);
   const P = await openShare(withKey, url);
@@ -96,10 +96,10 @@ test('方案页（真实发布，CSP 沙箱，站点设了 JS Key）：地图在
   assert.equal(st.lines.length, segs, '每段路线、每条直达线、每条打车线一条');
   assert.ok(st.lines.some((l) => l.dash), '直达路线是虚线');
   assert.equal(st.theme, 'light');
-  // 图例只写图上真有的：这份方案两个车主直达，图上没有车站、没有打车，就没有这两行
-  assert.equal(data.taxis.length, 0);
-  assert.ok(!data.points.some((p) => p.kind === 'st'));
-  assert.deepEqual(st.legend, ['目的地', '车主出发地', '彩色线 = 实际路线', '灰色虚线 = 直达路线']);
+  // 方案页的地图里不画图例框（3.15 就没有），图例只在地图下面写成文字
+  assert.deepEqual(st.legend, []);
+  assert.equal(await frame.evaluate(() => document.getElementById('legend').hidden), true);
+  assert.match(await P.page.locator('p.legend').innerText(), /彩色线/);
   assert.equal(st.W > 300, true);
   // 点都在容器里（自适应范围）
   assert.ok(st.points.every((m) => m.x >= 0 && m.x <= st.W && m.y >= 0 && m.y <= st.H), JSON.stringify(st.points));
@@ -177,6 +177,9 @@ test('示例页 /demo：同源的 /map iframe 里画出地图（不在沙箱里�
   assert.ok(st.markers.every((m) => m.x >= 0 && m.x <= st.W && m.y >= 0 && m.y <= st.H));
   const segs = data.routes.reduce((n, r) => n + r.path.length + (r.direct || []).length, 0) + data.taxis.length;
   assert.equal(st.lines.length, segs);
+  assert.deepEqual(st.legend, [], '示例页的地图里不画图例框');
+  assert.equal(await frame.evaluate(() => document.getElementById('legend').hidden), true);
+  assert.ok(await P.page.locator('p.legend').count() > 0, '地图下面的文字说明还在');
   // 示例页的 CSP（meta）只多一条 frame-src 'self'
   const csp = await P.page.locator('meta[http-equiv=Content-Security-Policy]').getAttribute('content');
   assert.match(csp, /frame-src 'self'/);

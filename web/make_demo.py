@@ -25,7 +25,7 @@ def demo_map(h: str) -> str:
     for old, new in (
         (' referrerpolicy="no-referrer-when-downgrade"', ""),
         ("frame.src = '/map/share'", "frame.src = '/map'"),
-        ("// 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线、标签和图例，没有底图；方案页自己不放行任何外部脚本）。",
+        ("// 地图画在 /map/share 的 iframe 里（那个页面不带 Key、不加载高德，只画点、线和标签，没有底图；图例不画在地图里，只在地图下面写成文字；方案页自己不放行任何外部脚本）。",
          "// 地图画在 /map 的 iframe 里（高德 JS API 在那个页面里加载，有底图；示例页自己不放行任何外部脚本）。"),
         ("}, '*'); } // 方案页在沙箱里（来源 null），只能用 '*'；地图页面也只认 parent", "}, location.origin); } // 示例页和 /map 同源，不在沙箱里"),
     ):
